@@ -1,0 +1,30 @@
+# Klucze API i sekrety 
+.env
+keys.json
+config_private.json
+
+# Pliki systemowe i tymczasowe
+# __pycache__/
+# node_modules/
+# .DS_Store
+# dist/
+# build/
+
+# Lokalne modele LLM 
+models/*.bin
+models/*.gguf
+
+# Python
+backend/.venv/
+backend/__pychache__/
+backend/*.pyc
+
+# IDE
+backend/.idea/
+frontend/.idea/
+
+# Frontent/Node/React
+
+frontend/node_modules/
+frontent/dist/
+frontent/.env
