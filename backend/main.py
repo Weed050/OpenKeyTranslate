@@ -1,17 +1,22 @@
 from fastapi import FastAPI, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
-from schemas import UploadResponse
+from schemas import UploadResponse, OcrText
 import uvicorn
+import numpy as np
+import cv2
+from paddleocr import PaddleOCR
 
 app = FastAPI()
 
-# Konfiguracja cors - fontent:backend
+# Konfiguracja cors - fontent:backend - middleware
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"], # adres frontendu
     allow_methods = ["*"],
     allow_headers = ["*"],
 )
+
+ocr_model = PaddleOCR(use_angle_cls=True, lang='en')
 
 @app.get("/")
 def read_root():
