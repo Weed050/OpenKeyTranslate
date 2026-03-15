@@ -6,11 +6,27 @@
     <title>OpenKeyTranslate</title>
 </head>
 <body>
+    <div id="dashboard">
+        <h2>
+            Your projects:
+        </h2>
+        <div id="projectList">
+            Loading projects list... 
+        </div>
+        <hr>
+    </div>
+
     <h1>
-        Wyślij obrazek
+        Utwórz nowy projekt:
     </h1>
-    <input type="file" id="imageInput">
-    <button id="uploadBtn">Wyślij</button>
+
+    <label> Nazwa projektu: </label>
+    <input type="text" id="projectName" placeholder="e.g. Bleach"><br><br>
+    
+    <label for="folderPath"> Ścieżka do folderu ze skanami/komiksem:</label>
+    <button id="selectFolderBtn">Wybierz folder...</button>
+    <span id="pathPreview">Nie wybrano</span> <br><br>
+    <button id="importBtn">Stwórz Projekt</button>
 
     <script src="app.js"></script>
 </body>
