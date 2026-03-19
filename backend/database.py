@@ -1,13 +1,10 @@
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from models import Base
-import os
+from routers.config import DATABASE_PATH
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DATA_DIR = os.path.join(BASE_DIR, "data")
-os.makedirs(DATA_DIR, exist_ok=True)
-
-SQLALCHEMY_DATABASE_URL = f"sqlite:///./{os.path.join(DATA_DIR, 'openkey_translate.db')}"
+db_url_path = DATABASE_PATH.replace('\\', '/')
+SQLALCHEMY_DATABASE_URL = f"sqlite:///./{db_url_path}"
 
 
 engine = create_engine(

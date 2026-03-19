@@ -1,12 +1,57 @@
 
+let appSettings = {};
 
-
-window.addEventListener('DOMContentLoaded', loadProjects);
+window.addEventListener('DOMContentLoaded', () => {
+    loadProjects();
+    loadSettings();
+});
 
 window.openProject = async function(id) {
     console.log("Otwieram projekt o ID:", id);
     
 };
+
+async function loadSettings() {
+    const response = await fetch("http://127.0.0.1:8000/settings");
+    appSettings = await response.json();
+    document.getElementById('currentWorkspacePath').innerText = appSettings.app_root_dir;
+}
+
+document.getElementById('changeWorkspaceBtn').addEventListener('click', async () => {
+    const response = await fetch("http://127.0.0.1:8000/select-folder");
+    const data = await response.json();
+
+    if(data.path) {
+        // wybor urzytkownika
+        const shouldMigrate = confirm(
+            "Czy chcesz PRZENIEŚĆ obecne projekty i bazę danych do nowej lokalizacji?\n\n" +
+            "OK - Przenieś pliki\n" +
+            "Anuluj - Tylko zmień folder (stworzy nową, pustą instancję)"
+        );
+
+        const payload = {
+            ...appSettings,
+            app_root_dir: data.path,
+            migrate_data: shouldMigrate
+        };
+
+        const saveRes = await fetch("http://127.0.0.1:8000/settings", {
+            method: "POST",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify(payload)
+        });
+
+        const result = await saveRes.json();
+            alert(result.message); 
+            document.body.innerHTML = `
+                <div style="text-align:center; margin-top:100px; font-family:sans-serif;">
+                    <h1>Wymagany restart</h1>
+                    <p>${result.message}</p>
+                    <p>Zamknij okno terminala z backendem i uruchom go ponownie.</p>
+                </div>`
+        location.reload();
+    }
+});
 
 async function loadProjects() {
     const response = await fetch("http://127.0.0.1:8000/projects");

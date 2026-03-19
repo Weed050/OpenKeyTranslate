@@ -2,6 +2,7 @@
 .env
 keys.json
 config_private.json
+settings.json
 
 # Pliki systemowe i tymczasowe
 # __pycache__/
