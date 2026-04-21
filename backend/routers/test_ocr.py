@@ -16,9 +16,9 @@ from database import SessionLocal
 from models import Page
 from paddleocr import PaddleOCR
 
-# from ocr_utils.ocr_merge_utils import smart_merge, merge_lines
-from ocr_utils.draw import draw_text_boxes, print_ocr_items_grouped, draw_slices
-from ocr_utils.marker_ocr_utilities import *
+from ocr_utils.merge_boxes import *
+from ocr_utils.draw import *
+from ocr_utils.marker import *
 
 logging.getLogger("ppocr").setLevel(logging.ERROR)
 
@@ -40,95 +40,17 @@ ocr = PaddleOCR(
     use_textline_orientation=True,
     enable_mkldnn=True,
     cpu_threads=3,
-    rec_batch_num=1,
+    text_recognition_batch_size = 1,
     use_doc_unwarping=False,
+    # text_det_unclip_ratio = 1.7,
+    # text_rec_score_thresh = TEXT_THRESHOLD
 )
 
 # ---------------- SCALE BACK BOXES ----------------
 def to_original_coords(box):
     """Scale box coordinates back to original image size."""
     return [[x / SCALE, y / SCALE] for x, y in box]
-#
-# # ---------------- FLIP DETECTION AND CORRECTION ----------------
-#
-# def inject_marker(crop, slice_id):
-#     """
-#
-#     :param crop:
-#     :param slice_id:
-#     :return:
-#     """
-#     marker_text = f"__M{slice_id}__"
-#
-#     h, w = crop.shape[:2]
-#
-#     margin = 20
-#     pos = (w - 120, h - 20)  # prawy dół
-#
-#     cv2.putText(
-#         crop,
-#         marker_text,
-#         pos,
-#         cv2.FONT_HERSHEY_SIMPLEX,
-#         0.7,
-#         (0, 0, 0),
-#         2
-#     )
-#
-#     return crop, marker_text, pos
-#
-# def find_marker(items, marker_text):
-#     for item in items:
-#         txt = item["text"]
-#
-#         if marker_text in txt:
-#             return item
-#
-#     return None
-#
-#
-# def detect_flip(marker_item, slice_shape):
-#     h, w = slice_shape[:2]
-#
-#     box = marker_item["box"]
-#
-#     # środek boxa
-#     xs = [p[0] for p in box]
-#     ys = [p[1] for p in box]
-#
-#     cx = sum(xs) / 4
-#     cy = sum(ys) / 4
-#
-#     # jeśli marker jest w dolnej prawej ćwiartce → OK
-#     if cx > w * 0.55 and cy > h * 0.55:
-#         return False
-#
-#     if cx < w * 0.45 and cy < h * 0.45:
-#         return True
-#
-#     # niepewne → traktuj jako brak flipa
-#     return False
-#
-# def correct_boxes_180(items, slice_shape):
-#     h, w = slice_shape[:2]
-#
-#     for item in items:
-#         new_box = []
-#         for x, y in item["box"]:
-#             new_box.append([w - x, h - y])
-#
-#         item["box"] = order_box(new_box)
-#
-#     return items
-#
-# def remove_marker(items, marker_text):
-#     return [item for item in items if marker_text not in item["text"]]
-#
-# def order_box(box):
-#     box = sorted(box, key=lambda p: (p[1], p[0]))
-#     top = sorted(box[:2], key=lambda p: p[0])
-#     bottom = sorted(box[2:], key=lambda p: p[0])
-#     return [top[0], top[1], bottom[1], bottom[0]]
+
 
 # ---------------- OVERLAP H & RATIO ----------------
 def get_overlap_size(image_height):
@@ -209,10 +131,9 @@ def run_ocr_sliced(image):
 
                 for t, s, b in zip(texts, scores, boxes):
 
-                    # if s < TEXT_THRESHOLD and "__M" not in t: # pomijanie w odrzucaniu markerow wykrywania obrotu
-                    #     continue
+                    if s < TEXT_THRESHOLD and not is_any_marker(t):
+                        continue
 
-                    # lokalne boxy
                     slice_items.append({
                         "text": t,
                         "score": s,
@@ -226,10 +147,10 @@ def run_ocr_sliced(image):
         if found:
             if slice_has_meaningful_text(slice_items, slice_id, TEXT_THRESHOLD):
                 if detect_flip(marker_item, marker_pos, crop.shape):
-                    print(f"[SLICE {slice_id}] FLIPPED detected, (correcting ...)")
+                    print(f"[SLICE {slice_id}] flip — DETECTED !!!, correcting boxes")
                     slice_items = correct_boxes_180(list(slice_items), crop.shape)
             else:
-                print(f"[SLICE {slice_id}] (skipping flip) check — no meaningful text in slice")
+                print(f"[SLICE {slice_id}] flip — skipped (no meaningful text in slice)")
 
         # usun marker
         slice_items = remove_marker(slice_items, slice_id)
@@ -291,19 +212,34 @@ def test_ocr_from_db(page_id: int):
         # ---------------- OCR ----------------
         items, slices = run_ocr_sliced(image_scaled)
 
-        # ---------------- GLOBAL DEDUPLICATE (FALSE RN) ----------------
-        # if USE_SMART_MERGE:
-        #     items = smart_merge(items, IOU_THRESH)
-        #     items = merge_lines(items)
+        # ---------------- LINES MERGE ----------------
+        grouped_lines = build_text_lines(items)
+        bubbles = group_lines_into_bubbles(grouped_lines)
+
 
         print(f"\nFINAL ITEMS: {len(items)}")
 
         # ---------------- DRAW ----------------
-        image_original = draw_text_boxes(items, image_original, to_original_coords)
-
         if DEBUG:
+            # 1. Rysujemy zielone grupy - grupy slow
+            # image_original = draw_merged_lines(image_original, grouped_lines, to_original_coords)
+
+            # 2. Rysujemy czerwone grupy - pojedyncze slowa
+            image_original = draw_text_boxes(items, image_original, to_original_coords)
+
+            # 3. Rysujemy zielone grupy - zmergowane bloki tekstu w jeden dymek
+            image_original = draw_bubbles(image_original, bubbles, to_original_coords)
+
+
+            print_detected_bubbles(bubbles) # print - konsola, draw - obrazek
+
+
+
+            print_merged_lines(grouped_lines)
+
             print_ocr_items_grouped(items, to_original_coords)
             image_original = draw_slices(image_original, slices, SCALE)
+
 
         # ---------------- SAVE ----------------
         out_dir = os.path.join(project.workspace_path, "processed", chapter.number)
