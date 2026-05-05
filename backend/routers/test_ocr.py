@@ -1,4 +1,3 @@
-
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -9,29 +8,37 @@ os.environ['FLAGS_allocator_strategy'] = 'naive_best_fit'
 os.environ['FLAGS_fraction_of_gpu_memory_to_use'] = '0'
 os.environ['KMP_DUPLICATE_LIB_OK'] = 'TRUE'
 
-import numpy as np
 import logging
 from sqlalchemy.orm import Session
 from database import SessionLocal
 from models import Page
 from paddleocr import PaddleOCR
 
+from ocr_utils.handle_duplicates import smart_deduplicate_by_lines
 from ocr_utils.merge_boxes import *
 from ocr_utils.draw import *
 from ocr_utils.marker import *
 
 logging.getLogger("ppocr").setLevel(logging.ERROR)
 
-
 # ---------------- GLOBAL VALUES ----------------
 
 TEXT_THRESHOLD = 0.85
-SCALE = 1.5            # quality multiplier (increasing image ratio 1.5, making ocr and adjusting boxes to original image size
+SCALE = 1.5           # quality multiplier (increasing image ratio 1.5, making ocr and adjusting boxes to original image size
 SLICE_H_RATIO = 0.1    # image_height * SLICE_H_RATIO = slice_h
 OVERLAP_RATIO = 0.15   # SLICE_H * OVERLAP_RATIO = OVERLAP
 IOU_THRESH = 0.5
-USE_SMART_MERGE = False  # box-merging - post-processing (not completed)
+# USE_SMART_MERGE = False  # box-merging - post-processing (not completed)
 DEBUG = True             # ocr feedback in console & draws boxes on images
+MARKER_DEBUG = True      # draw marker inject/detect positions for diagnostics
+# MARKER_ENABLED = False
+
+# --- GLOBAL VALUES: deduplication ---
+DEDUP_WORD_THRESH    = 0.1   # min ułamek wspólnych słów żeby sprawdzać geometrię
+DEDUP_GEO_THRESH     = 0.1   # min ułamek nakładania mniejszego boxa
+DEDUP_MIN_OVERLAP_PX = 5    # ignoruj nakładanie < N px²
+
+
 
 
 # ---------------- OCR INITIALIZATION ----------------
@@ -62,15 +69,16 @@ def get_overlap_size(image_height):
     """
 
     # --- very small images ---
-    if image_height < 600:
+    if image_height < 1100 * SCALE:
+    # if image_height < 600:
         return image_height, 0
 
     # --- small / medium ---
-    elif image_height < 1200:
+    elif image_height < 1600  * SCALE:
         slice_h = int(image_height * 0.6)
 
     # --- medium ---
-    elif image_height < 3000:
+    elif image_height < 3000 * SCALE:
         slice_h = int(image_height * 0.4)
 
     # --- large ---
@@ -102,10 +110,10 @@ def run_ocr_sliced(image):
     slice_h, overlap = get_overlap_size(h)
 
     all_items = []
-
     y = 0
     slice_id = 0
     slices = []
+    marker_records = []
 
     while y < h:
         y_end = min(y + slice_h, h)
@@ -134,6 +142,9 @@ def run_ocr_sliced(image):
                     if s < TEXT_THRESHOLD and not is_any_marker(t):
                         continue
 
+                    # if s < 0.4:
+                    #     continue
+
                     slice_items.append({
                         "text": t,
                         "score": s,
@@ -144,13 +155,16 @@ def run_ocr_sliced(image):
         # marker logic
         marker_item, found = find_marker(slice_items, slice_id, marker_pos)
 
+        angle = 0
         if found:
             if slice_has_meaningful_text(slice_items, slice_id, TEXT_THRESHOLD):
-                if detect_flip(marker_item, marker_pos, crop.shape):
-                    print(f"[SLICE {slice_id}] flip — DETECTED !!!, correcting boxes")
-                    slice_items = correct_boxes_180(list(slice_items), crop.shape)
-            else:
-                print(f"[SLICE {slice_id}] flip — skipped (no meaningful text in slice)")
+                angle = detect_rotation(marker_item, marker_pos, crop.shape)
+
+                if angle != 0:
+                    print(f"[SLICE {slice_id}] {angle} DEG ROTATION DETECTED !!!, correcting boxes")
+                    slice_items = correct_boxes_by_angle(slice_items, angle, crop.shape)
+
+        marker_records.append(make_marker_record(slice_id, y, marker_pos, marker_item, angle))
 
         # usun marker
         slice_items = remove_marker(slice_items, slice_id)
@@ -166,7 +180,7 @@ def run_ocr_sliced(image):
         y += slice_h - overlap
         slice_id += 1
 
-    return all_items, slices
+    return all_items, slices, marker_records
 
 # ---------------- MAIN ----------------
 def test_ocr_from_db(page_id: int):
@@ -206,14 +220,40 @@ def test_ocr_from_db(page_id: int):
         image_original = image.copy()
         image_scaled = cv2.resize(image_original, None, fx=SCALE, fy=SCALE)
 
+
+        # ------- print scalled image ----- --- temporally - debuging some errors ---
+        # out_dir = os.path.join(project.workspace_path, "processed", chapter.number)
+        # os.makedirs(out_dir, exist_ok=True)
+        #
+        # file_base_name = os.path.splitext(page.file_name)[0]
+        # scaled_path = os.path.join(out_dir, f"test_ocr_{file_base_name}_scaled.jpeg")
+        # cv2.imwrite(scaled_path, image_scaled)
+        # ------- print scalled image ----- --- temporally - debuging some errors ---
+
+
         print(f"\n--- PAGE {page.order} ---")
         print("Running OCR...\n")
 
         # ---------------- OCR ----------------
-        items, slices = run_ocr_sliced(image_scaled)
+        items, slices, marker_records = run_ocr_sliced(image_scaled)
+
+
 
         # ---------------- LINES MERGE ----------------
         grouped_lines = build_text_lines(items)
+
+        # ---------------- DEDUPLICATION ----------------
+        items = smart_deduplicate_by_lines(
+            grouped_lines, items, image_scaled, ocr,
+            word_thresh=DEDUP_WORD_THRESH,
+            geo_thresh=DEDUP_GEO_THRESH,
+            min_overlap_area=DEDUP_MIN_OVERLAP_PX
+        )
+
+        # ---------------- LINES MERGE ----------------
+        grouped_lines = build_text_lines(items)
+
+        # ---------------- BUBLES MERGE ----------------
         bubbles = group_lines_into_bubbles(grouped_lines)
 
 
@@ -222,13 +262,13 @@ def test_ocr_from_db(page_id: int):
         # ---------------- DRAW ----------------
         if DEBUG:
             # 1. Rysujemy zielone grupy - grupy slow
-            # image_original = draw_merged_lines(image_original, grouped_lines, to_original_coords)
+            image_original = draw_merged_lines(image_original, grouped_lines, to_original_coords)
 
             # 2. Rysujemy czerwone grupy - pojedyncze slowa
             image_original = draw_text_boxes(items, image_original, to_original_coords)
 
             # 3. Rysujemy zielone grupy - zmergowane bloki tekstu w jeden dymek
-            image_original = draw_bubbles(image_original, bubbles, to_original_coords)
+            # image_original = draw_bubbles(image_original, bubbles, to_original_coords)
 
 
             print_detected_bubbles(bubbles) # print - konsola, draw - obrazek
@@ -240,12 +280,16 @@ def test_ocr_from_db(page_id: int):
             print_ocr_items_grouped(items, to_original_coords)
             image_original = draw_slices(image_original, slices, SCALE)
 
+            if MARKER_DEBUG:
+                image_original = draw_marker_debug(image_original, marker_records, SCALE)
+
 
         # ---------------- SAVE ----------------
         out_dir = os.path.join(project.workspace_path, "processed", chapter.number)
         os.makedirs(out_dir, exist_ok=True)
 
-        out_path = os.path.join(out_dir, f"test_ocr_{page.file_name}_.jpeg")
+        file_base_name = os.path.splitext(page.file_name)[0]
+        out_path = os.path.join(out_dir, f"test_ocr_{file_base_name}.jpeg")
 
         cv2.imwrite(out_path, image_original)
 
@@ -257,4 +301,4 @@ def test_ocr_from_db(page_id: int):
 
 
 if __name__ == "__main__":
-    test_ocr_from_db(page_id=3)
+    test_ocr_from_db(page_id=5)

@@ -29,7 +29,7 @@ def join_gap(a, b):
     return max(0.0, b["x1"] - a["x2"])
 
 
-# --- NOWA FUNKCJA GRUPOWANIA ---
+# --- FUNKCJA GRUPOWANIA ---
 def build_text_lines(items):
     """
     Grupuje pojedyncze elementy OCR w linie, nie modyfikując oryginalnych danych.

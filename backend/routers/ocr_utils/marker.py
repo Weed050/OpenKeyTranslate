@@ -5,8 +5,8 @@ import cv2
 MARKER_FONT_SCALE = 1.4
 MARKER_THICKNESS = 3
 MARKER_COLOR = (0, 0, 0)
-MARKER_MARGIN_X = 10
-MARKER_MARGIN_Y = 10
+MARKER_MARGIN_X = 40
+MARKER_MARGIN_Y = 40
 MARKER_SCORE_THRESHOLD = 0.4
 
 
@@ -132,11 +132,23 @@ def find_marker(items: list, slice_id: int, marker_pos: tuple) -> tuple[dict | N
 
     best = max(candidates, key=lambda i: i["score"])
 
+    # Normalize OCR misreads before extracting digits (same substitutions as _marker_pattern)
+    _ocr_corrected = (
+        _normalize_ocr_text(best["text"])
+        .replace("O", "0").replace("o", "0")
+        .replace("I", "1").replace("l", "1")
+        .replace("S", "5")
+        .replace("B", "8")
+    )
+
+    detected_id = "".join(c for c in _ocr_corrected if c.isdigit())
+
     if best["score"] < MARKER_SCORE_THRESHOLD:
-        print(f"[SLICE {slice_id}] marker — low confidence (score={best['score']:.2f}, text={best['text']!r}), skipping")
+        print(
+            f"[SLICE {slice_id}] marker — low confidence ({best['score']:.2f}), text={best['text']!r}, ID={detected_id}")
         return None, False
 
-    print(f"[SLICE {slice_id}] marker — OK (score={best['score']:.2f}, text={best['text']!r})")
+    print(f"[SLICE {slice_id}] marker — OK (score={best['score']:.2f}, text={best['text']!r}, ID={detected_id})")
     return best, True
 
 
@@ -190,48 +202,97 @@ def order_box(box: list) -> list:
     return [top[0], top[1], bottom[1], bottom[0]]
 
 
-def detect_flip(marker_item: dict, marker_pos: tuple, slice_shape, tolerance: int = 150) -> bool:
+# def detect_flip(marker_item: dict, marker_pos: tuple, slice_shape, tolerance: int = 150) -> bool:
+#     """
+#     Determine whether the slice image is flipped 180 degrees.
+#
+#     Compares the detected marker center with the expected injection position.
+#     If the distance exceeds tolerance in either axis, a flip is assumed.
+#
+#     :param marker_item: OCR item containing the detected marker box.
+#     :param marker_pos: (x, y) pixel position where the marker was injected.
+#     :param slice_shape: Shape of the slice image (h, w, ...).
+#     :param tolerance: Maximum allowed pixel distance before flip is declared.
+#     :return: True if flipped, False otherwise.
+#     """
+#     mx, my = marker_pos
+#
+#     xs = [p[0] for p in marker_item["box"]]
+#     ys = [p[1] for p in marker_item["box"]]
+#     cx = sum(xs) / 4
+#     cy = sum(ys) / 4
+#
+#     dist_x = abs(cx - mx)
+#     dist_y = abs(cy - my)
+#
+#     print(f"[SLICE] marker — expected=({mx:.0f},{my:.0f}) found=({cx:.0f},{cy:.0f}) dist=({dist_x:.0f},{dist_y:.0f})")
+#
+#     return dist_x > tolerance or dist_y > tolerance
+
+
+def detect_rotation(marker_item: dict, marker_pos: tuple, slice_shape) -> int:
     """
-    Determine whether the slice image is flipped 180 degrees.
-
-    Compares the detected marker center with the expected injection position.
-    If the distance exceeds tolerance in either axis, a flip is assumed.
-
-    :param marker_item: OCR item containing the detected marker box.
-    :param marker_pos: (x, y) pixel position where the marker was injected.
-    :param slice_shape: Shape of the slice image (h, w, ...).
-    :param tolerance: Maximum allowed pixel distance before flip is declared.
-    :return: True if flipped, False otherwise.
+    Oblicza kąt obrotu na podstawie pozycji znalezionego markera.
     """
-    mx, my = marker_pos
+    h, w = slice_shape[:2]
+    mx, my = marker_pos  # Oczekiwana pozycja (prawy dół)
 
-    xs = [p[0] for p in marker_item["box"]]
-    ys = [p[1] for p in marker_item["box"]]
-    cx = sum(xs) / 4
-    cy = sum(ys) / 4
+    # Środek znalezionego markera
+    box = marker_item["box"]
+    cx = sum(p[0] for p in box) / 4
+    cy = sum(p[1] for p in box) / 4
 
+    # Dystans od oczekiwanego punktu
     dist_x = abs(cx - mx)
     dist_y = abs(cy - my)
 
-    print(f"[SLICE] marker — expected=({mx:.0f},{my:.0f}) found=({cx:.0f},{cy:.0f}) dist=({dist_x:.0f},{dist_y:.0f})")
+    # Jeśli dystans jest mały (np. < 150px), brak rotacji
+    if dist_x < 150 and dist_y < 150:
+        print(f"[ROTATION] → 0° (within tolerance, no correction)")
+        return 0
 
-    return dist_x > tolerance or dist_y > tolerance
+        # Sprawdzamy, w którym narożniku jest marker
+    quadrant_x = "left" if cx < w / 2 else "right"
+    quadrant_y = "top" if cy < h / 2 else "bottom"
+
+    if cx < w / 2 and cy < h / 2:
+        angle = 180  # Lewy-góra
+    elif cx < w / 2 and cy > h / 2:
+        angle = 90  # Lewy-dół
+    elif cx > w / 2 and cy < h / 2:
+        angle = 270  # Prawy-góra
+    else:
+        angle = 0  # Prawy-dół (powinno być wykluczone przez tolerance check wyżej)
+
+    print(f"[ROTATION] → {angle}° (marker at {quadrant_x}-{quadrant_y})")
+    return angle
 
 
-def correct_boxes_180(items: list, slice_shape) -> list:
+def correct_boxes_by_angle(items: list, angle: int, slice_shape) -> list:
     """
-    Rotate all bounding boxes 180 degrees within the slice dimensions.
+    Rotate all bounding boxes x degrees within the slice dimensions.
 
     Used to correct OCR box positions after a flip is detected.
 
     :param items: OCR result items with boxes in local slice coordinates.
+    :param angle: angle calculated between correct marker and incorrect one
     :param slice_shape: Shape of the slice image (h, w, ...).
     :return: Items with corrected bounding boxes.
     """
+    if angle == 0: return items
+
     h, w = slice_shape[:2]
     for item in items:
-        new_box = [[w - x, h - y] for x, y in item["box"]]
-        item["box"] = order_box(new_box)
+        new_box = []
+        for x, y in item["box"]:
+            if angle == 180:
+                new_box.append([w - x, h - y])
+            elif angle == 90:
+                new_box.append([y, h - x])
+            elif angle == 270:
+                new_box.append([w - y, x])
+        # item["box"] = order_box(new_box)
+        item["box"] = new_box
     return items
 
 

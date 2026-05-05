@@ -158,10 +158,14 @@ def print_detected_bubbles(bubbles):
     print(f"║ {'ID DYMKU':<12} ║ {'ZAWARTOŚĆ TEKSTOWA':<43} ║")
     print("╠" + "═" * 14 + "╬" + "═" * 44 + "╣")
 
+    # for b in bubbles:
+    #     # Skracanie tekstu do konsoli, jeśli jest za długi
+    #     display_text = (b['text'][:40] + '...') if len(b['text']) > 40 else b['text']
+    #     print(f"║ {b['bubble_id']:<12} ║ {display_text:<43} ║")
+
     for b in bubbles:
-        # Skracanie tekstu do konsoli, jeśli jest za długi
-        display_text = (b['text'][:40] + '...') if len(b['text']) > 40 else b['text']
-        print(f"║ {b['bubble_id']:<12} ║ {display_text:<43} ║")
+        display_text = b['text']
+        print(f"║ {b['bubble_id']:<12} ║ {display_text:<63} ║")
 
     print("╚" + "═" * 14 + "╩" + "═" * 44 + "╝")
     print(f"Łącznie wykryto dymków: {len(bubbles)}\n")
@@ -177,18 +181,121 @@ def draw_bubbles(image, bubbles, scale_fn, color=(255, 0, 255), thickness=4):
     :param thickness: Grubość linii
     """
     for b in bubbles:
-        # Skalujemy box dymka
-        orig_box = scale_fn(b["box_coords"])  # używamy koordynatów z box_stats dymka
+        orig_box = scale_fn(b["box_coords"])
 
-        pts = np.array(orig_box, dtype=np.int32)
+        # ✅ wymagany kształt dla cv2.polylines: (N, 1, 2)
+        pts = np.array(orig_box, dtype=np.int32).reshape((-1, 1, 2))
 
-        # Rysujemy ramkę dymka
         cv2.polylines(image, [pts], isClosed=True, color=color, thickness=thickness)
 
-        # Podpisujemy ID dymka i liczbę linii
-        x1, y1 = pts[0]
+        x1, y1 = pts[0][0]  # zmiana — bo teraz pts[0] to [[x, y]], nie [x, y]
         label = f"{b['bubble_id']} ({b['line_count']} lines)"
         cv2.putText(image, label, (int(x1), int(y1) - 15),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
+
+    return image
+
+
+def make_marker_record(slice_id: int, y_start: int, marker_pos: tuple,
+                       marker_item: dict | None, angle: int) -> dict:
+    """
+    Build a marker diagnostic record for draw_marker_debug.
+    Call once per slice inside run_ocr_sliced.
+
+    :param slice_id:    Current slice index.
+    :param y_start:     Slice start Y in scaled coords.
+    :param marker_pos:  (x, y) injected position in scaled slice-local coords.
+    :param marker_item: OCR item for the detected marker, or None.
+    :param angle:       Rotation angle that was applied (0 = none).
+    :return: Dict ready to append to marker_records list.
+    """
+    marker_item_global = None
+    if marker_item is not None:
+        shifted_box = [[px, py + y_start] for px, py in marker_item["box"]]
+        marker_item_global = {**marker_item, "box": shifted_box}
+
+    return {
+        "slice_id":    slice_id,
+        "y_start":     y_start,
+        "marker_pos":  marker_pos,
+        "marker_item": marker_item_global,
+        "angle":       angle,
+    }
+
+
+def draw_marker_debug(image: np.ndarray, marker_records: list, scale: float) -> np.ndarray:
+    """
+    Draw marker diagnostics on the final image.
+
+    For each slice shows:
+      GREEN cross+circle : injected (expected) marker position
+      ORANGE polyline    : OCR-detected marker bounding box
+      RED cross          : center of detected box
+      YELLOW line        : expected → detected center
+      CYAN label         : slice id, detected text, angle applied
+
+    :param image:          Original-scale image (modified in-place).
+    :param marker_records: List of dicts built by make_marker_record().
+    :param scale:          SCALE value used during OCR.
+    :return: Image with debug overlays.
+    """
+    h, w = image.shape[:2]
+
+    COLOR_EXPECTED = (0,   200,   0)
+    COLOR_DETECTED = (0,   140, 255)
+    COLOR_CENTER   = (0,     0, 255)
+    COLOR_LINE     = (0,   255, 255)
+    COLOR_LABEL    = (255, 255,   0)
+    CROSS_SIZE     = 12
+
+    def _cross(img, cx, cy, size, color, thickness=2):
+        cx, cy = max(0, min(int(cx), w - 1)), max(0, min(int(cy), h - 1))
+        cv2.line(img, (cx - size, cy), (cx + size, cy), color, thickness)
+        cv2.line(img, (cx, cy - size), (cx, cy + size), color, thickness)
+
+    def _clamp(pts, iw, ih):
+        pts[..., 0] = np.clip(pts[..., 0], 0, iw - 1)
+        pts[..., 1] = np.clip(pts[..., 1], 0, ih - 1)
+        return pts
+
+    def _text(img, txt, x, y):
+        x, y = max(0, min(int(x), w - 1)), max(1, min(int(y), h - 1))
+        avail = w - x
+        while txt:
+            (tw, _), _ = cv2.getTextSize(txt, cv2.FONT_HERSHEY_SIMPLEX, 0.45, 1)
+            if tw <= avail:
+                break
+            txt = txt[:-1]
+        if txt:
+            cv2.putText(img, txt, (x, y), cv2.FONT_HERSHEY_SIMPLEX, 0.45, COLOR_LABEL, 1)
+
+    for rec in marker_records:
+        mx_local, my_local = rec["marker_pos"]
+        ex = int(mx_local / scale)
+        ey = int((my_local + rec["y_start"]) / scale)
+        ex, ey = max(0, min(ex, w - 1)), max(0, min(ey, h - 1))
+
+        _cross(image, ex, ey, CROSS_SIZE, COLOR_EXPECTED, 2)
+        cv2.circle(image, (ex, ey), CROSS_SIZE + 4, COLOR_EXPECTED, 1)
+
+        label_parts = [f"S{rec['slice_id']}"]
+        dx, dy = ex, ey
+
+        if rec["marker_item"] is not None:
+            pts = np.array(
+                [[int(px / scale), int(py / scale)] for px, py in rec["marker_item"]["box"]],
+                dtype=np.int32
+            ).reshape((-1, 1, 2))
+            pts = _clamp(pts, w, h)
+            cv2.polylines(image, [pts], isClosed=True, color=COLOR_DETECTED, thickness=2)
+            dx, dy = int(np.mean(pts[:, 0, 0])), int(np.mean(pts[:, 0, 1]))
+            _cross(image, dx, dy, CROSS_SIZE - 4, COLOR_CENTER, 2)
+            cv2.line(image, (ex, ey), (dx, dy), COLOR_LINE, 1)
+            label_parts.append(rec["marker_item"].get("text", "?"))
+        else:
+            label_parts.append("NOT FOUND")
+
+        label_parts.append(f"{rec['angle']}°")
+        _text(image, "  ".join(label_parts), max(0, ex - 5), max(15, ey - CROSS_SIZE - 6))
 
     return image
