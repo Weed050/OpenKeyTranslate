@@ -1,3 +1,5 @@
+# merge_boxes.py
+
 # --- FUNKCJE POMOCNICZE ---
 def box_stats(box):
     # Wymuszamy float64 dla bardzo długich obrazów

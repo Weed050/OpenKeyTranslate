@@ -1,5 +1,7 @@
 from dotenv import load_dotenv
 
+# test_ocr.py
+
 load_dotenv()
 
 import os
@@ -16,15 +18,22 @@ from paddleocr import PaddleOCR
 
 from ocr_utils.handle_duplicates import smart_deduplicate_by_lines
 from ocr_utils.merge_boxes import *
-from ocr_utils.draw import *
+from ocr_utils.draw import (
+    draw_text_boxes, print_ocr_items_grouped, draw_slices,
+    draw_marker_debug, draw_marker_relocation_debug,
+    draw_merged_lines, print_merged_lines,
+    print_detected_bubbles, draw_bubbles, make_marker_record
+)
 from ocr_utils.marker import *
+from ocr_utils.text_utils import is_any_marker
 
 logging.getLogger("ppocr").setLevel(logging.ERROR)
 
 # ---------------- GLOBAL VALUES ----------------
+WHITE_SPACE = True
 
 TEXT_THRESHOLD = 0.85
-SCALE = 1.5           # quality multiplier (increasing image ratio 1.5, making ocr and adjusting boxes to original image size
+SCALE = 1.0           # quality multiplier (increasing image ratio 1.5, making ocr and adjusting boxes to original image size
 SLICE_H_RATIO = 0.1    # image_height * SLICE_H_RATIO = slice_h
 OVERLAP_RATIO = 0.15   # SLICE_H * OVERLAP_RATIO = OVERLAP
 IOU_THRESH = 0.5
@@ -51,6 +60,7 @@ ocr = PaddleOCR(
     use_doc_unwarping=False,
     # text_det_unclip_ratio = 1.7,
     # text_rec_score_thresh = TEXT_THRESHOLD
+    # det_limit_side_len=1000,
 )
 
 # ---------------- SCALE BACK BOXES ----------------
@@ -94,6 +104,27 @@ def get_overlap_size(image_height):
 
     return slice_h, overlap
 
+# ---------------- packaging ocr results ----------------
+
+def parse_ocr_results(result, slice_id, threshold):
+    """Zamienia surowy wynik PaddleOCR na ustandaryzowaną listę słowników."""
+    items = []
+    if not result:
+        return items
+
+    for res in result:
+        for t, s, b in zip(res["rec_texts"], res["rec_scores"], res["dt_polys"]):
+            if s < threshold and not is_any_marker(t):
+                continue
+            items.append({
+                "text": t,
+                "score": s,
+                "box": b,
+                "slice_id": slice_id
+            })
+    return items
+
+
 # ---------------- SLICING, OCR ----------------
 def run_ocr_sliced(image):
     """
@@ -121,62 +152,62 @@ def run_ocr_sliced(image):
         slices.append((y, y_end))
 
         crop = image[y:y_end, :].copy()
+        crop_original = crop.copy()  # Save original for potential re-shoot
 
-        # inject marker
-        crop, _, marker_pos = inject_marker(crop, slice_id)
+        if WHITE_SPACE:
+            white_original = crop.copy()
+            pad_width = 100
+            padded_crop = cv2.copyMakeBorder(white_original, 0, 0, 0, pad_width, cv2.BORDER_CONSTANT, value=[255, 255, 255])
+
+        # inject marker (default position: bottom-right)
+        # crop, _, marker_pos = inject_marker(crop, slice_id)
+        if WHITE_SPACE:
+            crop, _, marker_pos = inject_marker(padded_crop, slice_id)
 
         print(f"\n[SLICE {slice_id}] {y}:{y_end}")
 
+        # 2. OCR
         result = ocr.predict(crop)
+        slice_items = parse_ocr_results(result, slice_id, TEXT_THRESHOLD)
 
-        slice_items = []
-
-        if result:
-            for res in result:
-                texts = res["rec_texts"]
-                scores = res["rec_scores"]
-                boxes = res["dt_polys"]
-
-                for t, s, b in zip(texts, scores, boxes):
-
-                    if s < TEXT_THRESHOLD and not is_any_marker(t):
-                        continue
-
-                    # if s < 0.4:
-                    #     continue
-
-                    slice_items.append({
-                        "text": t,
-                        "score": s,
-                        "box": b,
-                        "slice_id": slice_id
-                    })
-
-        # marker logic
+        # 3. Wstępna detekcja
         marker_item, found = find_marker(slice_items, slice_id, marker_pos)
+        text_items_temp = remove_marker(slice_items, slice_id)
+        needs_fix = (not found or marker_overlaps_text(marker_item, text_items_temp))
 
+        # 4. FIX (jeśli trzeba) - to tylko aktualizuje dane
+        if needs_fix:
+            print(f"[SLICE {slice_id}] Fix needed...")
+            marker_item, found, marker_pos, crop, slice_items = resolve_marker_state(
+                ocr, crop_original, slice_items, slice_id, marker_pos, text_items_temp, TEXT_THRESHOLD
+            )
+            # Po naprawie musimy przeliczyć text_items dla dalszej logiki (np. rotacji)
+            text_items_temp = remove_marker(slice_items, slice_id)
+
+        # --- TERAZ JESTEŚMY W GŁÓWNYM POTOKU (wykonuje się zawsze!) ---
+
+        # 5. Rotacja (jeśli found)
         angle = 0
         if found:
-            if slice_has_meaningful_text(slice_items, slice_id, TEXT_THRESHOLD):
-                angle = detect_rotation(marker_item, marker_pos, crop.shape)
+            angle = detect_rotation(marker_item, marker_pos, crop.shape)
+            if angle != 0:
+                print(f"[SLICE {slice_id}] {angle} DEG ROTATION DETECTED")
+                slice_items = correct_boxes_by_angle(slice_items, angle, crop.shape)
 
-                if angle != 0:
-                    print(f"[SLICE {slice_id}] {angle} DEG ROTATION DETECTED !!!, correcting boxes")
-                    slice_items = correct_boxes_by_angle(slice_items, angle, crop.shape)
-
+        # 6. Logowanie i czyszczenie
         marker_records.append(make_marker_record(slice_id, y, marker_pos, marker_item, angle))
 
-        # usun marker
+        # Ostateczne czyszczenie markerów
         slice_items = remove_marker(slice_items, slice_id)
 
-        # shift do globalnych coords
+        # 7. Przesunięcie do globala (zawsze)
         for item in slice_items:
             shifted_box = [[x, y0 + y] for x, y0 in item["box"]]
             item["box"] = shifted_box
 
-        # dodaj do globalnych
         all_items.extend(slice_items)
 
+        # 8. Krok pętli
         y += slice_h - overlap
         slice_id += 1
 
@@ -218,6 +249,9 @@ def test_ocr_from_db(page_id: int):
 
         # scaling
         image_original = image.copy()
+
+
+
         image_scaled = cv2.resize(image_original, None, fx=SCALE, fy=SCALE)
 
 
@@ -243,6 +277,7 @@ def test_ocr_from_db(page_id: int):
         grouped_lines = build_text_lines(items)
 
         # ---------------- DEDUPLICATION ----------------
+        print("\n=== POST-PROCESSING: PAGE-LEVEL DEDUPLICATION ===")
         items = smart_deduplicate_by_lines(
             grouped_lines, items, image_scaled, ocr,
             word_thresh=DEDUP_WORD_THRESH,
@@ -282,6 +317,7 @@ def test_ocr_from_db(page_id: int):
 
             if MARKER_DEBUG:
                 image_original = draw_marker_debug(image_original, marker_records, SCALE)
+                image_original = draw_marker_relocation_debug(image_original, marker_records, SCALE)
 
 
         # ---------------- SAVE ----------------
@@ -289,7 +325,7 @@ def test_ocr_from_db(page_id: int):
         os.makedirs(out_dir, exist_ok=True)
 
         file_base_name = os.path.splitext(page.file_name)[0]
-        out_path = os.path.join(out_dir, f"test_ocr_{file_base_name}.jpeg")
+        out_path = os.path.join(out_dir, f"test_ocr_{file_base_name}.png")
 
         cv2.imwrite(out_path, image_original)
 
@@ -301,4 +337,7 @@ def test_ocr_from_db(page_id: int):
 
 
 if __name__ == "__main__":
-    test_ocr_from_db(page_id=5)
+    # test_ocr_from_db(page_id=13)
+
+    for i in range(11, 19):
+        test_ocr_from_db(page_id=i)

@@ -1,6 +1,8 @@
 import cv2
 import numpy as np
 
+# draw.py
+
 def draw_text_boxes(items, image, to_original_coords):
     '''
     Visualize OCR results on an image.
@@ -297,5 +299,44 @@ def draw_marker_debug(image: np.ndarray, marker_records: list, scale: float) -> 
 
         label_parts.append(f"{rec['angle']}°")
         _text(image, "  ".join(label_parts), max(0, ex - 5), max(15, ey - CROSS_SIZE - 6))
+
+    return image
+
+
+def draw_marker_relocation_debug(image: np.ndarray, marker_records: list, scale: float) -> np.ndarray:
+    """
+    Rysuje gdzie były problemy z relokacją markerów.
+
+    Zaznacza:
+    - Czerwony "X" – marker w tekście (wstrzyknięty na default)
+    - Zielony "+" – marker po relokacji
+    - Żółta linia – połączenie
+    """
+    h, w = image.shape[:2]
+
+    for rec in marker_records:
+        if rec["marker_item"] is None:
+            continue
+
+        mx_orig, my_orig = rec["marker_pos"]
+
+        # Wstrzyknięta pozycja na skalę oryginalną
+        mx_scaled = int(mx_orig / scale)
+        my_scaled = int((my_orig + rec["y_start"]) / scale)
+
+        # Wykryta pozycja
+        if rec["marker_item"]["box"]:
+            pts = rec["marker_item"]["box"]
+            # Dodane rzutowanie na float() chroni przed numpy overflow
+            cx = int(sum(float(p[0]) for p in pts) / 4.0 / scale)
+            cy = int(sum(float(p[1]) for p in pts) / 4.0 / scale)
+
+            # Zielony "+" — gdzie faktycznie znaleziono
+            cv2.drawMarker(image, (cx, cy), (0, 255, 0), cv2.MARKER_CROSS, 15, 2)
+            cv2.putText(image, f"S{rec['slice_id']}", (cx + 5, cy - 5),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 255, 0), 1)
+
+            # Żółta linia — wstrzyknięte vs znalezione
+            cv2.line(image, (mx_scaled, my_scaled), (cx, cy), (0, 255, 255), 1)
 
     return image

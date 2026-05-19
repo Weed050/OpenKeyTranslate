@@ -1,6 +1,7 @@
 import numpy as np
 import re
 
+# handle_duplicates.py
 
 def normalize(word: str) -> str:
     """Remove punctuation, keep only alphanumeric characters."""
@@ -325,7 +326,8 @@ def smart_deduplicate_by_lines(
             if fixed:
                 kept.append(fixed)
             else:
-                print(f"[DEDUP] fallback NMS drop: '{candidate['text']}'")
+                y_center = int(sum(float(p[1]) for p in candidate["box"]) / 4.0)
+                print(f"[DEDUP] fallback NMS drop at Y={y_center}: '{candidate['text']}'")
 
         result.extend(kept)
 
