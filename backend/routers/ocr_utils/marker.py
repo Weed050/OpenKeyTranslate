@@ -8,8 +8,8 @@ from .text_utils import _normalize_ocr_text
 # marker.py
 
 # ---- MARKER CONFIG ----
-MARKER_FONT_SCALE = 1.4
-MARKER_THICKNESS = 3
+MARKER_FONT_SCALE = 0.9
+MARKER_THICKNESS = 2
 MARKER_COLOR = (0, 0, 0)
 MARKER_MARGIN_X = 40
 MARKER_MARGIN_Y = 40
@@ -18,7 +18,7 @@ MARKER_SCORE_THRESHOLD = 0.4
 
 def _make_marker_text(slice_id: int) -> str:
     """Return the canonical marker string for a given slice id."""
-    return f"__M{slice_id}__"
+    return f"M{slice_id}"
 
 def _normalize_ocr_text(text: str) -> str:
     """
@@ -51,7 +51,14 @@ def _marker_pattern(slice_id: int) -> re.Pattern:
     return re.compile(rf"^M{pattern_digits}$", re.IGNORECASE)
 
 
-def inject_marker(crop, slice_id: int, marker_pos_override: tuple = None):
+def pad_crop_right(crop, pad_width: int):
+    """Add a white strip on the right for marker placement without covering manga art."""
+    return cv2.copyMakeBorder(
+        crop, 0, 0, 0, pad_width, cv2.BORDER_CONSTANT, value=[255, 255, 255]
+    )
+
+
+def inject_marker(crop, slice_id: int, marker_pos_override: tuple = None, content_width: int = None):
     """
     Draw a text marker in the bottom-right corner of a crop for flip detection.
 
@@ -61,6 +68,8 @@ def inject_marker(crop, slice_id: int, marker_pos_override: tuple = None):
     :param crop: Image slice as a numpy array (BGR).
     :param slice_id: Index of the current slice, used to build marker text.
     :param marker_pos_override: If provided, inject at this (x, y) instead of bottom-right.
+    :param content_width: When set (WHITE_SPACE padding), place the marker in the right
+        margin strip [content_width .. crop.width], not on top of page content.
     :return: Tuple of (modified crop, marker text, (x, y) position).
     """
     marker_text = _make_marker_text(slice_id)
@@ -75,6 +84,10 @@ def inject_marker(crop, slice_id: int, marker_pos_override: tuple = None):
 
     if marker_pos_override is not None:
         x, y = marker_pos_override
+    elif content_width is not None:
+        pad_w = max(1, w - content_width)
+        x = content_width + max(8, (pad_w - text_w) // 2)
+        y = max(text_h, h - MARKER_MARGIN_Y - baseline)
     else:
         x = max(0, w - text_w - MARKER_MARGIN_X)
         y = max(text_h, h - MARKER_MARGIN_Y - baseline)
@@ -204,7 +217,13 @@ def order_box(box: list) -> list:
     return [top[0], top[1], bottom[1], bottom[0]]
 
 
-def detect_rotation(marker_item: dict, marker_pos: tuple, slice_shape) -> int:
+def detect_rotation(marker_item: dict, marker_pos: tuple, slice_shape, content_width: int = None) -> int:
+    """
+    Infer slice rotation from where OCR found the marker vs where it was injected.
+
+    slice_shape must match the image OCR ran on (including right padding when used).
+    content_width is the manga/content width before padding; used only for diagnostics.
+    """
     h, w = slice_shape[:2]
     mx, my = marker_pos
 
@@ -212,7 +231,20 @@ def detect_rotation(marker_item: dict, marker_pos: tuple, slice_shape) -> int:
     cx_detected = sum(p[0] for p in box) / 4
     cy_detected = sum(p[1] for p in box) / 4
 
+    # OCR polygon centroid can land on body text (merged reads, wrong box). If it is
+    # far from the injected marker, do not rotate — false 180° was shifting all boxes left.
+    # MARKER_POS_TOLERANCE = 120
+    # inject_dist = np.sqrt((cx_detected - mx) ** 2 + (cy_detected - my) ** 2)
+    # if inject_dist > MARKER_POS_TOLERANCE:
+    #     print(
+    #         f"[ROTATION] skipped — marker box ({cx_detected:.1f}, {cy_detected:.1f}) "
+    #         f"is {inject_dist:.0f}px from injected {marker_pos} (>{MARKER_POS_TOLERANCE}px)"
+    #     )
+    #     return 0
+
     print(f"[ROTATION DEBUG] expected={marker_pos}, detected=({cx_detected:.1f}, {cy_detected:.1f})")
+    if content_width is not None:
+        print(f"[ROTATION DEBUG] content_width={content_width}, ocr_width={w}")
 
     # Zamiast szukać sztywno w rogach, obliczamy gdzie marker POWINIEN wylądować
     # w zależności od tego, jak PaddleOCR zrotował układ współrzędnych.
@@ -334,15 +366,13 @@ def marker_overlaps_text(marker_item: dict, text_items: list, overlap_threshold:
             return True
     return False
 
-
-# marker.py
-
 def find_free_spot_bottom_right(
         crop_h, crop_w, text_items,
         marker_text_size,
         extra_no_go_box=None,
         margin_x=40,
         margin_y=40,
+        min_x=0,
 ) -> tuple | None:
     text_w, text_h = marker_text_size
     pad = 8
@@ -371,9 +401,15 @@ def find_free_spot_bottom_right(
 
     print(f"[MARKER RELOCATION DEBUG] search range: y={search_start} to y={search_end}, crop_h={crop_h}")
 
-    # Najpierw spróbuj po PRAWEJ stronie
+    right_start = max(min_x, crop_w - text_w - margin_x)
+
+    # Najpierw spróbuj po PRAWEJ stronie (w pasie paddingu gdy min_x > 0)
     for y_try in range(search_start, search_end, -step):
-        for x_try in range(crop_w - text_w - margin_x, crop_w // 2, -step):
+        for x_try in range(right_start, max(min_x, crop_w // 2) - 1, -step):
+            # jesli marker wystaje poza prawą krawędź, cofnij go w lewo
+            if x_try + text_w + pad > crop_w:
+                x_try = crop_w - text_w - pad - 2
+
             candidate_box = make_marker_box(x_try, y_try)
             if not overlaps_any(candidate_box, no_go):
                 print(f"[MARKER RELOCATION] ✅ free spot at RIGHT: ({x_try}, {y_try})")
@@ -416,7 +452,7 @@ def recover_merged_marker(items: list, slice_id: int) -> dict | None:
     return None
 
 
-# marker.py
+
 
 def get_marker_size(slice_id: int) -> tuple:
     """Zwraca (width, height) markera dla danego ID."""
@@ -424,33 +460,58 @@ def get_marker_size(slice_id: int) -> tuple:
     (w, h), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, MARKER_FONT_SCALE, MARKER_THICKNESS)
     return w, h
 
-
-# marker.py
-
-def resolve_marker_state(ocr, crop_original, slice_items, slice_id, marker_pos, text_items, text_threshold):
-    """Kontroler stanu."""
-    print(f"[RESOLVER] Starting resolution for slice {slice_id}")
+def resolve_marker_state(
+    ocr,
+    crop_original,
+    ocr_crop,
+    slice_items,
+    slice_id,
+    marker_pos,
+    text_items,
+    text_threshold,
+    pad_width: int = 0,
+):
+    """Kontroler stanu. ocr_crop is the padded image OCR ran on (same coords as slice_items)."""
 
     marker_item, found = find_marker(slice_items, slice_id, marker_pos)
     is_merged = False
+    content_w = crop_original.shape[1]
 
-    # BRAMKA 1
-    if found and not marker_overlaps_text(marker_item, text_items, overlap_threshold=0.15):
-        print(f"[RESOLVER] ✅ GATE 1: Fast path - marker OK.")
-        return marker_item, found, marker_pos, crop_original, slice_items
+    # --- BRAMKA 0: Całkowicie pusty wycinek (brak tekstu mangi) ---
+    if len(text_items) == 0:
+        if found:
+            print(f"[RESOLVER][OK] GATE 0: Blank slice. Marker found. Fast exit.")
+        else:
+            print(
+                f"[RESOLVER][SKIP >>] GATE 0: Blank slice and marker missing. Skipping recovery (no text to rotate anyway).")
+        return marker_item, found, marker_pos, ocr_crop, slice_items
 
-    # BRAMKA 2
+    # --- BRAMKA 1: Sprawdzenie stanu początkowego ---
+    if found:
+        overlaps = marker_overlaps_text(marker_item, text_items, overlap_threshold=0.15)
+        if not overlaps:
+            print(f"[RESOLVER][OK] GATE 1: Success - Marker found and clean (no text overlap).")
+            return marker_item, found, marker_pos, ocr_crop, slice_items
+        else:
+            print(f"[RESOLVER][!] GATE 1: Warning - Marker found, but it overlaps with manga text.")
+    else:
+        print(f"[RESOLVER][X] GATE 1: Failed - Marker completely missing in initial OCR pass.")
+
+    # --- BRAMKA 2: Ratowanie sklejonego markera ---
     if not found:
+        print(f"[RESOLVER] → GATE 2: Attempting to recover merged marker from text...")
         marker_item = recover_merged_marker(slice_items, slice_id)
         if marker_item:
             found = True
             is_merged = True
             slice_items = remove_marker(slice_items, slice_id)
             text_items = remove_marker(slice_items, slice_id)
-            print(f"[RESOLVER] ✅ GATE 2: Rescue successful (merged marker recovered).")
-            print(f"[RESOLVER]    Merged marker text: '{marker_item['text']}'")
+            print(
+                f"[RESOLVER][OK] GATE 2: Rescue successful - Merged marker recovered from text: '{marker_item['text']}'")
+        else:
+            print(f"[RESOLVER][X] GATE 2: Rescue failed - No merged marker found in text.")
 
-    # BRAMKA 3
+    # --- BRAMKA 3: Relokacja i ponowne wykonanie OCR ---
     needs_relocation = (
             not found or
             is_merged or
@@ -458,7 +519,8 @@ def resolve_marker_state(ocr, crop_original, slice_items, slice_id, marker_pos, 
     )
 
     if needs_relocation:
-        print(f"[RESOLVER] → GATE 3: Relocation required (found={found}, is_merged={is_merged})")
+        reason = "missing" if not found else ("merged into text" if is_merged else "overlapping text")
+        print(f"[RESOLVER] -> GATE 3: Relocation required because marker is {reason}.")
         m_w, m_h = get_marker_size(slice_id)
 
         print(f"[RESOLVER]    Text items in slice: {len(text_items)}")
@@ -471,36 +533,47 @@ def resolve_marker_state(ocr, crop_original, slice_items, slice_id, marker_pos, 
             pad = 8
             extra_no_go = [[mx - pad, my - m_h - pad], [mx + m_w + pad, my - m_h - pad],
                            [mx + m_w + pad, my + pad], [mx - pad, my + pad]]
-            print(f"[RESOLVER]    Extra no-go zone (default position): x={mx}, y={my}")
+            print(f"[RESOLVER]  Extra no-go zone set at default position: x={mx}, y={my}")
 
+        search_h, search_w = ocr_crop.shape[0], ocr_crop.shape[1]
         new_pos = find_free_spot_bottom_right(
-            crop_original.shape[0], crop_original.shape[1],
+            search_h, search_w,
             text_items,
             (m_w, m_h),
-            extra_no_go_box=extra_no_go
+            extra_no_go_box=extra_no_go,
+            min_x=content_w if pad_width else 0,
         )
 
         if new_pos:
-            print(f"[RESOLVER] ✅ NEW POSITION FOUND: {new_pos}")
+            print(f"[RESOLVER][OK] GATE 3: New free spot found at {new_pos}. Re-injecting marker and re-running OCR...")
             crop = crop_original.copy()
-            crop, _, marker_pos = inject_marker(crop, slice_id, marker_pos_override=new_pos)
-            print(f"[RESOLVER]    Marker injected at: {marker_pos}")
+            cw = content_w if pad_width else None
+
+            if pad_width:
+                crop = pad_crop_right(crop, pad_width)
+
+            crop, _, marker_pos = inject_marker(
+                crop, slice_id, marker_pos_override=new_pos, content_width=cw
+            )
 
             result = ocr.predict(crop)
             slice_items = parse_ocr_results(result, slice_id, text_threshold)
             marker_item, found = find_marker(slice_items, slice_id, marker_pos)
 
             if found:
-                print(f"[RESOLVER] ✅ MARKER FOUND after re-shot: '{marker_item['text']}'")
+                print(f"[RESOLVER][OK] SUCCESS after re-shot: Marker found at new position: '{marker_item['text']}'")
             else:
-                print(f"[RESOLVER] ⚠️  MARKER NOT FOUND after re-shot (may be outside OCR range)")
-                # Fallback — recovery merged
+                print(
+                    f"[RESOLVER][!] WARNING after re-shot: Marker STILL NOT found at new position. Trying fallback recovery...")
                 marker_item = recover_merged_marker(slice_items, slice_id)
                 if marker_item:
-                    print(f"[RESOLVER] ✅ RECOVERY: Found merged: '{marker_item['text']}'")
+                    found = True
+                    print(f"[RESOLVER][OK] FALLBACK SUCCESS: Found merged marker after re-shot: '{marker_item['text']}'")
+                else:
+                    print(f"[RESOLVER][X] TOTAL FAILURE: Marker completely lost after re-shot.")
 
             return marker_item, found, marker_pos, crop, slice_items
         else:
-            print(f"[RESOLVER] ❌ NO FREE SPOT FOUND - returning original state")
+            print(f"[RESOLVER][X] GATE 3: No free spot found in slice. Returning original state.")
 
-    return marker_item, found, marker_pos, crop_original, slice_items
+    return marker_item, found, marker_pos, ocr_crop, slice_items

@@ -155,21 +155,29 @@ def print_merged_lines(grouped_lines):
 
 
 def print_detected_bubbles(bubbles):
-    """Wypisuje sformatowane dymki w konsoli."""
-    print("\n" + "═" * 60)
-    print(f"║ {'ID DYMKU':<12} ║ {'ZAWARTOŚĆ TEKSTOWA':<43} ║")
-    print("╠" + "═" * 14 + "╬" + "═" * 44 + "╣")
+    """Wypisuje sformatowane dymki w konsoli z idealnie wyrównaną ramką."""
+    if not bubbles:
+        print("\n[INFO] Brak wykrytych dymków do wyświetlenia.")
+        return
 
-    # for b in bubbles:
-    #     # Skracanie tekstu do konsoli, jeśli jest za długi
-    #     display_text = (b['text'][:40] + '...') if len(b['text']) > 40 else b['text']
-    #     print(f"║ {b['bubble_id']:<12} ║ {display_text:<43} ║")
+    col1_w = 12
+
+    col2_w = max(45, max(len(b.get('text', '')) for b in bubbles))
+
+    top_line = "╔" + "═" * (col1_w + 2) + "╦" + "═" * (col2_w + 2) + "╗"
+    header_line = f"║ {'ID DYMKU':<{col1_w}} ║ {'ZAWARTOŚĆ TEKSTOWA':<{col2_w}} ║"
+    sep_line = "╠" + "═" * (col1_w + 2) + "╬" + "═" * (col2_w + 2) + "╣"
+    bottom_line = "╚" + "═" * (col1_w + 2) + "╩" + "═" * (col2_w + 2) + "╝"
+
+    print("\n" + top_line)
+    print(header_line)
+    print(sep_line)
 
     for b in bubbles:
-        display_text = b['text']
-        print(f"║ {b['bubble_id']:<12} ║ {display_text:<63} ║")
+        display_text = b.get('text', '')
+        print(f"║ {b.get('bubble_id', ''):<{col1_w}} ║ {display_text:<{col2_w}} ║")
 
-    print("╚" + "═" * 14 + "╩" + "═" * 44 + "╝")
+    print(bottom_line)
     print(f"Łącznie wykryto dymków: {len(bubbles)}\n")
 
 

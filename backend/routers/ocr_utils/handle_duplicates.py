@@ -1,5 +1,6 @@
 import numpy as np
 import re
+from rapidfuzz import fuzz
 
 # handle_duplicates.py
 
@@ -56,7 +57,7 @@ def boxes_overlap(box1, box2, min_area=5):
     xi1, yi1 = max(x1a, x1b), max(y1a, y1b)
     xi2, yi2 = min(x2a, x2b), min(y2a, y2b)
 
-    inter = max(0, xi2 - xi1) * max(0, yi2 - yi1)
+    inter = int(max(0, xi2 - xi1)) * int(max(0, yi2 - yi1))
 
     if inter < min_area:
         return 0, 0.0
@@ -233,12 +234,12 @@ def resolve_overlap_pair(
         if new_text:
             new_words = set(normalize(w) for w in new_text.split())
             if not any(normalize(w) in new_words for w in overlap):
-                print(f"[DEDUP] ✅ '{item_b['text']}' → '{new_text}'")
+                print(f"[DEDUP][OK] '{item_b['text']}' → '{new_text}'")
                 print(f"[DEDUP]    box_crop={box_crop}")
                 print(f"[DEDUP]    box_adjusted={box_adjusted}")
                 return {**item_b, "text": new_text, "box": box_adjusted}
         else:
-            print(f"[DEDUP] ⚠️ case 1 failed, result: '{new_text}'")
+            print(f"[DEDUP][!] case 1 failed, result: '{new_text}'")
 
     # --- CASE 2: suffix of B = prefix of A → trim right side of B ---
     overlap_rev = find_suffix_prefix_overlap(item_b["text"], item_a["text"])
@@ -256,12 +257,12 @@ def resolve_overlap_pair(
             new_words = set(normalize(w) for w in new_text.split())
 
             if not any(normalize(w) in new_words for w in overlap_rev):
-                print(f"[DEDUP] ✅ '{item_b['text']}' → '{new_text}'")
+                print(f"[DEDUP][OK] '{item_b['text']}' → '{new_text}'")
                 print(f"[DEDUP]    box_crop={box_crop}")
                 print(f"[DEDUP]    box_adjusted={box_adjusted}")
                 return {**item_b, "text": new_text, "box": box_adjusted}
             else:
-                print(f"[DEDUP] ⚠️ case 2 failed, result: '{new_text}'")
+                print(f"[DEDUP][!] case 2 failed, result: '{new_text}'")
 
     return None  # neither case succeeded
 
@@ -332,3 +333,58 @@ def smart_deduplicate_by_lines(
         result.extend(kept)
 
     return result
+
+
+def remove_slice_boundary_duplicates(items: list[dict], max_y_jitter: int = 160) -> list[dict]:
+    """
+    Usuwa duplikaty graniczne używając POTRÓJNEJ walidacji:
+    1. Geometria (boxy muszą na siebie nachodzić)
+    2. Tekst (Fuzzy match musi być > 60%, żeby wyłapać literówki OCR typu BUG'S / BUO'5)
+    3. Score (wybiera wariant z najwyższą pewnością modelu)
+    """
+    to_remove = set()
+
+    for i in range(len(items)):
+        if i in to_remove:
+            continue
+
+        item_i = items[i]
+        slice_i = item_i.get("slice_id", -1)
+        text_i = normalize(item_i["text"])
+
+        for j in range(i + 1, len(items)):
+            if j in to_remove:
+                continue
+
+            item_j = items[j]
+            slice_j = item_j.get("slice_id", -1)
+
+            # 1. Ignoruj duplikaty z tego samego slice'a (zrobi to smart_deduplicate na końcu)
+            if slice_i == slice_j:
+                continue
+
+            # 2. KRYTERIUM: GEOMETRIA (Położenie)
+            _, overlap = boxes_overlap(item_i["box"], item_j["box"], min_area=0)
+            if overlap > 0.3:
+
+                # 3. KRYTERIUM: TEKST (Podobieństwo)
+                text_j = normalize(item_j["text"])
+                similarity = fuzz.ratio(text_i, text_j) / 100.0
+
+                # Jeśli są podobne w co najmniej 60%
+                if similarity >= 0.60:
+
+                    # 4. KRYTERIUM: SCORE (Kto wygrywa)
+                    if item_i["score"] >= item_j["score"]:
+                        print(f"[BOUNDARY DEDUP] drop S{slice_j}: '{item_j['text']}' (score: {item_j['score']:.2f}) "
+                              f"-> duplikat S{slice_i}: '{item_i['text']}' (score: {item_i['score']:.2f}) (sim: {similarity:.2f})")
+                        to_remove.add(j)
+                    else:
+                        print(f"[BOUNDARY DEDUP] drop S{slice_i}: '{item_i['text']}' (score: {item_i['score']:.2f}) "
+                              f"-> duplikat S{slice_j}: '{item_j['text']}' (score: {item_j['score']:.2f}) (sim: {similarity:.2f})")
+                        to_remove.add(i)
+                        break  # item_i usunięty, przechodzimy do kolejnego 'i'
+
+    final_items = [item for idx, item in enumerate(items) if idx not in to_remove]
+    print(f"[BOUNDARY DEDUP] Usunięto {len(to_remove)} twardych duplikatów z granicy sliców (Geo + Text + Score).")
+    return final_items
