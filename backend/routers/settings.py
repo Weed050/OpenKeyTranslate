@@ -1,55 +1,98 @@
+
+# backend/routers/settings.py
+
 from fastapi import APIRouter, HTTPException
 import os
 import json
 import shutil
-from schemas import SettingsSchema
-from routers.config import load_settings, APP_ROOT_DIR, SETTINGS_FILE
+from models.schemas import SettingsSchema
+from core.config import APP_ROOT_DIR, SETTINGS_FILE, load_settings
+
+"""
+API Router - right now used for managing application settings and data migration.
+
+Provides endpoints to fetch, update, and handle the logic for moving 
+the application root directory and its associated files.
+"""
 
 router = APIRouter(prefix="/settings", tags=["Settings"])
 
-
 def get_dir_size_mb(path):
-    """Oblicza rozmiar folderu w MB."""
+    """Calculate the total size of a directory in Megabytes (MB)."""
     total = 0
     for dirpath, _, filenames in os.walk(path):
         for f in filenames:
             total += os.path.getsize(os.path.join(dirpath, f))
     return total / (1024 * 1024)
 
+@router.get("/")
+async def get_settings():
+    """Retrieve the current application settings."""
+    data = load_settings()
+
+    # Explicitly default the migration flag to False for the UI
+    data["migrate_data"] = False
+    return data
 
 @router.post("/")
 async def update_settings(new_settings: SettingsSchema):
+    """
+    Update application settings and optionally migrate data to a new root directory.
+    """
     old_path = APP_ROOT_DIR
     new_path = new_settings.app_root_dir
     settings_data = new_settings.model_dump()
-    migration_msg = "Ustawienia zapisane."
+    migration_msg = "Settings saved successfully."
 
+    # Handle data migration if requested and path has changed
     if new_settings.migrate_data and old_path != new_path:
         if not os.path.exists(old_path):
-            raise HTTPException(status_code=404, detail="Folder źródłowy nie istnieje.")
+            raise HTTPException(status_code=404, detail="Source directory doesn't exist.")
 
+        # Prevent automated migration of oversized directories
         size_mb = get_dir_size_mb(old_path)
-        if size_mb > 500:  # np. limit 500MB
-            return {"message": f"Folder jest za duży ({size_mb:.2f} MB) na automatyczną migrację. Przenieś go ręcznie."}
+        if size_mb > 500:  # 500MB safety threshold
+            return {
+                "message": f"Directory is too large ({size_mb:.2f} MB) for automatic migration. Please move it manually."
+            }
 
         try:
-            print(f"Migracja: {old_path} -> {new_path}")
+            print(f"Migration started: {old_path} -> {new_path}")
             shutil.copytree(old_path, new_path, dirs_exist_ok=True)
 
-            # Próba usunięcia starego folderu
+            # Attempt to clean up the legacy directory
             try:
                 shutil.rmtree(old_path)
-                migration_msg = "Dane przeniesione pomyślnie."
+                migration_msg = "Data migrated successfully."
             except PermissionError:
-                migration_msg = "Dane skopiowane. Zamknij aplikację, aby ręcznie usunąć stary folder (baza w użyciu)."
+                # Common fallback when SQLite database file is still locked/active
+                migration_msg = "Data copied. Please close the app to manually delete the old folder (database file is currently in use)."
 
         except Exception as e:
+
+            # Rollback: Clean up incomplete target directory if copy fails
             if os.path.exists(new_path):
                 shutil.rmtree(new_path)
-            raise HTTPException(status_code=500, detail=f"Błąd migracji: {str(e)}")
+            raise HTTPException(status_code=500, detail=f"Migration failed: {str(e)}")
 
+    # Save the updated configuration matrix
     settings_data.pop("migrate_data", None)
     with open(SETTINGS_FILE, "w", encoding="utf-8") as file:
         json.dump(settings_data, file, indent=4, ensure_ascii=False)
 
-    return {"message": f"{migration_msg} Zrestartuj aplikację, aby zastosować zmiany."}
+    return {"message": f"{migration_msg} Please restart the application to apply changes."}
+
+# @router.post("/reset-to-default")
+# async def reset_to_default():
+#     """Reset configuration to default factory values."""
+#     default_path = get_default_app_root()
+#
+#     current_settings = load_settings()
+#     reset_payload = SettingsSchema(
+#         app_root_dir=default_path,
+#         source_lang=current_settings.get("source_lang", "en"),
+#         target_lang=current_settings.get("target_lang", "pl"),
+#         migrate_data=True
+#     )
+#
+#     return await update_settings(reset_payload)

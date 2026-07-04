@@ -1,39 +1,49 @@
+
+<!-- frontend/index.html -->
+
 <!DOCTYPE html>
-<html lang="pl">
+<html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>OpenKeyTranslate</title>
+    <title>OpenKeyTranslate - Dashboard</title>
+    <style>
+        body { font-family: sans-serif; padding: 20px; line-height: 1.6; }
+        .project-card { border: 1px solid #ccc; padding: 10px; margin: 10px 0; border-radius: 8px; display: flex; justify-content: space-between; align-items: center; }
+        #settingsPanel { background: #f4f4f4; padding: 15px; border-radius: 8px; margin-top: 30px; }
+        .loading { opacity: 0.5; pointer-events: none; }
+        .hidden { display: none; }
+        #statusMsg { color: blue; font-weight: bold; }
+    </style>
 </head>
 <body>
+
     <div id="dashboard">
-        <h2>
-            Your projects:
-        </h2>
-        <div id="projectList">
-            Loading projects list... 
-        </div>
+        <h2>Your Projects</h2>
+        <div id="projectList">Loading project list...</div>
         <hr>
     </div>
 
-    <h1>
-        Utwórz nowy projekt:
-    </h1>
+    <div id="importSection">
+        <h2>Create New Project</h2>
+        <label>Project Name:</label>
+        <input type="text" id="projectName" placeholder="e.g., Bleach"><br><br>
 
-    <label> Nazwa projektu: </label>
-    <input type="text" id="projectName" placeholder="e.g. Bleach"><br><br>
-    
-    <label for="folderPath"> Ścieżka do folderu ze skanami/komiksem:</label>
-    <button id="selectFolderBtn">Wybierz folder...</button>
-    <span id="pathPreview">Nie wybrano</span> <br><br>
-    <button id="importBtn">Stwórz Projekt</button>
+        <label>Scans Folder:</label>
+        <button id="selectFolderBtn">Select folder...</button>
+        <span id="pathPreview">None selected</span> <br><br>
+
+        <button id="importBtn">Create Project</button>
+        <span id="statusMsg"></span>
+    </div>
 
     <div id="settingsPanel">
         <h2>Settings</h2>
-        <p>Main folder Workspace (database + projects):</p>
-        <code id="currentWorkspacePath">Loading...</code> <br><br>
-        <button id="changeWorkspaceBtn">Change default...</button>
-        <hr>
+        <p>Main Workspace Folder (database + projects):</p>
+        <code id="currentWorkspacePath">Loading...</code><br><br>
+
+        <button id="changeWorkspaceBtn">Change Workspace folder...</button>
+        <button id="resetWorkspaceBtn" style="color: red;">Reset to default (AppData)</button>
     </div>
 
     <script src="app.js"></script>

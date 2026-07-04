@@ -1,3 +1,9 @@
+/**
+ * @file frontend/app.js
+ * @description Core frontend logic for the OpenKeyTranslate Dashboard.
+ * Handles project initialization, workspace configuration, and REST API
+ * communication with the local FastAPI backend.
+ */
 
 let appSettings = {};
 
@@ -6,28 +12,33 @@ window.addEventListener('DOMContentLoaded', () => {
     loadSettings();
 });
 
+/**
+ * Initializes the workspace for a specific project.
+ * @param {number|string} id - The unique identifier of the target project.
+ */
 window.openProject = async function(id) {
-    console.log("Otwieram projekt o ID:", id);
-    
+    console.log("[WORKSPACE] Opening project with ID:", id);
+    // TODO: Implement redirect or UI state change for the project editor
 };
 
+/**
+ * Fetches global application settings from the backend and updates the UI.
+ */
 async function loadSettings() {
-    const response = await fetch("http://127.0.0.1:8000/settings");
+    // NOTE: The trailing slash is strictly required here to match FastAPI's
+    // exact routing definition (@router.get("/")).
+    const response = await fetch("http://127.0.0.1:8000/settings/");
     appSettings = await response.json();
     document.getElementById('currentWorkspacePath').innerText = appSettings.app_root_dir;
 }
 
 document.getElementById('changeWorkspaceBtn').addEventListener('click', async () => {
-    const response = await fetch("http://127.0.0.1:8000/select-folder");
+    const response = await fetch("http://127.0.0.1:8000/projects/select-folder");
     const data = await response.json();
 
     if(data.path) {
-        // wybor urzytkownika
-        const shouldMigrate = confirm(
-            "Czy chcesz PRZENIEŚĆ obecne projekty i bazę danych do nowej lokalizacji?\n\n" +
-            "OK - Przenieś pliki\n" +
-            "Anuluj - Tylko zmień folder (stworzy nową, pustą instancję)"
-        );
+        // Prompt user to decide if existing projects should be migrated to the new path
+        const shouldMigrate = confirm("Do you want to MIGRATE existing project data to the new workspace location?");
 
         const payload = {
             ...appSettings,
@@ -35,57 +46,58 @@ document.getElementById('changeWorkspaceBtn').addEventListener('click', async ()
             migrate_data: shouldMigrate
         };
 
-        const saveRes = await fetch("http://127.0.0.1:8000/settings", {
+        const saveRes = await fetch("http://127.0.0.1:8000/settings/", {
             method: "POST",
             headers: {"Content-Type": "application/json"},
             body: JSON.stringify(payload)
         });
 
-        const result = await saveRes.json();
-            alert(result.message); 
-            document.body.innerHTML = `
-                <div style="text-align:center; margin-top:100px; font-family:sans-serif;">
-                    <h1>Wymagany restart</h1>
-                    <p>${result.message}</p>
-                    <p>Zamknij okno terminala z backendem i uruchom go ponownie.</p>
-                </div>`
-        location.reload();
+        const saveResult = await saveRes.json();
+        alert(saveResult.message);
+        loadSettings();
     }
 });
 
+/**
+ * Fetches and renders the list of available projects from the database.
+ */
 async function loadProjects() {
     const response = await fetch("http://127.0.0.1:8000/projects");
     const projects = await response.json();
-    const listDiv = document.getElementById('projectList');
 
-if (projects.length === 0) {
-        listDiv.innerHTML = "<p>Brak aktywnych projektów. Stwórz pierwszy poniżej!</p>";
-    } else {
-        listDiv.innerHTML = projects.map(p => 
-            `<div class="project-tile">
-                <strong>${p.name}</strong> - <code>${p.workspace_path}</code>
-                <button onclick="openProject(${p.id})">Otwórz</button>
-            </div>`
-        ).join('');
+    const list = document.getElementById('projectList');
+    list.innerHTML = "";
+
+    if (projects.length === 0) {
+        list.innerHTML = "<p>No projects found. Create a new one below.</p>";
+        return;
     }
+
+    projects.forEach(p => {
+        const div = document.createElement('div');
+        div.className = "project-card";
+        div.innerHTML = `
+            <strong>${p.name}</strong> 
+            <span style="color: gray; font-size: 0.9em;">(${p.workspace_path})</span>
+            <button onclick="openProject(${p.id})">Open</button>
+        `;
+        list.appendChild(div);
+    });
 }
 
 document.getElementById('selectFolderBtn').addEventListener('click', async () => {
-    const response = await fetch("http://127.0.0.1:8000/select-folder");
+    const response = await fetch("http://127.0.0.1:8000/projects/select-folder");
     const data = await response.json();
 
-    if(data.path) {
+    if (data.path) {
         document.getElementById('pathPreview').innerText = data.path;
+
+        // Auto-fill project name based on the selected folder's name if the input is empty
         const projectInput = document.getElementById('projectName');
-
-       if (projectInput.value.trim() === "") {
-
-            const pathParts = data.path.split(/[\\/]/).filter(part => part.length > 0);
-            const autoFolderName = pathParts.pop();
-            if (autoFolderName) {
-                projectInput.value = autoFolderName;
-            }
-       }
+        if (!projectInput.value) {
+            const pathParts = data.path.split(/[\\/]/).filter(p => p.length > 0);
+            projectInput.value = pathParts.pop() || "";
+        }
     }
 });
 
@@ -93,15 +105,46 @@ document.getElementById('importBtn').addEventListener('click', async () => {
     const path = document.getElementById('pathPreview').innerText;
     const projectName = document.getElementById('projectName').value;
 
-    if(path === "Nie wybrano") return alert("Wybierz folder!");
+    if (path === "None selected" || !projectName.trim()) {
+        return alert("Please select a folder and enter a project name!");
+    }
 
-    const response = await fetch("http://127.0.0.1:8000/import-folder", {
+    // Execute project creation/import
+    const response = await fetch("http://127.0.0.1:8000/projects/import", {
         method: "POST",
         headers: {"Content-Type": "application/json"},
-        body: JSON.stringify({ path: path, project_name: projectName })
+        body: JSON.stringify({ path: path, projectName: projectName })
     });
-    
+
     const result = await response.json();
     alert(result.message);
-    loadProjects(); 
+
+    // Refresh the project list on the dashboard
+    loadProjects();
+
+    // FIX: Clear form inputs to prevent namespace collisions on subsequent creations
+    if (response.ok) {
+        document.getElementById('projectName').value = "";
+        document.getElementById('pathPreview').innerText = "None selected";
+    }
+});
+
+document.getElementById('resetWorkspaceBtn').addEventListener('click', async () => {
+    // Failsafe confirmation for destructive actions
+    if (!confirm("Are you sure you want to reset to the default AppData location? All project data will be moved there.")) {
+        return;
+    }
+
+    try {
+        const response = await fetch("http://127.0.0.1:8000/settings/reset-to-default", {
+            method: "POST"
+        });
+
+        const result = await response.json();
+        alert(result.message);
+        loadSettings();
+    } catch (e) {
+        console.error("[WORKSPACE] Failed to reset workspace:", e);
+        alert("An error occurred while resetting the workspace configuration.");
+    }
 });

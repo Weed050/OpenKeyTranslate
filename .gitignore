@@ -5,11 +5,12 @@ config_private.json
 settings.json
 
 # Pliki systemowe i tymczasowe
-# __pycache__/
+__pycache__/
+*.pyc
 # node_modules/
-# .DS_Store
-# dist/
-# build/
+.DS_Store
+dist/
+build/
 
 # Lokalne modele LLM 
 models/*.bin
@@ -29,3 +30,5 @@ frontend/.idea/
 frontend/node_modules/
 frontent/dist/
 frontent/.env
+ 
+ 
