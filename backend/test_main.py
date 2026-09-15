@@ -29,7 +29,7 @@ from core.database import SessionLocal
 from models.models import Page, Project
 
 from core.config import (
-    SCALE, DEBUG, MARKER_DEBUG, TRANSLATION_ON, GROQ_MODEL
+    SCALE, DEBUG, MARKER_DEBUG, TRANSLATION_ON, ACTIVE_MODEL_NAME
 )
 from services.ocr_pipeline import process_image, to_original_coords
 from utils.inpainting import erase_text_from_image
@@ -89,8 +89,12 @@ def test_ocr_from_db(page_id: int):
 
         # Translation Execution (Conditional)
         if TRANSLATION_ON:
-            print(f"[AI] Tłumaczenie przy użyciu modelu: {GROQ_MODEL}...")
-            ocr_result["bubbles"] = translate_bubbles(ocr_result["bubbles"])
+            print(f"[AI] Translation using provider: {ACTIVE_MODEL_NAME}...")
+            # project.id / page.id / db enable correction-memory hints + A/B logging
+            # (see services/translation_service.py) - both are DB-backed here.
+            ocr_result["bubbles"] = translate_bubbles(
+                ocr_result["bubbles"], project_id=project.id, page_id=page.id, db=db
+            )
             print_translations_to_console(ocr_result["bubbles"])
 
         items = ocr_result["items"]
@@ -193,21 +197,6 @@ def save_ocr_json(out_dir: str, file_base_name: str, ocr_result: dict):
     print(f"[JSON] saved -> {out_path}")
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 def run_batch_ocr(pages_per_chapter: int = 10):
     """
     Execute automated batch OCR processing across all active projects and chapters.
@@ -251,17 +240,6 @@ def run_batch_ocr(pages_per_chapter: int = 10):
         db.close()
 
 
-
-
-
-
-
-
-
-
-
-
-
 def test_ocr_from_path(img_path: str, out_dir: str = "./test_output"):
     print(f"\nIMG PATH: {img_path}")
     if not os.path.exists(img_path):
@@ -287,7 +265,11 @@ def test_ocr_from_path(img_path: str, out_dir: str = "./test_output"):
 
     # ----------------- TRANSLATION -----------------
     if TRANSLATION_ON:
-        print(f"[AI] Translating using model: {GROQ_MODEL}...")
+        print(f"[AI] Translating using provider: {ACTIVE_MODEL_NAME}...")
+        # No DB-backed project/page in this ad-hoc mode (see module docstring) -
+        # translate_bubbles() simply skips correction-memory hints and A/B
+        # logging when project_id/page_id/db are omitted; plain translation
+        # still runs normally.
         ocr_result["bubbles"] = translate_bubbles(ocr_result["bubbles"])
         print_translations_to_console(ocr_result["bubbles"])
 

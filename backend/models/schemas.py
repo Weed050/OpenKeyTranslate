@@ -45,3 +45,14 @@ class SettingsSchema(BaseModel):
     source_lang: str
     target_lang: str
     migrate_data: bool = False # Flag indicating whether to move files to the new root directory
+
+class CorrectionSchema(BaseModel):
+    """
+    Payload for confirming a user-approved translation for a single bubble.
+
+    Sent by the frontend editor whenever - both count as a correction for memory purposes, since even an unedited approval confirms the AI's proposal was already correct.
+    """
+
+    source_text: str
+    ai_translation: Optional[str] = None
+    final_translation: str
