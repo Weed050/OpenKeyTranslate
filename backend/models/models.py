@@ -4,11 +4,10 @@
 """
 Database models schema definition using SQLAlchemy ORM.
 
-Defines the entity relationships for Projects, Chapters, Pages,
-and extracted Text Blocks within the OCR/Translation pipeline.
+Defines the entity relationships for Projects, Chapters, Pages, extracted Text Blocks, and the correction-memory system (Corrections, TranslationLogs) used by the OCR/Translation pipeline.
 """
 
-from sqlalchemy import Column, Integer, String, Float, ForeignKey, DateTime, Text
+from sqlalchemy import Column, Integer, String, Float, ForeignKey, DateTime, Text, LargeBinary
 from sqlalchemy.orm import relationship, declarative_base
 from datetime import datetime, timezone
 
@@ -81,3 +80,72 @@ class TextBlock(Base):
 
     # Relationships
     page = relationship("Page", back_populates="blocks")
+
+class Correction(Base):
+    """
+    A single confirmed user correction: the original English source text, the AI's initial (zero-shot) proposal, and the final Polish text the user approved.
+
+    This is the core data structure behind the project's correction-memory feature (see services/memory_service.py). The embedding of 'source_text' is used for similarity search, letting the translation service "remember" and reuse past corrections for text that reads as similar in the future.
+
+    Corrections are scoped to a single project (not shared globally) to avoid one series' voice/phrasing bleeding into an unrelated one - see README "Known limitations" for the open question of whether this should ever be relaxed (e.g. across volumes of the same series).
+
+    Rows are never overwritten in place: every confirmed bubble becomes a new row, so the memory grows across the project rather than collapsing simillar-but-distinct lines into a single entry.
+    """
+
+    __tablename__ = "corrections"
+
+    id = Column(Integer, primary_key=True, index=True)
+    project_id = Column(Integer, ForeignKey("projects.if"), nullable=False)
+
+    source_text = Column(Text, nullable=False)
+    ai_translation = Column(Text)
+    final_translation = Column(Text, nullable=False)
+
+    # Raw float32 embedding bytes for 'source_text' (see services/memory_service.py
+    # encode_embedding / decode_embedding). Stored as a plain column rather than in
+    # a dedicated vector DB - at thesis scale, a brute-force in-memory cosine scan
+    # over a few hundred/thousand rows is simpler to reason abot and fast enough.
+    embedding = Column(Text, nullable=False)
+
+    reuse_count = Column(Integer, default=0)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+    # Relationships
+    project = relationship("Project", back_populates="corrections")
+
+
+class TranslationLog(Base):
+    """
+    Records every translation attempt made for a bubble, including both sides
+    of the zero-shot vs. memory-injected comparison produced by
+    services/translation_service.py.
+
+
+    This is the raw data the thesis experiment is evaluated from: for bubbles
+    where a correction-memory match was found, two rows are written (one per
+    variant, sharing the same run_id) so the two ouputs can later be
+    compared - e.g. via edit distance or chrF - against the translation the
+    user eventually approves for that bubble.
+    """
+
+    __tablename__ = "translation_logs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    page_id = Column(Integer, ForeignKey("pages.id"), nullable=False)
+    bubble_id = Column(Integer, nullable=False)
+
+    variant = Column(String, nullable=False) # "zero_shot" | "memory_injected"
+    source_text = Column(Text, nullable=False)
+    output_text = Column(Text)
+
+    matched_correction_id = Column(Integer, ForeignKey("corrections.id"), nullable=True)
+    similarity_score = Column(Float, nullable=True)
+
+    model_used = Column(String)
+    run_id = Column(String, nullable=False)  # groups the zero_shot / memory_injected pair from one translation pass
+
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+    # Relationship
+    page = relationship("Page")
+    matched_correction = relationship("Correction")

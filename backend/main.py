@@ -1,4 +1,3 @@
-
 # backend/main.py
 
 """
@@ -18,7 +17,7 @@ load_dotenv()
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
-from routers import projects
+from routers import projects, corrections, pages
 import uvicorn
 from core.database import init_db
 from paddleocr import PaddleOCR
@@ -57,6 +56,8 @@ app.add_middleware(
 
 # API Routes Mount Points
 app.include_router(projects.router)
+app.include_router(corrections.router)
+app.include_router(pages.router)
 # app.include_router(settings.router)
 
 # Pre-warm and instantiate the PaddleOCR global engine instance.

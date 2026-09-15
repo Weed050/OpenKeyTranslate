@@ -5,151 +5,163 @@
 LLM Translation Service Module
 ______________________________
 
-This module acts as the localization (translation) engine for the application, bridging the
-gap between the extracted OCR text and the Groq Large Language Model (LLM) API.
-It is responsible for context-aware, English-to-Polish translation of manga
-and comic speech bubbles.
+This module acts as the localization (translation) engine for the application,
+bridging the gap between the extracted OCR text and a pluggable LLM translation
+backend (see services/providers/). It is responsible for context-aware,
+English-to-Polish translation of manga and comic speech bubbles.
 
 Key Architectural Features:
-    1. Singleton Connection: Manages a single, persistent Groq client instance
-       to minimize overhead and redundant API initializations.
+    1. Pluggable Backend: Delegates the actual API call to whichever provider
+       is configured as active (see core.config.ACTIVE_PROVIDER and
+       services/providers/__init__.py). Swapping Groq for Gemini, or adding a
+       new backend entirely, never requires touching this file.
     2. Batch Processing: Aggregates all text bubbles from a page into a single
-       API payload. This drastically reduces network latency and token usage
-       compared to translating bubbles one by one.
-    3. Structured Output Enforcement: Leverages the LLM's 'json_object' mode
-       to guarantee machine-readable responses. It forces the model to return
-       a strict JSON schema rather than conversational text.
-    4. Defensive Mapping & Error Handling: Uses unique bubble IDs to map
-       translations back to their source objects safely. If the API fails,
-       times out, or hallucinates, the module gracefully falls back to empty
-       strings, preventing downstream application crashes.
+       provider call. This drastically reduces network latency and token
+       usage compared to translating bubbles one by one.
+    3. Correction-Memory Injection: Before translating, each bubble's source
+       text is checked against the project's correction history (see
+       services/memory_service.py). A close-enough past correction is
+       injected into the payload as a per-bubble "hint", nudging the model
+       toward phrasing the user has already approved for similar text.
+    4. Zero-Shot vs. Memory-Injected Logging: When a hint is used, the same
+       bubble is additionally translated a second time without the hint,
+       purely for logging (see models.models.TranslationLog). This produces
+       the paired data the thesis experiment is evaluated from. Only the
+       hinted result is ever shown to the user.
+    5. Optional DB Context: project_id/page_id/db are optional. Pass them
+       (from an active session) to enable correction-memory hints and A/B
+       logging. Omit them for standalone runs with no DB-backed project -
+       e.g. test_main.py's test_ocr_from_path() - translation still runs,
+       just without memory or logging.
 """
 
-import json
-from groq import Groq
-from core.config import GROQ_API_KEY, GROQ_MODEL, TRANSLATION_TEMPERATURE, TRANSLATION_MAX_TOKENS
+import uuid
+from sqlalchemy.orm import Session
 
-_client = None
+from core.config import MEMORY_AB_TEST_LOGGING, ACTIVE_MODEL_NAME
+from models.models import TranslationLog
+from services.memory_service import find_best_match
+from services.providers import get_provider
 
-
-def _get_client() -> Groq:
+def translate_bubbles(
+    bubbles: list[dict],
+    project_id: int | None = None,
+    page_id: int | None = None,
+    db: Session | None = None,
+) -> list[dict]:
     """
-    Initialize and return a singleton instance of the Groq API client.
-
-    Ensures that the API client is instantiated only once during the application's
-    lifecycle to conserve resources and avoid redundant initializations.
-
-    Raises:
-        ValueError: If the GROQ_API_KEY is missing from the OpenKeyTranslate\\settings.json.
-
-    Returns:
-        Groq: The initialized Groq API client.
-    """
-    global _client
-    if _client is None:
-        if not GROQ_API_KEY:
-            raise ValueError("groq_api_key is empty — fill it in settings.json")
-        _client = Groq(api_key=GROQ_API_KEY)
-    return _client
-
-
-
-# NOTE: The model must return a JSON object {...}, not just an array [...].
-# This is a strict requirement for utilizing the 'json_object' response mode in modern LLMs.
-
-SYSTEM_PROMPT = """You are a manga/comic translator from English to Polish.
-Translate the provided speech bubble texts accurately, preserving:
-- tone and emotion (exclamations, hesitations, shouting)
-- slang and informal language
-- sound effects (onomatopoeia) — transliterate or adapt, don't translate literally
-- line breaks if present
-
-Return ONLY a JSON object containing a "translations" key with an array of objects. No explanations:
-{
-  "translations": [
-    {"id": "bubble_0", "translation": "..."}
-  ]
-}"""
-
-
-def translate_bubbles(bubbles: list[dict]) -> list[dict]:
-    """
-    Translate extracted speech bubble texts using the Groq LLM.
-
-    Sends a batch of text segments to the LLM for English-to-Polish translation.
-
-    It uses the LLM's JSON mode to guarantee a strictly structured output.
+    Translate extracted speech bubble texts via the active LLM provider,
+    injecting correction-memory hints where the project has a similar past
+    correction.
 
     Params:
         bubbles (list[dict]): A list of bubble dictionaries. Each dictionary must
                               contain at least 'bubble_id' and 'text'.
+        project_id (int | None): Used to scope correction-memory lookups to this
+                          project (see services/memory_service.find_best_match).
+                          Memory lookup is skipped entirely if None.
+        page_id (int | None): Used to tag logged TranslationLog rows with their
+                          source page. Required (together with db) for logging.
+        db (Session | None): Active SQLAlchemy session, used for both memory
+                          lookups and logging. Logging is skipped entirely if None.
 
     Returns:
         list[dict]: The original list of bubbles, mutated to include a new
                     'translation' field containing the localized Polish text.
     """
+
     if not bubbles:
         return bubbles
 
-    # 1. Build the payload for the model (filtering out empty texts)
+    provider = get_provider()
+    run_id = str(uuid.uuid4())
+
+    memory_enabled = project_id is not None and db is not None
+    logging_enabled = memory_enabled and page_id is not None
+
+    # 1. Look up correction-memory matches up front, before touching the LLM.
+    #    bubble_id -> (Correction, similarity_score). Skipped entirely when
+    #    no DB context was passed in (see module docstring, point 5).
+    matches: dict[str, tuple] = {}
+    if memory_enabled:
+        for b in bubbles:
+            text = b.get("text", "").strip()
+            if not text:
+                continue
+            match = find_best_match(text, project_id, db)
+            if match is not None:
+                matches[b["bubble_id"]] = match
+
+    # 2. Build the main payload (hints included where matched) and translate.
+    #    This is the result that gets shown to the user.
     texts_payload = [
-        {"id": b["bubble_id"], "text": b["text"]}
+        {
+            "id": b["bubble_id"],
+            "text": b["text"],
+            **({"hint": matches[b["bubble_id"]][0].final_translation} if b["bubble_id"] in matches else {}),
+        }
         for b in bubbles
         if b.get("text", "").strip()
     ]
 
-    # If there is no valid text to translate, initialize empty translation fields and abort early
     if not texts_payload:
         for b in bubbles:
             b["translation"] = ""
         return bubbles
 
-    user_message = json.dumps(texts_payload, ensure_ascii=False)
+    shown_translations = provider.translate(texts_payload)
 
-    try:
-        # 2. Execute the API call
-        response = _get_client().chat.completions.create(
-            model=GROQ_MODEL,
-            messages=[
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": user_message},
-            ],
-            response_format={"type": "json_object"},  # <--- ENFORCING CLEAN JSON RESPONSE
+    # 3. For matched bubbles only, run a second hint-free pass purely for A/B
+    #    logging (the thesis' zero-shot vs. memory-injected comparison data).
+    zero_shot_translations = {}
+    if MEMORY_AB_TEST_LOGGING and logging_enabled and matches:
+        counterfactual_payload = [
+            {"id": bid, "text": next(b["text"] for b in bubbles if b["bubble_id"] == bid)}
+            for bid in matches
+        ]
+        zero_shot_translations = provider.translate(counterfactual_payload)
 
-            # Controls creativity; low value prevents hallucinations and JSON structure breaks
-            temperature=TRANSLATION_TEMPERATURE,
+    # 4. Apply the shown translation to every bubble (always - regardless of
+    #    whether logging is enabled) and build the log rows (only if enabled).
+    log_rows = []
+    for b in bubbles:
+        bubble_id = b["bubble_id"]
+        translation = shown_translations.get(bubble_id, "")
+        b["translation"] = translation
 
-            # Limits maximum response (in tokens) size to avoid API overuse and ensure clean JSON closing
-            max_tokens=TRANSLATION_MAX_TOKENS,
-        )
+        if not logging_enabled:
+            continue
 
-        # The API can generate multiple response variants (e.g., 3 choices).
-        # But, we usually request only one, so we take the first choice (index 0).
-        raw = response.choices[0].message.content.strip()
+        if bubble_id in matches:
+            correction, score = matches[bubble_id]
 
-        # 3. Defensive Parsing: Safely load the JSON payload
-        parsed_data = json.loads(raw)
+            log_rows.append(TranslationLog(
+                page_id=page_id, bubble_id=bubble_id, variant="memory_injected",
+                source_text=b["text"], output_text=translation,
+                matched_correction_id=correction.id, similarity_score=score,
+                model_used=ACTIVE_MODEL_NAME, run_id=run_id,
+            ))
 
-        # Extract the array from the "translations" key (returns an empty list [] if missing)
-        translations_list = parsed_data.get("translations", [])
+            if bubble_id in zero_shot_translations:
+                log_rows.append(TranslationLog(
+                    page_id=page_id, bubble_id=bubble_id, variant="zero_shot",
+                    source_text=b["text"], output_text=zero_shot_translations[bubble_id],
+                    matched_correction_id=correction.id, similarity_score=score,
+                    model_used=ACTIVE_MODEL_NAME, run_id=run_id,
+                ))
+        else:
+            log_rows.append(TranslationLog(
+                page_id=page_id, bubble_id=bubble_id, variant="zero_shot",
+                source_text=b["text"], output_text=translation,
+                matched_correction_id=None, similarity_score=None,
+                model_used=ACTIVE_MODEL_NAME, run_id=run_id,
+            ))
 
-        # Create a mapping dictionary: {"bubble_0": "Polish text", ...}
-        trans_map = {t.get("id"): t.get("translation", "") for t in translations_list if "id" in t}
-
-        # 4. Update the original bubbles with their respective translations
-        for bubble in bubbles:
-            # Using .get() safely returns an empty string instead of throwing a KeyError
-            # in case the LLM hallucinates or misses a specific bubble ID.
-            bubble["translation"] = trans_map.get(bubble["bubble_id"], "")
-
-    except Exception as e:
-        # Print the error, but allow the program to continue running normally
-        print(f"\n[TRANSLATION CRITICAL ERROR]: API communication or parsing error: {e}")
-        print(f"[DEBUG] Raw model response: {raw if 'raw' in locals() else 'None'}")
-
-        # Fallback: Fill missing "translation" fields with empty strings to prevent downstream crashes
-        for bubble in bubbles:
-            if "translation" not in bubble:
-                bubble["translation"] = ""
+    if logging_enabled and log_rows:
+        db.add_all(log_rows)
+        db.commit()
 
     return bubbles
+
+
+

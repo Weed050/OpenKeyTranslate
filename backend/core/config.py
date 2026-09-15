@@ -56,12 +56,38 @@ DEFAULT_SETTINGS = {
     "ocr_marker_margin_y": 40,
     "ocr_marker_score_threshold": 0.4,
 
-    # External APIs and Services
+    # External APIs and Services (tranlation providers - see services/providers/)
+    # active_provider selects which key below is used; add a new provider by
+    # giving it its own entry here plus a class in services/providers/.
     "translation_on": True,
-    "groq_api_key": "",
-    "groq_model": "llama-3.3-70b-versatile",
+    "active_provider": "groq",
+    "providers": {
+        "groq": {
+            "api_key": "",
+            "model": "openai/gpt-oss-120b",
+        },
+        "gemini": {
+            "api_key": "",
+            "model": "gemini-2.5-flash",
+        },
+    },
     "translation_temperature": 0.4,
     "translation_max_tokens": 1024,
+
+    # Correction Memory (thesis feature - see services/memory_service.py)
+    # memory_similarity_threshold: minimum cosine similarity for a past
+    #   correction to be injected as a hint. Treat as an open research
+    #   parameter, not a fixed constant - similarity_score is logged for
+    #   every match so this can be tuned after the fact against real data
+    "memory_similarity_threshold": 0.80,
+
+    # Local sentence-transformers model used to embed English source text.
+    "memory_embedding_model": "all-MiniLM-L6-v2",
+
+    # When true, matched bubbles are translated a second time without the
+    # hint (hint-free "counterfactual"), purely for A/B logging. Turn off
+    # once the experiment is done to save on API calls.
+    "memory_ab_test_logging": True,
 
     # Debug Flags
     "ocr_debug": True,
@@ -141,12 +167,18 @@ MARKER_MARGIN_Y = settings.get("ocr_marker_margin_y")
 MARKER_SCORE_THRESHOLD = settings.get("ocr_marker_score_threshold")
 MARKER_COLOR = (0, 0, 0)  # Black RGB
 
-# Translation Service
+# Translation Service / Providers
 TRANSLATION_ON = settings.get("translation_on")
-GROQ_API_KEY = settings.get("groq_api_key")
-GROQ_MODEL = settings.get("groq_model")
+ACTIVE_PROVIDER = settings.get("active_provider", "groq")
+PROVIDERS = settings.get("providers", {})
+ACTIVE_MODEL_NAME = PROVIDERS.get(ACTIVE_PROVIDER, {}).get("model", ACTIVE_PROVIDER)
 TRANSLATION_TEMPERATURE = settings.get("translation_temperature", 0.4)
 TRANSLATION_MAX_TOKENS = settings.get("translation_max_tokens", 1024)
+
+# Correction Memory
+MEMORY_SIMILARITY_THRESHOLD = settings.get("memory_similarity_threshold", 0.80)
+MEMORY_EMBEDDING_MODEL = settings.get("memory_embedding_model", "all-MiniLM-L6-v2")
+MEMORY_AB_TEST_LOGGING = settings.get("memory_ab_test_logging", True)
 
 # Environment Debugging
 DEBUG = settings.get("ocr_debug")
