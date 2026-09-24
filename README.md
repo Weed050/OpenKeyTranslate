@@ -85,6 +85,7 @@ This is expected to perform noticeably worse than the original paper's image-bas
 ## Documentation & repo structure
 
 - [`docs/ARCHITECTURE_API.md`](./docs/ARCHITECTURE_API.md) — backend architecture and API documentation (Markdown).
+- **[View the API & Code Documentation (GitHub Pages)](https://weed050.github.io/OpenKeyTranslate/)**
 - Additional frontend/HTML documentation lives alongside the frontend code.
 - `docs/**` and `*.md` are marked `linguist-documentation` in `.gitattributes`, so GitHub's language stats reflect the actual backend/frontend code rather than being skewed by documentation files.
 - Most of `docs/` is intended to be published as project documentation (e.g. via GitHub Pages); `ARCHITECTURE_API.md` is kept internal for now and excluded from that.
