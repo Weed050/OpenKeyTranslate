@@ -1,0 +1,100 @@
+/* frontend/css/base.css
+   Reset, typography, and shared form/button/element styling used
+   everywhere. Page- and feature-specific rules live in their own files. */
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  height: 100%;
+  background: var(--bg-page);
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+h1, h2, h3 { font-weight: 500; margin: 0 0 var(--space-md); color: var(--text-primary); }
+h1 { font-size: 20px; }
+h2 { font-size: 16px; }
+h3 { font-size: 13px; text-transform: none; color: var(--text-secondary); }
+
+p { margin: 0 0 var(--space-sm); color: var(--text-secondary); }
+
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+.hidden { display: none !important; }
+
+button {
+  font-family: inherit;
+  font-size: 13px;
+  color: var(--text-primary);
+  background: var(--bg-panel-2);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  padding: 7px 14px;
+  cursor: pointer;
+}
+button:hover { background: var(--bg-hover); }
+button:active { transform: scale(0.98); }
+button:disabled { color: var(--text-muted); cursor: default; transform: none; opacity: 0.6; }
+
+button.primary {
+  background: var(--accent);
+  color: var(--accent-text);
+  border-color: var(--accent);
+  font-weight: 500;
+}
+button.primary:hover { filter: brightness(1.08); }
+
+button.danger {
+  background: transparent;
+  color: var(--danger);
+  border-color: var(--danger);
+}
+button.danger:hover { background: rgba(224, 87, 92, 0.12); }
+
+button.icon-btn {
+  padding: 6px 8px;
+  background: transparent;
+  border-color: var(--border);
+}
+
+input[type="text"], textarea, select {
+  width: 100%;
+  font-family: inherit;
+  font-size: 13px;
+  color: var(--text-primary);
+  background: var(--bg-input);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  padding: 7px 10px;
+}
+input[type="text"]:focus, textarea:focus, select:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+textarea { resize: vertical; font-family: inherit; }
+
+label { display: block; font-size: 12px; color: var(--text-secondary); margin-bottom: 4px; }
+
+/* Small pill-style status/count badge */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  font-size: 11px;
+  color: var(--text-secondary);
+  background: var(--bg-panel-2);
+  border-radius: 10px;
+  padding: 2px 8px;
+}
+
+/* Tooltip: title attribute styling is left to the browser default on
+   purpose (zero JS, zero extra markup) - buttons that need one just get a
+   descriptive `title="..."` attribute in the HTML/JS that creates them. */
+
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 6px; }
+::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }

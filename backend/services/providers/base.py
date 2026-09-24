@@ -15,6 +15,12 @@ from abc import ABC, abstractmethod
 
 
 class TranslationProvider(ABC):
+    def __init__(self):
+        # Set by translate() to the label of whichever key from the pool
+        # actually served the last request - read by translation_service.py
+        # right after each call, for TranslationLog.key_label.
+        self.current_key_label: str | None = None
+
     @abstractmethod
     def translate(self, texts_payload: list[dict]) -> dict[str, str]:
         """
@@ -25,6 +31,8 @@ class TranslationProvider(ABC):
             already approved for similar text - see services/memory_service.py.
         :return: Mapping of {id: translation}. A missing id is treated by the
             caller as an empty-string translation, so failures should simply
-            omit the id rather than raise.
+            omit the id rather than raise - except when every configured key
+            is unavailable (rate-limited or unset), which should raise, so
+            the caller gets a clear error instead of silent empty output.
         """
         raise NotImplementedError

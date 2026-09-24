@@ -6,7 +6,7 @@ import os
 import json
 import shutil
 from models.schemas import SettingsSchema
-from core.config import APP_ROOT_DIR, SETTINGS_FILE, load_settings
+from core.config import APP_ROOT_DIR, SETTINGS_FILE, load_settings, get_default_app_root
 
 """
 API Router - right now used for managing application settings and data migration.
@@ -37,11 +37,20 @@ async def get_settings():
 @router.post("/")
 async def update_settings(new_settings: SettingsSchema):
     """
-    Update application settings and optionally migrate data to a new root directory.
+    Update the workspace path (and source/target language) and optionally
+    migrate data to a new root directory.
+
+    IMPORTANT: this merges into the existing settings.json rather than
+    overwriting it. SettingsSchema only knows about app_root_dir/
+    source_lang/target_lang/migrate_data - it has no fields for
+    providers/translation/memory/OCR settings, so a naive
+    `json.dump(new_settings.model_dump(), ...)` would silently wipe every
+    other setting (API keys included) on every workspace change. Loading
+    the full current settings first and only overwriting the fields this
+    endpoint actually manages avoids that.
     """
     old_path = APP_ROOT_DIR
     new_path = new_settings.app_root_dir
-    settings_data = new_settings.model_dump()
     migration_msg = "Settings saved successfully."
 
     # Handle data migration if requested and path has changed
@@ -75,24 +84,29 @@ async def update_settings(new_settings: SettingsSchema):
                 shutil.rmtree(new_path)
             raise HTTPException(status_code=500, detail=f"Migration failed: {str(e)}")
 
-    # Save the updated configuration matrix
-    settings_data.pop("migrate_data", None)
+    # Merge only the fields this endpoint owns into the FULL existing settings,
+    # so providers/translation/memory/OCR config is never discarded.
+    current_settings = load_settings()
+    current_settings["app_root_dir"] = new_settings.app_root_dir
+    current_settings["source_lang"] = new_settings.source_lang
+    current_settings["target_lang"] = new_settings.target_lang
+
     with open(SETTINGS_FILE, "w", encoding="utf-8") as file:
-        json.dump(settings_data, file, indent=4, ensure_ascii=False)
+        json.dump(current_settings, file, indent=4, ensure_ascii=False)
 
     return {"message": f"{migration_msg} Please restart the application to apply changes."}
 
-# @router.post("/reset-to-default")
-# async def reset_to_default():
-#     """Reset configuration to default factory values."""
-#     default_path = get_default_app_root()
-#
-#     current_settings = load_settings()
-#     reset_payload = SettingsSchema(
-#         app_root_dir=default_path,
-#         source_lang=current_settings.get("source_lang", "en"),
-#         target_lang=current_settings.get("target_lang", "pl"),
-#         migrate_data=True
-#     )
-#
-#     return await update_settings(reset_payload)
+@router.post("/reset-to-default")
+async def reset_to_default():
+    """Reset the workspace path to the default factory location (AppData)."""
+    default_path = get_default_app_root()
+
+    current_settings = load_settings()
+    reset_payload = SettingsSchema(
+        app_root_dir=default_path,
+        source_lang=current_settings.get("source_lang", "en"),
+        target_lang=current_settings.get("target_lang", "pl"),
+        migrate_data=True
+    )
+
+    return await update_settings(reset_payload)

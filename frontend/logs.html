@@ -1,0 +1,73 @@
+<!-- frontend/logs.html -->
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OpenKeyTranslate - Translation logs</title>
+    <link rel="stylesheet" href="css/tokens.css">
+    <link rel="stylesheet" href="css/base.css">
+    <link rel="stylesheet" href="css/layout.css">
+    <style>
+        .logs-table-wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: var(--radius); }
+        table.logs-table { width: 100%; border-collapse: collapse; font-size: 12px; min-width: 900px; }
+        table.logs-table th {
+            text-align: left; font-weight: 500; color: var(--text-muted);
+            padding: 8px 12px; border-bottom: 1px solid var(--border);
+            position: sticky; top: 0; background: var(--bg-panel);
+        }
+        table.logs-table td { padding: 8px 12px; border-bottom: 1px solid var(--border); vertical-align: top; color: var(--text-secondary); }
+        table.logs-table tr:last-child td { border-bottom: none; }
+        .diff-removed { color: var(--danger); text-decoration: line-through; opacity: 0.8; }
+        .diff-added { color: var(--success); }
+    </style>
+</head>
+<body>
+
+    <div class="app-shell">
+        <nav class="sidebar">
+            <div class="sidebar-brand">OpenKeyTranslate</div>
+            <div class="sidebar-section">
+                <div class="sidebar-label">Active</div>
+                <div id="sidebarActive"></div>
+            </div>
+            <div class="sidebar-section hidden" id="sidebarArchivedSection">
+                <div class="sidebar-label">Archived</div>
+                <div id="sidebarArchived"></div>
+            </div>
+            <div class="sidebar-footer">
+                <div class="hidden" id="sidebarProjectLinks"></div>
+                <a class="sidebar-link" href="index.html">Dashboard</a>
+                <a class="sidebar-link" href="settings.html">Settings</a>
+            </div>
+        </nav>
+
+        <main class="main-content">
+            <div class="page-header">
+                <h1>Translation logs</h1>
+                <span class="badge" id="countBadge"></span>
+            </div>
+            <p class="text-muted">Every zero-shot vs. memory-injected pair the correction-memory experiment is evaluated from. Read-only - never fed back into translation.</p>
+
+            <div id="noProject" class="hidden text-muted">Open a project from the sidebar first.</div>
+
+            <div class="logs-table-wrap">
+                <table class="logs-table">
+                    <thead>
+                        <tr>
+                            <th>Source (EN)</th>
+                            <th>Zero-shot</th>
+                            <th>Memory-injected</th>
+                            <th>Diff vs. final correction</th>
+                        </tr>
+                    </thead>
+                    <tbody id="logsBody"></tbody>
+                </table>
+            </div>
+        </main>
+    </div>
+
+    <script type="module" src="js/logs.js"></script>
+</body>
+</html>

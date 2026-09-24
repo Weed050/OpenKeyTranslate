@@ -1,0 +1,61 @@
+<!-- frontend/memory.html -->
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OpenKeyTranslate - Memory</title>
+    <link rel="stylesheet" href="css/tokens.css">
+    <link rel="stylesheet" href="css/base.css">
+    <link rel="stylesheet" href="css/layout.css">
+    <style>
+        .correction-row { border: 1px solid var(--border); border-radius: var(--radius-sm); margin-bottom: 8px; overflow: hidden; }
+        .correction-row summary {
+            display: flex; align-items: center; gap: 12px; padding: 10px 12px;
+            cursor: pointer; list-style: none; font-size: 13px;
+        }
+        .correction-row summary::-webkit-details-marker { display: none; }
+        .correction-row summary::before { content: "\25B8  "; color: var(--text-muted); }
+        .correction-row[open] summary::before { content: "\25BE  "; }
+        .correction-summary-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-secondary); }
+        .correction-body { padding: 0 12px 12px; display: flex; flex-direction: column; gap: 8px; }
+        .field-label { font-size: 11px; color: var(--text-muted); }
+        .field-value { font-size: 13px; color: var(--text-primary); background: var(--bg-panel-2); border-radius: var(--radius-sm); padding: 6px 10px; }
+    </style>
+</head>
+<body>
+
+    <div class="app-shell">
+        <nav class="sidebar">
+            <div class="sidebar-brand">OpenKeyTranslate</div>
+            <div class="sidebar-section">
+                <div class="sidebar-label">Active</div>
+                <div id="sidebarActive"></div>
+            </div>
+            <div class="sidebar-section hidden" id="sidebarArchivedSection">
+                <div class="sidebar-label">Archived</div>
+                <div id="sidebarArchived"></div>
+            </div>
+            <div class="sidebar-footer">
+                <div class="hidden" id="sidebarProjectLinks"></div>
+                <a class="sidebar-link" href="index.html">Dashboard</a>
+                <a class="sidebar-link" href="settings.html">Settings</a>
+            </div>
+        </nav>
+
+        <main class="main-content">
+            <div class="page-header">
+                <h1>Correction memory</h1>
+                <span class="badge" id="countBadge"></span>
+            </div>
+            <p class="text-muted">Every stored correction is a candidate hint for future translations in this project. Delete an entry to stop it from being suggested.</p>
+
+            <div id="noProject" class="hidden text-muted">Open a project from the sidebar first.</div>
+            <div id="correctionList"></div>
+        </main>
+    </div>
+
+    <script type="module" src="js/memory.js"></script>
+</body>
+</html>

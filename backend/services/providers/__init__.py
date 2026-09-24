@@ -24,16 +24,16 @@ def _build_provider() -> TranslationProvider:
             f"Unknown active_provider '{ACTIVE_PROVIDER}' — check the 'providers' keys in settings.json."
         )
 
-    api_key = provider_cfg.get("api_key", "")
+    keys = provider_cfg.get("keys", [])
     model = provider_cfg.get("model", "")
 
     if ACTIVE_PROVIDER == "groq":
         from .groq_provider import GroqProvider
-        return GroqProvider(api_key, model, TRANSLATION_TEMPERATURE, TRANSLATION_MAX_TOKENS)
+        return GroqProvider(keys, model, TRANSLATION_TEMPERATURE, TRANSLATION_MAX_TOKENS)
 
     if ACTIVE_PROVIDER == "gemini":
         from .gemini_provider import GeminiProvider
-        return GeminiProvider(api_key, model, TRANSLATION_TEMPERATURE, TRANSLATION_MAX_TOKENS)
+        return GeminiProvider(keys, model, TRANSLATION_TEMPERATURE, TRANSLATION_MAX_TOKENS)
 
     raise ValueError(f"No provider implementation registered for '{ACTIVE_PROVIDER}'.")
 

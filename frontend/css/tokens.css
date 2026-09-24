@@ -1,0 +1,48 @@
+/* frontend/css/tokens.css
+   Design tokens for the dark theme. Every other CSS file reads colors,
+   spacing and radii from these custom properties - nothing else in the
+   project should hardcode a hex color or a raw px gap. */
+
+:root {
+  /* surfaces, darkest to lightest */
+  --bg-page: #0e0f12;
+  --bg-panel: #1b1c21;
+  --bg-panel-2: #202127;
+  --bg-hover: #26272f;
+  --bg-selected: #262a3a;
+  --bg-input: #1f2028;
+
+  /* accent + status */
+  --accent: #6d8cff;
+  --accent-text: #0e0f12;
+  --danger: #e0575c;
+  --success: #4caf7d;
+
+  /* text */
+  --text-primary: #e7e7ea;
+  --text-secondary: #a4a5ad;
+  --text-muted: #6b6c74;
+
+  /* borders */
+  --border: #2a2b31;
+  --border-strong: #3a3b44;
+
+  /* shape */
+  --radius: 8px;
+  --radius-sm: 6px;
+
+  /* spacing scale */
+  --space-xs: 4px;
+  --space-sm: 8px;
+  --space-md: 16px;
+  --space-lg: 24px;
+  --space-xl: 32px;
+
+  /* type */
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+
+  /* fixed layout sizes, referenced by layout.css and editor.css */
+  --sidebar-w: 200px;
+  --panel-w: 320px;
+}

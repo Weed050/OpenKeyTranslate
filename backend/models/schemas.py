@@ -26,6 +26,7 @@ class ProjectSchema(BaseModel):
     name: str
     workspace_path: str
     created_at: datetime
+    status: str = "active"
 
     class Config:
         from_attributes = True
@@ -46,11 +47,15 @@ class SettingsSchema(BaseModel):
     target_lang: str
     migrate_data: bool = False # Flag indicating whether to move files to the new root directory
 
+
 class CorrectionSchema(BaseModel):
     """
     Payload for confirming a user-approved translation for a single bubble.
 
-    Sent by the frontend editor whenever - both count as a correction for memory purposes, since even an unedited approval confirms the AI's proposal was already correct.
+    Sent by the frontend editor whenever the user edits or explicitly
+    approves a bubble's translation - both count as a correction for memory
+    purposes, since even an unedited approval confirms the AI's proposal
+    was already correct.
     """
 
     source_text: str

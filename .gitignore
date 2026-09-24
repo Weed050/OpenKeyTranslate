@@ -11,7 +11,7 @@ __pycache__/
 .DS_Store
 dist/
 build/
-./idea
+.idea/
 
 # Lokalne modele LLM 
 models/*.bin
