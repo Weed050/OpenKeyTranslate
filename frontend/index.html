@@ -1,4 +1,3 @@
-
 <!-- frontend/index.html -->
 
 <!DOCTYPE html>
@@ -7,45 +6,65 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>OpenKeyTranslate - Dashboard</title>
-    <style>
-        body { font-family: sans-serif; padding: 20px; line-height: 1.6; }
-        .project-card { border: 1px solid #ccc; padding: 10px; margin: 10px 0; border-radius: 8px; display: flex; justify-content: space-between; align-items: center; }
-        #settingsPanel { background: #f4f4f4; padding: 15px; border-radius: 8px; margin-top: 30px; }
-        .loading { opacity: 0.5; pointer-events: none; }
-        .hidden { display: none; }
-        #statusMsg { color: blue; font-weight: bold; }
-    </style>
+    <link rel="stylesheet" href="css/tokens.css">
+    <link rel="stylesheet" href="css/base.css">
+    <link rel="stylesheet" href="css/layout.css">
 </head>
 <body>
 
-    <div id="dashboard">
-        <h2>Your Projects</h2>
-        <div id="projectList">Loading project list...</div>
-        <hr>
+    <div class="app-shell">
+        <nav class="sidebar">
+            <div class="sidebar-brand">OpenKeyTranslate</div>
+
+            <div class="sidebar-section">
+                <div class="sidebar-label">Active</div>
+                <div id="sidebarActive"></div>
+            </div>
+
+            <div class="sidebar-section hidden" id="sidebarArchivedSection">
+                <div class="sidebar-label">Archived</div>
+                <div id="sidebarArchived"></div>
+            </div>
+
+            <div class="sidebar-footer">
+                <div class="hidden" id="sidebarProjectLinks"></div>
+                <a class="sidebar-link" href="index.html">Dashboard</a>
+                <a class="sidebar-link" href="settings.html">Settings</a>
+            </div>
+        </nav>
+
+        <main class="main-content">
+            <div class="content-narrow">
+                <div class="page-header">
+                    <h1>Projects</h1>
+                </div>
+
+                <div id="projectList"></div>
+
+                <div class="card" style="margin-top: 32px;">
+                    <h2>Create new project</h2>
+                    <div style="display:flex; flex-direction:column; gap:10px; max-width:420px;">
+                        <div>
+                            <label for="projectName">Project name</label>
+                            <input type="text" id="projectName" placeholder="e.g. Bleach">
+                        </div>
+                        <div>
+                            <label>Scans folder</label>
+                            <div style="display:flex; gap:8px; align-items:center;">
+                                <button id="selectFolderBtn">Select folder...</button>
+                                <span id="pathPreview" class="text-muted text-mono">None selected</span>
+                            </div>
+                        </div>
+                        <div>
+                            <button id="importBtn" class="primary">Create project</button>
+                            <span id="statusMsg" class="text-muted"></span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </main>
     </div>
 
-    <div id="importSection">
-        <h2>Create New Project</h2>
-        <label>Project Name:</label>
-        <input type="text" id="projectName" placeholder="e.g., Bleach"><br><br>
-
-        <label>Scans Folder:</label>
-        <button id="selectFolderBtn">Select folder...</button>
-        <span id="pathPreview">None selected</span> <br><br>
-
-        <button id="importBtn">Create Project</button>
-        <span id="statusMsg"></span>
-    </div>
-
-    <div id="settingsPanel">
-        <h2>Settings</h2>
-        <p>Main Workspace Folder (database + projects):</p>
-        <code id="currentWorkspacePath">Loading...</code><br><br>
-
-        <button id="changeWorkspaceBtn">Change Workspace folder...</button>
-        <button id="resetWorkspaceBtn" style="color: red;">Reset to default (AppData)</button>
-    </div>
-
-    <script src="app.js"></script>
+    <script type="module" src="js/dashboard.js"></script>
 </body>
 </html>

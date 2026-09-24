@@ -43,6 +43,7 @@ from models.models import TranslationLog
 from services.memory_service import find_best_match
 from services.providers import get_provider
 
+
 def translate_bubbles(
     bubbles: list[dict],
     project_id: int | None = None,
@@ -69,7 +70,6 @@ def translate_bubbles(
         list[dict]: The original list of bubbles, mutated to include a new
                     'translation' field containing the localized Polish text.
     """
-
     if not bubbles:
         return bubbles
 
@@ -110,16 +110,19 @@ def translate_bubbles(
         return bubbles
 
     shown_translations = provider.translate(texts_payload)
+    shown_key_label = provider.current_key_label
 
     # 3. For matched bubbles only, run a second hint-free pass purely for A/B
     #    logging (the thesis' zero-shot vs. memory-injected comparison data).
     zero_shot_translations = {}
+    zero_shot_key_label = None
     if MEMORY_AB_TEST_LOGGING and logging_enabled and matches:
         counterfactual_payload = [
             {"id": bid, "text": next(b["text"] for b in bubbles if b["bubble_id"] == bid)}
             for bid in matches
         ]
         zero_shot_translations = provider.translate(counterfactual_payload)
+        zero_shot_key_label = provider.current_key_label
 
     # 4. Apply the shown translation to every bubble (always - regardless of
     #    whether logging is enabled) and build the log rows (only if enabled).
@@ -134,12 +137,14 @@ def translate_bubbles(
 
         if bubble_id in matches:
             correction, score = matches[bubble_id]
+            correction.reuse_count = (correction.reuse_count or 0) + 1
+            db.add(correction)
 
             log_rows.append(TranslationLog(
                 page_id=page_id, bubble_id=bubble_id, variant="memory_injected",
                 source_text=b["text"], output_text=translation,
                 matched_correction_id=correction.id, similarity_score=score,
-                model_used=ACTIVE_MODEL_NAME, run_id=run_id,
+                model_used=ACTIVE_MODEL_NAME, key_label=shown_key_label, run_id=run_id,
             ))
 
             if bubble_id in zero_shot_translations:
@@ -147,14 +152,14 @@ def translate_bubbles(
                     page_id=page_id, bubble_id=bubble_id, variant="zero_shot",
                     source_text=b["text"], output_text=zero_shot_translations[bubble_id],
                     matched_correction_id=correction.id, similarity_score=score,
-                    model_used=ACTIVE_MODEL_NAME, run_id=run_id,
+                    model_used=ACTIVE_MODEL_NAME, key_label=zero_shot_key_label, run_id=run_id,
                 ))
         else:
             log_rows.append(TranslationLog(
                 page_id=page_id, bubble_id=bubble_id, variant="zero_shot",
                 source_text=b["text"], output_text=translation,
                 matched_correction_id=None, similarity_score=None,
-                model_used=ACTIVE_MODEL_NAME, run_id=run_id,
+                model_used=ACTIVE_MODEL_NAME, key_label=shown_key_label, run_id=run_id,
             ))
 
     if logging_enabled and log_rows:
@@ -162,6 +167,3 @@ def translate_bubbles(
         db.commit()
 
     return bubbles
-
-
-

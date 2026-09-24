@@ -1,3 +1,4 @@
+
 # backend/main.py
 
 """
@@ -5,8 +6,9 @@ Main application entry point for the FastAPI backend.
 
 This module initializes the core web framework, sets up asynchronous lifecycle hooks
 (such as database initialization), configures Cross-Origin Resource Sharing (CORS)
-middleware, and mounts application routers. It also instantiates shared system models
-like PaddleOCR.
+middleware, and mounts application routers (including pages.router, whose
+import pre-warms the shared PaddleOCR model - see the NOTE near the bottom
+of this file).
 """
 
 from dotenv import load_dotenv
@@ -17,10 +19,9 @@ load_dotenv()
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
-from routers import projects, corrections, pages
+from routers import projects, corrections, pages, logs, settings, system
 import uvicorn
 from core.database import init_db
-from paddleocr import PaddleOCR
 
 
 @asynccontextmanager
@@ -58,12 +59,16 @@ app.add_middleware(
 app.include_router(projects.router)
 app.include_router(corrections.router)
 app.include_router(pages.router)
-# app.include_router(settings.router)
+app.include_router(logs.router)
+app.include_router(settings.router)
+app.include_router(system.router)
 
-# Pre-warm and instantiate the PaddleOCR global engine instance.
-# Enabling use_textline_orientation=True helps automatically fix slightly rotated/tilted text boxes.
-ocr_model = PaddleOCR(use_textline_orientation=True, lang='en')
-
+# NOTE: PaddleOCR is no longer instantiated here directly. Importing
+# routers.pages (above) already pulls in services/ocr_pipeline.py, whose
+# module-level `ocr = PaddleOCR(...)` instance loads and pre-warms the GPU
+# model as a side effect of that import - the same effect this file used to
+# achieve by instantiating a second, separate PaddleOCR instance here.
+# Keeping both meant loading the model twice for no benefit.
 
 if __name__ == '__main__':
     # Local development server entry point

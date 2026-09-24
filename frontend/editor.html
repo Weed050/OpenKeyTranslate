@@ -1,0 +1,97 @@
+<!-- frontend/editor.html -->
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OpenKeyTranslate - Editor</title>
+    <link rel="stylesheet" href="css/tokens.css">
+    <link rel="stylesheet" href="css/base.css">
+    <link rel="stylesheet" href="css/layout.css">
+    <link rel="stylesheet" href="css/editor.css">
+</head>
+<body>
+
+    <div class="app-shell">
+        <nav class="sidebar">
+            <div class="sidebar-brand">OpenKeyTranslate</div>
+
+            <div class="sidebar-section">
+                <div class="sidebar-label">Active</div>
+                <div id="sidebarActive"></div>
+            </div>
+
+            <div class="sidebar-section hidden" id="sidebarArchivedSection">
+                <div class="sidebar-label">Archived</div>
+                <div id="sidebarArchived"></div>
+            </div>
+
+            <div class="sidebar-footer">
+                <div class="hidden" id="sidebarProjectLinks"></div>
+                <a class="sidebar-link" href="index.html">Dashboard</a>
+                <a class="sidebar-link" href="settings.html">Settings</a>
+            </div>
+        </nav>
+
+        <main class="main-content no-scroll">
+
+            <div class="editor-layout hidden" id="editorLayout">
+                <div class="image-pane">
+                    <div class="image-toolbar">
+                        <span id="pageLabel"></span>
+                        <span id="pageToolsMenu" style="display:flex; gap:6px;"></span>
+                        <span style="margin-left:auto"></span>
+                        <button id="retranslateBtn" class="icon-btn" title="Re-run translation only (keeps existing OCR/boxes)">Retranslate</button>
+                        <button id="zoomOutBtn" class="icon-btn" title="Zoom out (Ctrl + scroll down)">&minus;</button>
+                        <span id="zoomLabel">100%</span>
+                        <button id="zoomInBtn" class="icon-btn" title="Zoom in (Ctrl + scroll up)">+</button>
+                        <button id="zoomFitWidthBtn" class="icon-btn" title="Fit page width to ~80% of the viewport">Fit width</button>
+                        <button id="zoomResetBtn" class="icon-btn" title="Reset zoom to fit the viewport height">Fit height</button>
+                    </div>
+                    <div class="image-viewport" id="imageViewport">
+                        <div class="image-state hidden" id="imageState"></div>
+                        <div class="image-canvas hidden" id="imageCanvas">
+                            <img id="pageImage" alt="Page">
+                        </div>
+                    </div>
+                </div>
+
+                <div class="side-panel">
+                    <details class="chapter-nav" id="chapterNav">
+                        <summary>Chapters &amp; pages</summary>
+                        <div class="chapter-nav-body" id="chapterNavBody"></div>
+                    </details>
+
+                    <div class="bubble-list-header" id="bubbleListHeader">Bubbles</div>
+                    <div class="bubble-list" id="bubbleList"></div>
+                    <div class="bubble-detail hidden" id="bubbleDetail"></div>
+                </div>
+            </div>
+
+            <div class="image-state" id="processPrompt" style="margin:auto; max-width:420px;">
+                <p>This page hasn't been processed yet.</p>
+                <button id="processBtn" class="primary">Run OCR + translation</button>
+                <p class="text-muted" id="processStatus"></p>
+            </div>
+
+            <div class="hidden" id="pagePicker" style="height:100%; overflow-y:auto; padding: var(--space-lg);">
+                <div class="content-narrow">
+                    <h1>Pages</h1>
+                    <div class="hidden" id="pagePickerControls" style="display:flex; gap:8px; margin-bottom:16px;">
+                        <input type="text" id="pageSearchInput" placeholder="Filter by filename..." style="max-width:280px;">
+                        <button id="collapseAllBtn">Collapse all</button>
+                        <button id="expandAllBtn">Expand all</button>
+                    </div>
+                    <div id="pagePickerBody"></div>
+                </div>
+            </div>
+
+        </main>
+    </div>
+
+    <div class="save-toast" id="saveToast">Saved</div>
+
+    <script type="module" src="js/editor.js"></script>
+</body>
+</html>

@@ -15,7 +15,6 @@ It draws image metadata straight from the database to mimic real application sta
 the images through the full pipeline, and dumps rich visual debug outputs directly to disk.
 """
 
-import json
 import os
 import cv2
 import numpy as np
@@ -34,6 +33,7 @@ from core.config import (
 from services.ocr_pipeline import process_image, to_original_coords
 from utils.inpainting import erase_text_from_image
 from services.translation_service import translate_bubbles
+from services.page_export import save_ocr_json
 
 from utils.draw_debug import (
     draw_text_boxes, draw_slices, draw_marker_debug,
@@ -89,7 +89,7 @@ def test_ocr_from_db(page_id: int):
 
         # Translation Execution (Conditional)
         if TRANSLATION_ON:
-            print(f"[AI] Translation using provider: {ACTIVE_MODEL_NAME}...")
+            print(f"[AI] Tłumaczenie przy użyciu providera: {ACTIVE_MODEL_NAME}...")
             # project.id / page.id / db enable correction-memory hints + A/B logging
             # (see services/translation_service.py) - both are DB-backed here.
             ocr_result["bubbles"] = translate_bubbles(
@@ -160,41 +160,6 @@ def test_ocr_from_db(page_id: int):
 
     finally:
         db.close()
-
-
-def save_ocr_json(out_dir: str, file_base_name: str, ocr_result: dict):
-    """
-    Save OCR results (items, lines, bubbles with translations) to JSON.
-    Useful for debugging and as input for the editor later.
-    """
-    payload = {
-        "items": [
-            {
-                "text":     item["text"],
-                "score":    round(item["score"], 4),
-                "slice_id": item.get("slice_id"),
-                "box":      [[round(x, 1), round(y, 1)] for x, y in item["box"]],
-            }
-            for item in ocr_result["items"]
-        ],
-        "bubbles": [
-            {
-                "bubble_id":   b["bubble_id"],
-                "text":        b["text"],
-                "translation": b.get("translation", ""),
-                "box":         b["box_coords"],
-                "line_count":  b["line_count"],
-                "avg_score":   round(b["avg_score"], 4),
-            }
-            for b in ocr_result["bubbles"]
-        ],
-    }
-
-    out_path = os.path.join(out_dir, f"{file_base_name}_ocr.json")
-    with open(out_path, "w", encoding="utf-8") as f:
-        json.dump(payload, f, ensure_ascii=False, indent=2)
-
-    print(f"[JSON] saved -> {out_path}")
 
 
 def run_batch_ocr(pages_per_chapter: int = 10):
