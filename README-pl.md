@@ -85,6 +85,7 @@ Można się spodziewać, że da to zauważalnie gorsze wyniki niż podejście op
 ## Dokumentacja i struktura repozytorium
 
 - [`docs/ARCHITECTURE_API.md`](./docs/ARCHITECTURE_API.md) — dokumentacja architektury backendu i API (Markdown).
+- **[Dokumentacja online](https://weed050.github.io/OpenKeyTranslate/)** — wygenerowana automatycznie za pomocą `pdoc` i hostowana na GitHub Pages.
 - Dodatkowa dokumentacja frontendu (HTML) - `docs/**` oraz `*.md` są oznaczone jako `linguist-documentation` w `.gitattributes`, dzięki czemu statystyki języków na GitHubie odzwierciedlają rzeczywisty kod backendu/frontendu, a nie są zaburzone przez pliki dokumentacji.
 - Większość zawartości `docs/` docelowo ma zostać opublikowana jako dokumentacja projektu (np. przez GitHub Pages); `ARCHITECTURE_API.md` na razie pozostaje wewnętrzny i jest z tego wyłączony.
 
