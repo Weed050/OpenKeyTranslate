@@ -28,7 +28,7 @@
 
             <div class="sidebar-footer">
                 <div class="hidden" id="sidebarProjectLinks"></div>
-                <a class="sidebar-link" href="index.html">Dashboard</a>
+                <a class="sidebar-link" href="index.html">Projects</a>
                 <a class="sidebar-link" href="settings.html">Settings</a>
             </div>
         </nav>
@@ -62,6 +62,31 @@
                 </div>
                 <button id="saveMemorySettingsBtn" class="primary">Save</button>
                 <p class="text-muted" id="memorySettingsStatus" style="margin-top:10px;"></p>
+            </div>
+
+            <div class="card">
+                <h2>About</h2>
+                <div class="row">
+                    <div class="text-muted">App version</div>
+                    <span class="text-mono" id="appVersionLabel">...</span>
+                </div>
+                <div class="row">
+                    <div class="text-muted">Application log file</div>
+                    <div style="display:flex; gap:6px;">
+                        <button class="copy-btn" id="viewLogBtn">View recent</button>
+                        <button class="copy-btn" id="openLogFolderBtn">Open in Explorer</button>
+                    </div>
+                </div>
+                <div class="row">
+                    <div class="text-muted">Database file (open with "DB Browser for SQLite" to inspect corrections/logs)</div>
+                    <button class="copy-btn" id="openDbFolderBtn">Open</button>
+                </div>
+                <div id="logViewerBlock" class="hidden">
+                    <label style="display:flex; align-items:center; gap:6px; margin:10px 0;">
+                        <input type="checkbox" id="logErrorsOnlyCheckbox"> Errors only
+                    </label>
+                    <pre id="logViewerContent" class="text-mono" style="max-height:300px; overflow-y:auto; background:var(--bg-panel-2); padding:10px; border-radius:var(--radius-sm); font-size:11px; white-space:pre-wrap;"></pre>
+                </div>
             </div>
         </main>
     </div>

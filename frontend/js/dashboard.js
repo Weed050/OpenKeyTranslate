@@ -30,18 +30,25 @@ async function loadProjects() {
     projects.forEach(async (p) => {
         const row = document.createElement("div");
         row.className = "row";
+        const lastEdit = getLastEdit(p.id);
+        const resumeHref = lastEdit
+            ? `editor.html?project=${p.id}&page=${lastEdit.pageId}&bubble=${lastEdit.bubbleIndex}`
+            : null;
+
         row.innerHTML = `
             <div>
                 <strong>${p.name}</strong>
                 <div style="display:flex; align-items:center; gap:6px;">
-                    <span class="text-muted text-mono">${p.workspace_path}</span>
+                    <span class="text-muted text-mono project-path" title="${p.workspace_path}">${p.workspace_path}</span>
                     <button class="copy-btn" title="Copy path" data-copy="${p.workspace_path}">Copy</button>
                     <button class="copy-btn" title="Open in file explorer" data-open="${p.workspace_path}">Open folder</button>
                 </div>
             </div>
-            <div style="display:flex; align-items:center; gap:12px;">
+            <div class="row-actions">
                 <span class="badge" id="progress-${p.id}">...</span>
-                <a href="editor.html?project=${p.id}"><button>Open project in editor</button></a>
+                ${resumeHref ? `<a href="${resumeHref}"><button class="primary">Resume</button></a>` : ""}
+                <a href="editor.html?project=${p.id}"><button>Open in editor</button></a>
+                <button class="copy-btn danger" data-delete="${p.id}" data-name="${p.name}">Delete</button>
             </div>
         `;
         list.appendChild(row);
@@ -50,6 +57,17 @@ async function loadProjects() {
             await navigator.clipboard.writeText(e.target.dataset.copy);
             e.target.textContent = "Copied";
             setTimeout(() => { e.target.textContent = "Copy"; }, 1200);
+        });
+        row.querySelector("[data-delete]").addEventListener("click", async (e) => {
+            const id = e.target.dataset.delete;
+            const name = e.target.dataset.name;
+            if (!confirm(`Delete project "${name}"? Removes files on disk too. Cannot undo.`)) return;
+            try {
+                await api.projects.delete(id);
+                loadProjects();
+            } catch (err) {
+                alert(`Delete failed: ${err.message}`);
+            }
         });
         row.querySelector("[data-open]").addEventListener("click", async (e) => {
             try {
@@ -102,3 +120,12 @@ document.getElementById("importBtn").addEventListener("click", async () => {
         statusMsg.textContent = `Failed: ${e.message}`;
     }
 });
+
+function getLastEdit(projectId) {
+    try {
+        const raw = localStorage.getItem(`okt-lastedit-project-${projectId}`);
+        return raw ? JSON.parse(raw) : null;
+    } catch {
+        return null;
+    }
+}

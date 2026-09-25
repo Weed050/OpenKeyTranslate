@@ -97,6 +97,32 @@
   margin: 0 auto;
 }
 
+.row-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+.row-actions button,
+.row-actions .badge {
+  white-space: nowrap;
+}
+.row-actions .badge { min-width: 130px; text-align: center; }
+.row-actions button.primary { min-width: 90px; }
+.row-actions button:not(.primary):not(.danger) { min-width: 130px; }
+.row-actions button.danger { min-width: 70px; }
+
+.copy-btn { white-space: nowrap; min-width: 90px; }
+
+.project-path {
+  max-width: 480px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  display: inline-block;
+  vertical-align: middle;
+}
+
 .row {
   display: flex;
   align-items: center;

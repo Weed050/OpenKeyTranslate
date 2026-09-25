@@ -6,7 +6,7 @@ import os
 import json
 import shutil
 from models.schemas import SettingsSchema
-from core.config import APP_ROOT_DIR, SETTINGS_FILE, load_settings, get_default_app_root
+from core.config import APP_ROOT_DIR, SETTINGS_FILE, load_settings, get_default_app_root, APP_VERSION, DATABASE_PATH
 
 """
 API Router - right now used for managing application settings and data migration.
@@ -32,6 +32,9 @@ async def get_settings():
 
     # Explicitly default the migration flag to False for the UI
     data["migrate_data"] = False
+    data["app_version"] = APP_VERSION
+    data["log_file_path"] = os.path.join(APP_ROOT_DIR, "logs", "app.log")
+    data["database_path"] = DATABASE_PATH
     return data
 
 @router.post("/")

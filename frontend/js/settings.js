@@ -20,6 +20,7 @@ async function loadSettings() {
         appSettings = await api.settings.get();
         document.getElementById("currentWorkspacePath").textContent = appSettings.app_root_dir;
         document.getElementById("memoryMinWordsInput").value = appSettings.memory_min_words ?? 3;
+        document.getElementById("appVersionLabel").textContent = appSettings.app_version || "unknown";
     } catch (e) {
         document.getElementById("currentWorkspacePath").textContent = `Error: ${e.message}`;
     }
@@ -82,3 +83,42 @@ document.getElementById("saveMemorySettingsBtn").addEventListener("click", async
         document.getElementById("memorySettingsStatus").textContent = `Failed: ${e.message}`;
     }
 });
+
+
+document.getElementById("openLogFolderBtn").addEventListener("click", async () => {
+    if (!appSettings.log_file_path) return;
+    try {
+        await api.system.openPath(appSettings.log_file_path);
+    } catch (e) {
+        alert(`Couldn't open log file: ${e.message}`);
+    }
+});
+
+document.getElementById("openDbFolderBtn").addEventListener("click", async () => {
+    if (!appSettings.database_path) return;
+    try {
+        await api.system.openPath(appSettings.database_path);
+    } catch (e) {
+        alert(`Couldn't open database file: ${e.message}`);
+    }
+});
+
+
+document.getElementById("viewLogBtn").addEventListener("click", async () => {
+    const block = document.getElementById("logViewerBlock");
+    block.classList.toggle("hidden");
+    if (!block.classList.contains("hidden")) await refreshLogViewer();
+});
+document.getElementById("logErrorsOnlyCheckbox").addEventListener("change", refreshLogViewer);
+
+async function refreshLogViewer() {
+    const errorsOnly = document.getElementById("logErrorsOnlyCheckbox").checked;
+    const content = document.getElementById("logViewerContent");
+    content.textContent = "Loading...";
+    try {
+        const result = await api.system.tailLog(200, errorsOnly);
+        content.textContent = result.lines.length ? result.lines.join("\n") : "(no matching log lines)";
+    } catch (e) {
+        content.textContent = `Couldn't load log: ${e.message}`;
+    }
+}

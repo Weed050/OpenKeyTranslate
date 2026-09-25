@@ -1,5 +1,6 @@
 
 # backend/scripts/migrate_db.py
+
 """
 One-off manual migration script for schema changes that
 Base.metadata.create_all() can't apply to an existing SQLite file (it only

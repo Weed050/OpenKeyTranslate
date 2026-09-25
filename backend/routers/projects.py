@@ -149,6 +149,17 @@ async def cleanup_database(db: Session = Depends(get_db)):
     db.commit()
     return {"message": f"Database cleared. Deleted {removed_count} not existing projects."}
 
+@router.delete("/{project_id}")
+async def delete_project(project_id: int, db: Session = Depends(get_db)):
+    project = db.query(Project).filter(Project.id == project_id).first()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    shutil.rmtree(project.workspace_path, ignore_errors=True)
+    db.delete(project)
+    db.commit()
+    return {"message": "Project deleted"}
+
 def natural_sort_key(s):
     """
         Sorting key that correctly handles numbers embedded in strings.
@@ -164,6 +175,7 @@ def reconcile_projects_from_disk(db: Session):
     (DB deleted/replaced but files survived) get re-registered so they
     reappear in the sidebar. Doesn't touch projects already in the DB.
     """
+
     if not os.path.isdir(WORKSPACE_DIR):
         return
 
@@ -200,6 +212,11 @@ def reconcile_projects_from_disk(db: Session):
                 json_path = os.path.join(project_path, "processed", chapter_label, f"{file_base}_ocr.json")
                 status = "processed" if os.path.exists(json_path) else "pending"
                 db.add(Page(chapter_id=chapter.id, file_name=page_file, order=indx + 1, status=status))
+
+    for p in db.query(Project).all():
+        if not os.path.isdir(p.workspace_path):
+            print(f"[RECONCILE] Removing DB entry for missing folder: {p.name}")
+            db.delete(p)
 
     db.commit()
 
