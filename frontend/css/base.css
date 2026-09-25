@@ -90,9 +90,12 @@ label { display: block; font-size: 12px; color: var(--text-secondary); margin-bo
   padding: 2px 8px;
 }
 
-.badge[data-status="processed"] { color: var(--success); background: rgba(76,175,125,0.12); }
-.badge[data-status="pending"]   { color: var(--text-muted); }
-.badge[data-status="failed"]    { color: var(--danger); background: rgba(224,87,92,0.12); }
+.badge[data-status="processed"]  { color: var(--success); background: rgba(76,175,125,0.12); }
+.badge[data-status="pending"]    { color: var(--text-muted); }
+.badge[data-status="failed"]     { color: var(--danger); background: rgba(224,87,92,0.12); }
+.badge[data-status="queued"]     { color: var(--accent); background: rgba(109,140,255,0.12); }
+.badge[data-status="processing"] { color: var(--accent); background: rgba(109,140,255,0.12); }
+.badge[data-status="excluded"]   { color: var(--text-muted); opacity: 0.7; text-decoration: line-through; }
 
 /* Tooltip: title attribute styling is left to the browser default on
    purpose (zero JS, zero extra markup) - buttons that need one just get a

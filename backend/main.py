@@ -16,6 +16,9 @@ from dotenv import load_dotenv
 # Load environment variables from .env file before importing config elements
 load_dotenv()
 
+from core.app_logging import setup_logging
+setup_logging()  # capture stdout/stderr to a rotating log file before anything else prints
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager

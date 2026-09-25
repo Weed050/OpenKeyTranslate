@@ -37,6 +37,7 @@ export const api = {
             request("/projects/import", { method: "POST", body: JSON.stringify({ path, projectName }) }),
         importChapters: (projectId, path) =>
             request(`/projects/${projectId}/import-chapters`, { method: "POST", body: JSON.stringify({ path }) }),
+        delete: (id) => request(`/projects/${id}`, { method: "DELETE" }),
     },
 
     settings: {
@@ -47,17 +48,24 @@ export const api = {
     },
 
     pages: {
-        listByProject: (projectId) => request(`/pages/by-project/${projectId}`),
+        listByProject: (projectId, includeExcluded = false) =>
+            request(`/pages/by-project/${projectId}${includeExcluded ? "?include_excluded=true" : ""}`),
         get: (pageId) => request(`/pages/${pageId}`),
         imageUrl: (pageId) => `${API_BASE}/pages/${pageId}/image`,
         process: (pageId) => request(`/pages/${pageId}/process`, { method: "POST" }),
+        processAsync: (pageId) => request(`/pages/${pageId}/process-async`, { method: "POST" }),
+        status: (pageId) => request(`/pages/${pageId}/status`),
         retranslate: (pageId) => request(`/pages/${pageId}/retranslate`, { method: "POST" }),
         deleteBubble: (pageId, bubbleId) =>
             request(`/pages/${pageId}/bubbles/${bubbleId}`, { method: "DELETE" }),
+        exclude: (pageId) => request(`/pages/${pageId}/exclude`, { method: "POST" }),
+        restore: (pageId) => request(`/pages/${pageId}/restore`, { method: "POST" }),
     },
 
     system: {
         openPath: (path) => request("/system/open-path", { method: "POST", body: JSON.stringify({ path }) }),
+        tailLog: (lines = 200, errorsOnly = false) =>
+            request(`/system/tail-log?lines=${lines}&errors_only=${errorsOnly}`),
     },
 
     corrections: {

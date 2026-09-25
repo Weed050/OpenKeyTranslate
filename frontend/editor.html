@@ -29,7 +29,7 @@
 
             <div class="sidebar-footer">
                 <div class="hidden" id="sidebarProjectLinks"></div>
-                <a class="sidebar-link" href="index.html">Dashboard</a>
+                <a class="sidebar-link" href="index.html">Projects</a>
                 <a class="sidebar-link" href="settings.html">Settings</a>
             </div>
         </nav>
@@ -79,11 +79,14 @@
             <div class="hidden" id="pagePicker" style="height:100%; overflow-y:auto; padding: var(--space-lg);">
                 <div class="content-narrow">
                     <h1>Pages</h1>
-                    <div class="hidden" id="pagePickerControls" style="display:flex; gap:8px; margin-bottom:16px;">
+                    <div class="hidden" id="pagePickerControls" style="display:flex; gap:8px; align-items:center; margin-bottom:16px;">
                         <input type="text" id="pageSearchInput" placeholder="Filter by filename..." style="max-width:280px;">
                         <button id="collapseAllBtn">Collapse all</button>
                         <button id="expandAllBtn">Expand all</button>
                         <button id="addChaptersBtn">Import new chapters...</button>
+                        <label style="display:flex; align-items:center; gap:4px; font-size:12px; color:var(--text-muted); margin-left:auto;">
+                            <input type="checkbox" id="showExcludedCheckbox"> Show excluded
+                        </label>
                     </div>
                     <div id="pagePickerBody"></div>
                 </div>

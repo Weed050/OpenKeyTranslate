@@ -13,6 +13,7 @@ import { renderSidebar } from "./nav.js";
 const params = new URLSearchParams(window.location.search);
 const pageId = params.get("page");
 const enterAt = params.get("enterAt"); // "first" | "last" | null - set when arriving via cross-page nav
+const resumeBubbleIndex = params.get("bubble"); // set by the dashboard's "Resume where I left off" link
 
 const state = {
     projectId: params.get("project"),
@@ -83,7 +84,7 @@ async function loadPage() {
     try {
         data = await api.pages.get(pageId);
     } catch (e) {
-        showProcessPrompt(e);
+        await showProcessPrompt(e);
         return;
     }
 
@@ -104,26 +105,77 @@ async function loadPage() {
     renderBubbleList();
     renderBubbleDetail();
     loadImage();
+    prefetchNextPage();
 
     if (state.bubbles.length && (enterAt === "first" || enterAt === "last")) {
         selectBubble(enterAt === "first" ? 0 : state.bubbles.length - 1, { scroll: false });
+    } else if (state.bubbles.length && resumeBubbleIndex !== null) {
+        const idx = Math.min(parseInt(resumeBubbleIndex, 10) || 0, state.bubbles.length - 1);
+        selectBubble(idx, { scroll: false });
     }
 }
 
-function showProcessPrompt(error) {
+function prefetchNextPage() {
+    if (!state.flatPageList.length) return;
+    const idx = state.flatPageList.findIndex((p) => String(p.page_id) === String(pageId));
+    if (idx === -1) return;
+    const next = state.flatPageList[idx + 1];
+    if (!next || next.status !== "pending") return;
+    api.pages.processAsync(next.page_id).catch(() => {}); // best-effort - editor works fine even if this fails
+}
+
+async function showProcessPrompt(error) {
     el.editorLayout.classList.add("hidden");
     el.pagePicker.classList.add("hidden");
     el.processPrompt.classList.remove("hidden");
     el.processBtn.disabled = false;
     el.processStatus.textContent = "";
 
-    const isNotProcessed = !error || /not.*processed/i.test(error.message || "");
-    document.getElementById("processPromptMsg").textContent = isNotProcessed
-        ? "This page hasn't been processed yet."
-        : `Couldn't load this page: ${error.message}`;
-
     const backLink = document.getElementById("backToPagesLink");
     if (backLink) backLink.href = state.projectId ? `editor.html?project=${state.projectId}` : "index.html";
+
+    const isNotProcessed = !error || /not.*processed/i.test(error.message || "");
+    const msgEl = document.getElementById("processPromptMsg");
+
+    if (!isNotProcessed) {
+        msgEl.textContent = `Couldn't load this page: ${error.message}`;
+        return;
+    }
+
+    try {
+        const { status } = await api.pages.status(pageId);
+        if (status === "queued" || status === "processing") {
+            msgEl.textContent = "This page is already processing in the background - it'll load automatically...";
+            el.processBtn.disabled = true;
+            pollUntilProcessed();
+            return;
+        }
+        if (status === "failed") {
+            msgEl.textContent = "Background processing failed for this page - try running it manually.";
+            return;
+        }
+    } catch { /* status endpoint failed - fall through to the normal prompt */ }
+
+    msgEl.textContent = "This page hasn't been processed yet.";
+}
+
+function pollUntilProcessed() {
+    clearTimeout(pollUntilProcessed._t);
+    pollUntilProcessed._t = setTimeout(async () => {
+        try {
+            const { status } = await api.pages.status(pageId);
+            if (status === "processed") {
+                await loadPage();
+            } else if (status === "failed") {
+                document.getElementById("processPromptMsg").textContent = "Background processing failed - try running it manually.";
+                el.processBtn.disabled = false;
+            } else {
+                pollUntilProcessed();
+            }
+        } catch {
+            pollUntilProcessed();
+        }
+    }, 2000);
 }
 
 function renderPageTools() {
@@ -131,6 +183,7 @@ function renderPageTools() {
         <button class="copy-btn" id="copyJsonPathBtn" title="Copy the translation JSON's file path">Copy path</button>
         <button class="copy-btn" id="openFolderBtn" title="Open this page's folder in the file explorer">Open folder</button>
         <button class="copy-btn" id="openJsonBtn" title="Reveal the translation JSON in the file explorer">Open JSON</button>
+        <button class="copy-btn danger" id="excludePageBtn" title="Remove this page from the list without deleting the file (for stray/junk scans)">Delete page</button>
     `;
     document.getElementById("copyJsonPathBtn").addEventListener("click", async (e) => {
         await navigator.clipboard.writeText(state.jsonPath || "");
@@ -140,6 +193,17 @@ function renderPageTools() {
     });
     document.getElementById("openFolderBtn").addEventListener("click", () => openOrAlert(state.pageFolder));
     document.getElementById("openJsonBtn").addEventListener("click", () => openOrAlert(state.jsonPath));
+    document.getElementById("excludePageBtn").addEventListener("click", excludeCurrentPage);
+}
+
+async function excludeCurrentPage() {
+    if (!confirm("Remove this page from the list? The image file stays on disk - toggle 'Show excluded' in the page list to undo.")) return;
+    try {
+        await api.pages.exclude(pageId);
+        window.location.href = `editor.html?project=${state.projectId}`;
+    } catch (e) {
+        alert(`Couldn't exclude page: ${e.message}`);
+    }
 }
 
 async function openOrAlert(path) {
@@ -160,9 +224,11 @@ async function showPagePicker() {
     el.pagePicker.classList.remove("hidden");
     el.pagePickerBody.innerHTML = `<p class="text-muted">Loading pages...</p>`;
 
+    const includeExcluded = document.getElementById("showExcludedCheckbox")?.checked || false;
+
     let pages;
     try {
-        pages = await api.pages.listByProject(state.projectId);
+        pages = await api.pages.listByProject(state.projectId, includeExcluded);
     } catch (e) {
         el.pagePickerBody.innerHTML = `<p class="text-muted">Couldn't load pages: ${e.message}</p>`;
         return;
@@ -191,16 +257,41 @@ async function showPagePicker() {
         card.style.margin = "8px 0 16px";
         chapterPages.sort((a, b) => a.order - b.order);
         chapterPages.forEach((p) => {
-            const row = document.createElement("a");
-            row.href = `editor.html?project=${state.projectId}&page=${p.page_id}`;
+            const isExcluded = p.status === "excluded";
+
+            const row = document.createElement("div");
             row.className = "row page-picker-row";
             row.dataset.filename = p.file_name.toLowerCase();
-            row.style.display = "flex";
-            row.style.textDecoration = "none";
-            row.innerHTML = `
+            row.style.opacity = isExcluded ? "0.55" : "1";
+
+            const link = document.createElement("a");
+            link.href = `editor.html?project=${state.projectId}&page=${p.page_id}`;
+            link.style.display = "flex";
+            link.style.flex = "1";
+            link.style.textDecoration = "none";
+            link.innerHTML = `
                 <span style="color: var(--text-primary);">${escapeHtml(p.file_name)}</span>
-                <span class="badge" data-status="${escapeHtml(p.status)}">${escapeHtml(p.status)}</span>
+                <span class="badge" data-status="${escapeHtml(p.status)}" style="margin-left:8px;">${escapeHtml(p.status)}</span>
             `;
+            row.appendChild(link);
+
+            if (isExcluded) {
+                const restoreBtn = document.createElement("button");
+                restoreBtn.className = "copy-btn";
+                restoreBtn.textContent = "Restore";
+                restoreBtn.title = "Bring this page back into the list";
+                restoreBtn.addEventListener("click", async (e) => {
+                    e.preventDefault();
+                    try {
+                        await api.pages.restore(p.page_id);
+                        await showPagePicker();
+                    } catch (err) {
+                        alert(`Restore failed: ${err.message}`);
+                    }
+                });
+                row.appendChild(restoreBtn);
+            }
+
             card.appendChild(row);
         });
         details.appendChild(card);
@@ -210,6 +301,7 @@ async function showPagePicker() {
     document.getElementById("pageSearchInput").oninput = (e) => filterPagePicker(e.target.value.toLowerCase());
     document.getElementById("collapseAllBtn").onclick = () => togglePagePickerChapters(false);
     document.getElementById("expandAllBtn").onclick = () => togglePagePickerChapters(true);
+    document.getElementById("showExcludedCheckbox").onchange = () => showPagePicker();
 
     document.getElementById("addChaptersBtn").onclick = async () => {
         const data = await api.projects.selectFolder();
@@ -337,6 +429,19 @@ async function loadChapterNav() {
 
 function zoomStorageKey() {
     return `okt-zoom-project-${state.projectId}`;
+}
+
+function lastEditStorageKey(projectId) {
+    return `okt-lastedit-project-${projectId}`;
+}
+
+function recordLastEdit() {
+    if (!state.projectId || state.selectedIndex === null) return;
+    try {
+        localStorage.setItem(lastEditStorageKey(state.projectId), JSON.stringify({
+            pageId, bubbleIndex: state.selectedIndex,
+        }));
+    } catch { /* localStorage unavailable - not critical */ }
 }
 
 function loadImage() {
@@ -583,6 +688,7 @@ async function saveCurrentBubble() {
         bubble.translation = newValue;
         state.savedThisSession.add(bubble.bubble_id);
         renderBubbleList();
+        recordLastEdit();
         const memoryNote = result.correction_id ? "" : " (not added to memory: unchanged/too short)";
         showToast("Saved" + memoryNote);
         flashInlineStatus("Saved \u2713");

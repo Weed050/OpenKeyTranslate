@@ -16,6 +16,10 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 ROOT_DIR = os.path.dirname(BASE_DIR)
 SETTINGS_FILE = os.path.join(os.path.dirname(ROOT_DIR), "settings.json")
 
+# Bump manually on release. Stamped into every log file header (see
+# core/app_logging.py) so a bug report's log always says which version produced it.
+APP_VERSION = "0.1.0"
+
 
 def get_default_app_root():
     """
