@@ -158,6 +158,7 @@ class TranslationLog(Base):
 
     matched_correction_id = Column(Integer, ForeignKey("corrections.id"), nullable=True)
     similarity_score = Column(Float, nullable=True)
+    threshold_used = Column(Float, nullable=True)  # MEMORY_SIMILARITY_THRESHOLD at the time of this match
 
     model_used = Column(String)
     key_label = Column(String, nullable=True)  # which key from the provider's pool served this call

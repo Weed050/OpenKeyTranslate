@@ -135,10 +135,24 @@ def save_correction(
     final_clean = final_translation.strip()
     ai_clean = (ai_translation or "").strip()
 
-    if final_clean == ai_clean:
+    if final_clean.lower() == ai_clean.lower():
         return None
 
     if len(final_clean.split()) < MEMORY_MIN_WORDS:
+        return None
+
+    # Duplicate gate: skip if the most recent stored correction for this
+    # exact source_text already has this exact final_translation (case-
+    # insensitive - the provider sometimes returns lowercase, sometimes
+    # UPPERCASE, for otherwise identical text). Repeated "Next" clicks /
+    # accidental double-submits shouldn't clone rows.
+    last = (
+        db.query(Correction)
+        .filter(Correction.project_id == project_id, Correction.source_text == source_text)
+        .order_by(Correction.created_at.desc())
+        .first()
+    )
+    if last is not None and last.final_translation.strip().lower() == final_clean.lower():
         return None
 
     correction = Correction(

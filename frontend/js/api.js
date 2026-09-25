@@ -35,12 +35,15 @@ export const api = {
         selectFolder: () => request("/projects/select-folder"),
         import: (path, projectName) =>
             request("/projects/import", { method: "POST", body: JSON.stringify({ path, projectName }) }),
+        importChapters: (projectId, path) =>
+            request(`/projects/${projectId}/import-chapters`, { method: "POST", body: JSON.stringify({ path }) }),
     },
 
     settings: {
         get: () => request("/settings/"),
         update: (payload) => request("/settings/", { method: "POST", body: JSON.stringify(payload) }),
         resetToDefault: () => request("/settings/reset-to-default", { method: "POST" }),
+        updateMemory: (payload) => request("/settings/memory", { method: "POST", body: JSON.stringify(payload) }),
     },
 
     pages: {
@@ -65,6 +68,8 @@ export const api = {
             }),
         listByProject: (projectId) => request(`/corrections/by-project/${projectId}`),
         delete: (correctionId) => request(`/corrections/${correctionId}`, { method: "DELETE" }),
+        export: (projectId) => request(`/corrections/export/${projectId}`),
+        import: (projectId, payload) => request(`/corrections/import/${projectId}`, { method: "POST", body: JSON.stringify(payload) }),
     },
 
     logs: {

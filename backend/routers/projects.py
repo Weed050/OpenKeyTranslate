@@ -155,3 +155,122 @@ def natural_sort_key(s):
         Ensures that '2_image.jpg' comes before '10_image.jpg' rather than after it.
         """
     return [int(text) if text.isdigit() else text.lower() for text in re.split(r'(\d+)', s)]
+
+
+
+def reconcile_projects_from_disk(db: Session):
+    """
+    Startup safety net: project folders on disk with no matching DB row
+    (DB deleted/replaced but files survived) get re-registered so they
+    reappear in the sidebar. Doesn't touch projects already in the DB.
+    """
+    if not os.path.isdir(WORKSPACE_DIR):
+        return
+
+    known_paths = {p.workspace_path for p in db.query(Project).all()}
+
+    for entry in sorted(os.listdir(WORKSPACE_DIR)):
+        project_path = os.path.join(WORKSPACE_DIR, entry)
+        raw_dir = os.path.join(project_path, "raw")
+        if not os.path.isdir(raw_dir) or project_path in known_paths:
+            continue
+
+        print(f"[RECONCILE] Re-registering orphaned project folder: {entry}")
+        project = Project(name=entry, workspace_path=project_path)
+        db.add(project)
+        db.flush()
+
+        img_extensions = ('.jpg', '.jpeg', '.png', '.webp', '.jfif')
+        for chapter_label in sorted(os.listdir(raw_dir)):
+            chapter_raw_dir = os.path.join(raw_dir, chapter_label)
+            if not os.path.isdir(chapter_raw_dir):
+                continue
+
+            chapter = Chapter(
+                project_id=project.id, number=chapter_label, title=chapter_label,
+                raw_path=chapter_raw_dir,
+                processed_path=os.path.join(project_path, "processed", chapter_label),
+            )
+            db.add(chapter)
+            db.flush()
+
+            pages = sorted(f for f in os.listdir(chapter_raw_dir) if f.lower().endswith(img_extensions))
+            for indx, page_file in enumerate(pages):
+                file_base = os.path.splitext(page_file)[0]
+                json_path = os.path.join(project_path, "processed", chapter_label, f"{file_base}_ocr.json")
+                status = "processed" if os.path.exists(json_path) else "pending"
+                db.add(Page(chapter_id=chapter.id, file_name=page_file, order=indx + 1, status=status))
+
+    db.commit()
+
+
+@router.post("/{project_id}/import-chapters")
+async def import_additional_chapters(project_id: int, data: dict, db: Session = Depends(get_db)):
+    """Add new chapters to an existing project from a folder on disk. Doesn't touch existing chapters."""
+    project = db.query(Project).filter(Project.id == project_id).first()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    actual_source_path = data.get("path")
+    if not actual_source_path or not os.path.isdir(actual_source_path):
+        raise HTTPException(status_code=400, detail="Missing or invalid source path")
+
+    raw_dir = os.path.join(project.workspace_path, "raw")
+    processed_dir = os.path.join(project.workspace_path, "processed")
+    existing_numbers = {c.number for c in project.chapters}
+    existing_indices = [int(m.group(1)) for c in existing_numbers if (m := re.match(r"Chapter_(\d+)", c))]
+    chapter_counter = max(existing_indices, default=-1) + 1
+
+    img_extensions = ('.jpg', '.jpeg', '.png', '.webp', '.jfif')
+    added_chapters = added_pages = 0
+
+    for root_dir, dirs, files in os.walk(actual_source_path):
+
+        dirs.sort(key=natural_sort_key)  # chapter_2 before chapter_10, not the other way
+
+        candidate_files = [f for f in files if f.lower().endswith(img_extensions)]
+
+        # Filenames can be random scraper hashes (no meaningful alphabetical
+        # order) - sort by mtime (download/write order), natural_sort_key as a
+        # tiebreaker for scans with sensible names (page_001.jpg etc.), where
+        # mtime can differ due to e.g. copying.
+        pages = sorted(
+            candidate_files,
+            key=lambda f: (os.path.getmtime(os.path.join(root_dir, f)), natural_sort_key(f))
+        )
+        if not pages:
+            continue
+
+        chapter_label = f"Chapter_{chapter_counter}"
+        chapter_raw_dir = os.path.join(raw_dir, chapter_label)
+        chapter_processed_dir = os.path.join(processed_dir, chapter_label)
+        os.makedirs(chapter_raw_dir, exist_ok=True)
+        os.makedirs(chapter_processed_dir, exist_ok=True)
+
+        new_chapter = Chapter(
+            project_id=project.id,
+            number=chapter_label,
+            title=f"Chapter {chapter_counter}",
+            raw_path=chapter_raw_dir,
+            processed_path=chapter_processed_dir,
+        )
+        db.add(new_chapter)
+        db.flush()  # need new_chapter.id before creating pages
+
+        for indx, page_file in enumerate(pages):
+            ext = os.path.splitext(page_file)[1].lower()
+            standard_filename = f"page_{indx + 1:03d}{ext}"
+
+            src_file_path = os.path.join(root_dir, page_file)
+            dest_file_path = os.path.join(chapter_raw_dir, standard_filename)
+            shutil.copy2(src_file_path, dest_file_path)
+
+            new_page = Page(chapter_id=new_chapter.id, file_name=standard_filename, order=indx + 1)
+            db.add(new_page)
+            added_pages += 1
+
+        chapter_counter += 1
+        added_chapters += 1
+
+    db.commit()
+    return {"message": f"Added {added_chapters} chapter(s), {added_pages} page(s).", "chapters_added": added_chapters}

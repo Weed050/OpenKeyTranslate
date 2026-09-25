@@ -83,7 +83,7 @@ async function loadPage() {
     try {
         data = await api.pages.get(pageId);
     } catch (e) {
-        showProcessPrompt();
+        showProcessPrompt(e);
         return;
     }
 
@@ -110,12 +110,20 @@ async function loadPage() {
     }
 }
 
-function showProcessPrompt() {
+function showProcessPrompt(error) {
     el.editorLayout.classList.add("hidden");
     el.pagePicker.classList.add("hidden");
     el.processPrompt.classList.remove("hidden");
     el.processBtn.disabled = false;
     el.processStatus.textContent = "";
+
+    const isNotProcessed = !error || /not.*processed/i.test(error.message || "");
+    document.getElementById("processPromptMsg").textContent = isNotProcessed
+        ? "This page hasn't been processed yet."
+        : `Couldn't load this page: ${error.message}`;
+
+    const backLink = document.getElementById("backToPagesLink");
+    if (backLink) backLink.href = state.projectId ? `editor.html?project=${state.projectId}` : "index.html";
 }
 
 function renderPageTools() {
@@ -191,7 +199,7 @@ async function showPagePicker() {
             row.style.textDecoration = "none";
             row.innerHTML = `
                 <span style="color: var(--text-primary);">${escapeHtml(p.file_name)}</span>
-                <span class="badge">${escapeHtml(p.status)}</span>
+                <span class="badge" data-status="${escapeHtml(p.status)}">${escapeHtml(p.status)}</span>
             `;
             card.appendChild(row);
         });
@@ -202,6 +210,18 @@ async function showPagePicker() {
     document.getElementById("pageSearchInput").oninput = (e) => filterPagePicker(e.target.value.toLowerCase());
     document.getElementById("collapseAllBtn").onclick = () => togglePagePickerChapters(false);
     document.getElementById("expandAllBtn").onclick = () => togglePagePickerChapters(true);
+
+    document.getElementById("addChaptersBtn").onclick = async () => {
+        const data = await api.projects.selectFolder();
+        if (!data.path) return;
+        try {
+            const result = await api.projects.importChapters(state.projectId, data.path);
+            alert(result.message);
+            await showPagePicker();
+        } catch (e) {
+            alert(`Import failed: ${e.message}`);
+        }
+    };
 }
 
 function filterPagePicker(query) {
@@ -304,7 +324,7 @@ async function loadChapterNav() {
             const row = document.createElement("a");
             row.href = `editor.html?project=${state.projectId}&page=${p.page_id}`;
             row.className = "page-nav-row" + (String(p.page_id) === String(pageId) ? " selected" : "");
-            row.innerHTML = `${escapeHtml(p.file_name)} <span class="badge">${escapeHtml(p.status)}</span>`;
+            row.innerHTML = `${escapeHtml(p.file_name)} <span class="badge" data-status="${escapeHtml(p.status)}">${escapeHtml(p.status)}</span>`;
             el.chapterNavBody.appendChild(row);
         });
     }
@@ -365,7 +385,7 @@ function fitToWidth() {
 }
 
 function setZoom(factor, { persist = false } = {}) {
-    state.zoomFactor = Math.min(5, Math.max(0.3, factor));
+    state.zoomFactor = Math.min(20, Math.max(0.3, factor));
     applyZoom();
     if (persist) localStorage.setItem(zoomStorageKey(), String(state.zoomFactor));
 }
@@ -442,10 +462,14 @@ function escapeHtml(text) {
 
 /* ------------------------------ bubble detail ---------------------------- */
 
-function selectBubble(index, { scroll = true } = {}) {
+async function selectBubble(index, { scroll = true, save = true } = {}) {
+    if (save && state.selectedIndex !== null && state.selectedIndex !== index) {
+        const ok = await saveCurrentBubble();
+        if (!ok) return; // save failed or in-flight — don't jump away
+    }
     state.selectedIndex = index;
     renderBubbleList();
-    applyZoom(); // cheap way to refresh outline highlighting at the current scale
+    applyZoom();
     renderBubbleDetail();
     if (scroll) scrollToBubble(index);
 }
@@ -526,8 +550,18 @@ function renderBubbleDetail() {
     });
 }
 
+let saveInFlight = false;
+
+function setNavButtonsDisabled(disabled) {
+    ["saveBtn", "prevBtn", "nextBtn"].forEach((id) => {
+        const btn = document.getElementById(id);
+        if (btn) btn.disabled = disabled;
+    });
+}
+
 async function saveCurrentBubble() {
     if (state.selectedIndex === null) return true;
+    if (saveInFlight) return false; // block concurrent save = block duplicate POSTs
 
     const bubble = state.bubbles[state.selectedIndex];
     const textarea = document.getElementById("translationInput");
@@ -538,6 +572,8 @@ async function saveCurrentBubble() {
         return true;
     }
 
+    saveInFlight = true;
+    setNavButtonsDisabled(true);
     try {
         const result = await api.corrections.save(pageId, bubble.bubble_id, {
             source_text: bubble.text,
@@ -556,6 +592,9 @@ async function saveCurrentBubble() {
         showToast(`Save failed: ${e.message}`);
         flashInlineStatus("Save failed", true);
         return false;
+    } finally {
+        saveInFlight = false;
+        setNavButtonsDisabled(false);
     }
 }
 
@@ -589,15 +628,15 @@ async function deleteBubble() {
 
 async function navigateBubble(direction) {
     if (state.selectedIndex === null || !state.bubbles.length) return;
-    const ok = await saveCurrentBubble();
-    if (!ok) return; // don't move away from a bubble that failed to save
 
     const next = state.selectedIndex + direction;
     if (next < 0 || next >= state.bubbles.length) {
+        const ok = await saveCurrentBubble();
+        if (!ok) return;
         await navigateToAdjacentPage(direction);
         return;
     }
-    selectBubble(next);
+    await selectBubble(next); // saves current bubble internally
 }
 
 async function navigateToAdjacentPage(direction) {
@@ -606,7 +645,10 @@ async function navigateToAdjacentPage(direction) {
     if (idx === -1) return;
 
     const targetIdx = idx + direction;
-    if (targetIdx < 0 || targetIdx >= state.flatPageList.length) return; // start/end of the whole project - just stop
+    if (targetIdx < 0 || targetIdx >= state.flatPageList.length) {
+        window.location.href = `editor.html?project=${state.projectId}`;
+        return;
+    }
 
     const target = state.flatPageList[targetIdx];
     const enter = direction > 0 ? "first" : "last";

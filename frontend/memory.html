@@ -51,6 +51,19 @@
             </div>
             <p class="text-muted">Every stored correction is a candidate hint for future translations in this project. Delete an entry to stop it from being suggested.</p>
 
+            <div style="display:flex; gap:8px; margin-bottom:12px; flex-wrap:wrap;">
+                <input type="text" id="memorySearchInput" placeholder="Search source or translation..." style="max-width:280px;">
+                <select id="memorySortSelect">
+                    <option value="newest">Newest first</option>
+                    <option value="oldest">Oldest first</option>
+                    <option value="most_used">Most used as hint</option>
+                    <option value="least_used">Least used as hint</option>
+                </select>
+                <button id="exportMemoryBtn">Export JSON</button>
+                <input type="file" id="importMemoryFile" accept="application/json" class="hidden">
+                <button id="importMemoryBtn">Import JSON</button>
+            </div>
+
             <div id="noProject" class="hidden text-muted">Open a project from the sidebar first.</div>
             <div id="correctionList"></div>
         </main>

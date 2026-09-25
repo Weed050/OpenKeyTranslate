@@ -19,6 +19,7 @@ async function loadSettings() {
     try {
         appSettings = await api.settings.get();
         document.getElementById("currentWorkspacePath").textContent = appSettings.app_root_dir;
+        document.getElementById("memoryMinWordsInput").value = appSettings.memory_min_words ?? 3;
     } catch (e) {
         document.getElementById("currentWorkspacePath").textContent = `Error: ${e.message}`;
     }
@@ -67,3 +68,17 @@ document.getElementById("resetWorkspaceBtn").addEventListener("click", async () 
 function flashStatus(message) {
     document.getElementById("settingsStatus").textContent = message;
 }
+
+document.getElementById("saveMemorySettingsBtn").addEventListener("click", async () => {
+    const value = parseInt(document.getElementById("memoryMinWordsInput").value, 10);
+    if (!Number.isFinite(value) || value < 0) {
+        document.getElementById("memorySettingsStatus").textContent = "Enter a number >= 0.";
+        return;
+    }
+    try {
+        const result = await api.settings.updateMemory({ memory_min_words: value });
+        document.getElementById("memorySettingsStatus").textContent = result.message;
+    } catch (e) {
+        document.getElementById("memorySettingsStatus").textContent = `Failed: ${e.message}`;
+    }
+});

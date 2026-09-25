@@ -20,25 +20,52 @@ window.addEventListener("DOMContentLoaded", () => {
     loadCorrections();
 });
 
+let allCorrections = [];
+
 async function loadCorrections() {
     const listEl = document.getElementById("correctionList");
-    let corrections;
     try {
-        corrections = await api.corrections.listByProject(projectId);
+        allCorrections = await api.corrections.listByProject(projectId);
     } catch (e) {
         listEl.innerHTML = `<p class="text-muted">Couldn't load corrections: ${e.message}</p>`;
         return;
     }
 
-    document.getElementById("countBadge").textContent = corrections.length;
+    document.getElementById("countBadge").textContent = allCorrections.length;
 
-    if (!corrections.length) {
+    if (!allCorrections.length) {
         listEl.innerHTML = `<p class="text-muted">No corrections stored yet for this project.</p>`;
         return;
     }
 
+    renderList();
+}
+
+function renderList() {
+    const listEl = document.getElementById("correctionList");
+    const query = (document.getElementById("memorySearchInput").value || "").toLowerCase();
+    const sortMode = document.getElementById("memorySortSelect").value;
+
+    let items = allCorrections.filter((c) =>
+        !query ||
+        c.source_text.toLowerCase().includes(query) ||
+        c.final_translation.toLowerCase().includes(query)
+    );
+
+    const sorters = {
+        newest: (a, b) => new Date(b.created_at) - new Date(a.created_at),
+        oldest: (a, b) => new Date(a.created_at) - new Date(b.created_at),
+        most_used: (a, b) => (b.reuse_count || 0) - (a.reuse_count || 0),
+        least_used: (a, b) => (a.reuse_count || 0) - (b.reuse_count || 0),
+    };
+    items = [...items].sort(sorters[sortMode] || sorters.newest);
+
     listEl.innerHTML = "";
-    corrections.forEach((c) => listEl.appendChild(correctionRow(c)));
+    if (!items.length) {
+        listEl.innerHTML = `<p class="text-muted">No corrections match "${escapeHtml(query)}".</p>`;
+        return;
+    }
+    items.forEach((c) => listEl.appendChild(correctionRow(c)));
 }
 
 function correctionRow(c) {
@@ -78,6 +105,7 @@ async function deleteCorrection(id, rowEl) {
     try {
         await api.corrections.delete(id);
         rowEl.remove();
+        allCorrections = allCorrections.filter((c) => c.id !== id);
         const badge = document.getElementById("countBadge");
         badge.textContent = Math.max(0, parseInt(badge.textContent || "0", 10) - 1);
     } catch (e) {
@@ -95,3 +123,35 @@ function escapeHtml(text) {
     div.textContent = text;
     return div.innerHTML;
 }
+
+
+document.getElementById("memorySearchInput")?.addEventListener("input", renderList);
+document.getElementById("memorySortSelect")?.addEventListener("change", renderList);
+
+document.getElementById("exportMemoryBtn")?.addEventListener("click", async () => {
+    const data = await api.corrections.export(projectId);
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `corrections_${data.project_name}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+});
+
+document.getElementById("importMemoryBtn")?.addEventListener("click", () => {
+    document.getElementById("importMemoryFile").click();
+});
+document.getElementById("importMemoryFile")?.addEventListener("change", async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    try {
+        const payload = JSON.parse(await file.text());
+        const result = await api.corrections.import(projectId, payload);
+        alert(result.message);
+        loadCorrections();
+    } catch (err) {
+        alert(`Import failed: ${err.message}`);
+    }
+    e.target.value = "";
+});
