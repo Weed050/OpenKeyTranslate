@@ -20,8 +20,9 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 from routers import projects, corrections, pages, logs, settings, system
+from routers.projects import reconcile_projects_from_disk
 import uvicorn
-from core.database import init_db
+from core.database import init_db, SessionLocal
 
 
 @asynccontextmanager
@@ -35,6 +36,13 @@ async def lifespan(app: FastAPI):
     print("[LIFECYCLE] Initializing database...")
     init_db()
     print("[LIFECYCLE] Database is ready and operational.")
+
+    db = SessionLocal()
+    try:
+        reconcile_projects_from_disk(db)
+    finally:
+        db.close()
+
     yield
 
     print("[LIFECYCLE] Closing active application sessions and cleaning up...")

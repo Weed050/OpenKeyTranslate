@@ -74,6 +74,7 @@
 .main-content.no-scroll {
   overflow: hidden;
   padding: 0;
+  display: flex;
 }
 
 .page-header {

@@ -38,7 +38,7 @@ Key Architectural Features:
 import uuid
 from sqlalchemy.orm import Session
 
-from core.config import MEMORY_AB_TEST_LOGGING, ACTIVE_MODEL_NAME
+from core.config import MEMORY_AB_TEST_LOGGING, ACTIVE_MODEL_NAME, MEMORY_SIMILARITY_THRESHOLD
 from models.models import TranslationLog
 from services.memory_service import find_best_match
 from services.providers import get_provider
@@ -144,6 +144,7 @@ def translate_bubbles(
                 page_id=page_id, bubble_id=bubble_id, variant="memory_injected",
                 source_text=b["text"], output_text=translation,
                 matched_correction_id=correction.id, similarity_score=score,
+                threshold_used=MEMORY_SIMILARITY_THRESHOLD,
                 model_used=ACTIVE_MODEL_NAME, key_label=shown_key_label, run_id=run_id,
             ))
 
@@ -152,6 +153,7 @@ def translate_bubbles(
                     page_id=page_id, bubble_id=bubble_id, variant="zero_shot",
                     source_text=b["text"], output_text=zero_shot_translations[bubble_id],
                     matched_correction_id=correction.id, similarity_score=score,
+                    threshold_used=MEMORY_SIMILARITY_THRESHOLD,
                     model_used=ACTIVE_MODEL_NAME, key_label=zero_shot_key_label, run_id=run_id,
                 ))
         else:

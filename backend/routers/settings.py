@@ -110,3 +110,18 @@ async def reset_to_default():
     )
 
     return await update_settings(reset_payload)
+
+@router.post("/memory")
+async def update_memory_settings(payload: dict):
+    """Update correction-memory tuning (min word gate, similarity threshold) without touching the rest of settings.json."""
+    current_settings = load_settings()
+
+    if "memory_min_words" in payload:
+        current_settings["memory_min_words"] = max(0, int(payload["memory_min_words"]))
+    if "memory_similarity_threshold" in payload:
+        current_settings["memory_similarity_threshold"] = float(payload["memory_similarity_threshold"])
+
+    with open(SETTINGS_FILE, "w", encoding="utf-8") as file:
+        json.dump(current_settings, file, indent=4, ensure_ascii=False)
+
+    return {"message": "Memory settings saved. Restart the application to apply changes.", "settings": current_settings}

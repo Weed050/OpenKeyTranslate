@@ -70,9 +70,10 @@
             </div>
 
             <div class="image-state" id="processPrompt" style="margin:auto; max-width:420px;">
-                <p>This page hasn't been processed yet.</p>
+                <p id="processPromptMsg">This page hasn't been processed yet.</p>
                 <button id="processBtn" class="primary">Run OCR + translation</button>
                 <p class="text-muted" id="processStatus"></p>
+                <p style="margin-top:12px;"><a id="backToPagesLink" href="#">&larr; Back to page list</a></p>
             </div>
 
             <div class="hidden" id="pagePicker" style="height:100%; overflow-y:auto; padding: var(--space-lg);">
@@ -82,6 +83,7 @@
                         <input type="text" id="pageSearchInput" placeholder="Filter by filename..." style="max-width:280px;">
                         <button id="collapseAllBtn">Collapse all</button>
                         <button id="expandAllBtn">Expand all</button>
+                        <button id="addChaptersBtn">Import new chapters...</button>
                     </div>
                     <div id="pagePickerBody"></div>
                 </div>

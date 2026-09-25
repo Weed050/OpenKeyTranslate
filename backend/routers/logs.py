@@ -11,8 +11,11 @@ fed back into translation (see the module docstring in
 services/translation_service.py). Nothing here ever writes.
 """
 
+from datetime import datetime, timedelta, timezone
+
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
+from sqlalchemy import func
 
 from core.database import get_db
 from models.models import Project, Page, Chapter, TranslationLog
@@ -53,9 +56,34 @@ async def list_translation_logs(project_id: int, db: Session = Depends(get_db)):
             "output_text": log.output_text,
             "matched_correction_id": log.matched_correction_id,
             "similarity_score": log.similarity_score,
+            "threshold_used": log.threshold_used,
             "model_used": log.model_used,
             "key_label": log.key_label,
             "created_at": log.created_at.isoformat() if log.created_at else None,
         }
         for log in logs
+    ]
+
+@router.get("/stats/by-project/{project_id}")
+async def translation_stats(project_id: int, db: Session = Depends(get_db)):
+    """Per-key request counts (total + last 24h) - spot which key in the pool is getting hammered."""
+    project = db.query(Project).filter(Project.id == project_id).first()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
+    base_query = (
+        db.query(TranslationLog.key_label, TranslationLog.model_used, func.count(TranslationLog.id))
+        .join(Page, TranslationLog.page_id == Page.id)
+        .join(Chapter, Page.chapter_id == Chapter.id)
+        .filter(Chapter.project_id == project_id)
+    )
+    total_counts = base_query.group_by(TranslationLog.key_label, TranslationLog.model_used).all()
+    recent_counts = base_query.filter(TranslationLog.created_at >= cutoff) \
+        .group_by(TranslationLog.key_label, TranslationLog.model_used).all()
+    recent_map = {(k, m): c for k, m, c in recent_counts}
+
+    return [
+        {"key_label": k or "unknown", "model_used": m or "unknown", "total_requests": c, "last_24h": recent_map.get((k, m), 0)}
+        for k, m, c in total_counts
     ]

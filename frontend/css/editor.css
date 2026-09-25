@@ -53,15 +53,16 @@
 
 .bubble-outline {
   position: absolute;
-  border: 1.5px solid rgba(255, 255, 255, 0.28);
+  border: 1.5px solid rgba(0, 0, 0, 0.55);
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.6);
   border-radius: 3px;
   cursor: pointer;
   transition: border-color 0.1s;
 }
-.bubble-outline:hover { border-color: var(--text-primary); }
+.bubble-outline:hover { border-color: var(--accent); }
 .bubble-outline.selected {
   border: 2px solid var(--accent);
-  box-shadow: none; /* accent border alone signals selection - no glow */
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.6);
 }
 
 .image-state {
@@ -207,7 +208,8 @@
 .save-toast {
   position: fixed;
   bottom: 18px;
-  right: 18px;
+  left: 50%;
+  transform: translateX(-50%);
   font-size: 12px;
   color: var(--success);
   background: var(--bg-panel-2);
@@ -219,3 +221,8 @@
   transition: opacity 0.25s;
 }
 .save-toast.show { opacity: 1; }
+
+#editorLayout,
+#pagePicker {
+  width: 100%;
+}
