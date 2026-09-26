@@ -238,19 +238,24 @@ async def import_additional_chapters(project_id: int, data: dict, db: Session = 
     existing_indices = [int(m.group(1)) for c in existing_numbers if (m := re.match(r"Chapter_(\d+)", c))]
     chapter_counter = max(existing_indices, default=-1) + 1
 
-    img_extensions = ('.jpg', '.jpeg', '.png', '.webp', '.jfif')
+    img_extensions = ('.jpg', '.jpeg', '.png', '.webp', '.jfif', '.bmp', '.tif', '.tiff')  # .gif/.avif - risky - OpenCV (cv2.imdecode) in pages.py/ocr_pipeline.py cannot handle these properly
     added_chapters = added_pages = 0
+    skipped_folders = []
 
     for root_dir, dirs, files in os.walk(actual_source_path):
-
-        dirs.sort(key=natural_sort_key)  # chapter_2 before chapter_10, not the other way
+        dirs.sort(key=natural_sort_key)
 
         candidate_files = [f for f in files if f.lower().endswith(img_extensions)]
 
-        # Filenames can be random scraper hashes (no meaningful alphabetical
-        # order) - sort by mtime (download/write order), natural_sort_key as a
-        # tiebreaker for scans with sensible names (page_001.jpg etc.), where
-        # mtime can differ due to e.g. copying.
+        if not candidate_files and files:
+            # Folder contains files, but none match the supported formats
+            unsupported = sorted({os.path.splitext(f)[1].lower() for f in files if os.path.splitext(f)[1]})
+            skipped_folders.append({
+                "folder": os.path.relpath(root_dir, actual_source_path) or ".",
+                "extensions_found": unsupported,
+            })
+            continue
+
         pages = sorted(
             candidate_files,
             key=lambda f: (os.path.getmtime(os.path.join(root_dir, f)), natural_sort_key(f))
@@ -272,16 +277,14 @@ async def import_additional_chapters(project_id: int, data: dict, db: Session = 
             processed_path=chapter_processed_dir,
         )
         db.add(new_chapter)
-        db.flush()  # need new_chapter.id before creating pages
+        db.flush()
 
         for indx, page_file in enumerate(pages):
             ext = os.path.splitext(page_file)[1].lower()
             standard_filename = f"page_{indx + 1:03d}{ext}"
-
             src_file_path = os.path.join(root_dir, page_file)
             dest_file_path = os.path.join(chapter_raw_dir, standard_filename)
             shutil.copy2(src_file_path, dest_file_path)
-
             new_page = Page(chapter_id=new_chapter.id, file_name=standard_filename, order=indx + 1)
             db.add(new_page)
             added_pages += 1
@@ -290,4 +293,21 @@ async def import_additional_chapters(project_id: int, data: dict, db: Session = 
         added_chapters += 1
 
     db.commit()
-    return {"message": f"Added {added_chapters} chapter(s), {added_pages} page(s).", "chapters_added": added_chapters}
+
+    message = f"Added {added_chapters} chapter(s), {added_pages} page(s)."
+    if skipped_folders:
+        exts = sorted({e for sf in skipped_folders for e in sf["extensions_found"]})
+        lines = [f"- {sf['folder']} ({', '.join(sf['extensions_found']) or 'no extension'})" for sf in
+                 skipped_folders]
+        message += (
+                f"\n\nSkipped {len(skipped_folders)} folder(s) — unsupported format: {', '.join(exts)}.\n"
+                + "\n".join(lines)
+                + f"\n\nSupported formats: {', '.join(img_extensions)}"
+        )
+
+    return {
+        "message": message,
+        "chapters_added": added_chapters,
+        "pages_added": added_pages,
+        "skipped_folders": skipped_folders,
+    }

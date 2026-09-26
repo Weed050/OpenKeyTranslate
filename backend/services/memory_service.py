@@ -32,7 +32,7 @@ Design notes:
 import numpy as np
 from sqlalchemy.orm import Session
 
-from models.models import Correction
+from models.models import Correction, TranslationLog
 from core.config import MEMORY_SIMILARITY_THRESHOLD, MEMORY_EMBEDDING_MODEL, MEMORY_MIN_WORDS
 
 _embedder = None
@@ -181,3 +181,17 @@ def delete_correction(db: Session, correction_id: int) -> bool:
     db.delete(correction)
     db.commit()
     return True
+
+def get_correction_usage(correction_id: int, db: Session) -> list[TranslationLog]:
+    """
+    Every TranslationLog row where this correction was the injected hint -
+    the "where did this hint actually get used" trail for the memory
+    browser's expandable usage panel.
+    """
+    return (
+        db.query(TranslationLog)
+        .filter(TranslationLog.matched_correction_id == correction_id,
+                TranslationLog.variant == "memory_injected")
+        .order_by(TranslationLog.created_at.desc())
+        .all()
+    )

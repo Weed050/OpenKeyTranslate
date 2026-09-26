@@ -22,6 +22,13 @@ approved for similar text elsewhere in this project. Stay stylistically
 consistent with the hint (word choice, register, character voice) where it
 fits, but never let it override the correct meaning of the current text.
 
+Some items may also include a "glossary" field: a list of
+{"source_term": "...", "target_term": "..."} pairs - specific English
+words/names that MUST be rendered using the given Polish term every time
+they appear, inflected as Polish grammar requires (case, number, gender)
+but never replaced with a different word. This is stricter than "hint" -
+glossary terms are not a style suggestion, they are fixed.
+
 Return ONLY a JSON object containing a "translations" key with an array of objects. No explanations:
 {
   "translations": [

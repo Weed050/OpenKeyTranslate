@@ -10,18 +10,42 @@
     <link rel="stylesheet" href="css/base.css">
     <link rel="stylesheet" href="css/layout.css">
     <style>
-        .correction-row { border: 1px solid var(--border); border-radius: var(--radius-sm); margin-bottom: 8px; overflow: hidden; }
-        .correction-row summary {
+        .tab-bar { display:flex; gap:4px; margin-bottom:16px; border-bottom:1px solid var(--border); }
+        .tab-btn {
+            background:transparent; border:none; border-bottom:2px solid transparent;
+            border-radius:0; padding:8px 14px; color:var(--text-muted); font-size:13px;
+        }
+        .tab-btn:hover { color:var(--text-primary); background:transparent; }
+        .tab-btn.active { color:var(--text-primary); border-bottom-color:var(--accent); }
+
+        .item-row { border: 1px solid var(--border); border-radius: var(--radius-sm); margin-bottom: 8px; overflow: hidden; }
+        .item-row summary {
             display: flex; align-items: center; gap: 12px; padding: 10px 12px;
             cursor: pointer; list-style: none; font-size: 13px;
         }
-        .correction-row summary::-webkit-details-marker { display: none; }
-        .correction-row summary::before { content: "\25B8  "; color: var(--text-muted); }
-        .correction-row[open] summary::before { content: "\25BE  "; }
-        .correction-summary-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-secondary); }
-        .correction-body { padding: 0 12px 12px; display: flex; flex-direction: column; gap: 8px; }
+        .item-row summary::-webkit-details-marker { display: none; }
+        .item-row summary::before { content: "\25B8  "; color: var(--text-muted); }
+        .item-row[open] summary::before { content: "\25BE  "; }
+        .item-summary-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-secondary); }
+        .item-body { padding: 0 12px 12px; display: flex; flex-direction: column; gap: 8px; }
         .field-label { font-size: 11px; color: var(--text-muted); }
         .field-value { font-size: 13px; color: var(--text-primary); background: var(--bg-panel-2); border-radius: var(--radius-sm); padding: 6px 10px; }
+
+        .usage-toggle { align-self:flex-start; }
+        .usage-panel { margin-top:4px; border-top:1px dashed var(--border); padding-top:8px; display:flex; flex-direction:column; gap:6px; }
+        .usage-row { font-size:12px; color:var(--text-secondary); border-bottom:1px solid var(--border); padding-bottom:6px; }
+        .usage-row:last-child { border-bottom:none; padding-bottom:0; }
+        .usage-empty { font-size:12px; color:var(--text-muted); }
+
+        .glossary-add-row { display:flex; gap:8px; margin-bottom:12px; flex-wrap:wrap; align-items:center; }
+        .glossary-add-row input { max-width:220px; }
+
+        .suggestion-row {
+            display:flex; align-items:center; gap:10px; padding:8px 12px;
+            border:1px solid var(--border); border-radius:var(--radius-sm); margin-bottom:6px; font-size:13px;
+        }
+        .suggestion-arrow { color:var(--text-muted); }
+        .suggestion-example { color:var(--text-muted); font-size:11px; flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
     </style>
 </head>
 <body>
@@ -46,29 +70,63 @@
 
         <main class="main-content">
             <div class="page-header">
-                <h1>Correction memory</h1>
-                <span class="badge" id="countBadge"></span>
+                <h1>Memory</h1>
             </div>
-            <p class="text-muted">Every stored correction is a candidate hint for future translations in this project. Delete an entry to stop it from being suggested.</p>
 
-            <div style="display:flex; gap:8px; margin-bottom:12px; flex-wrap:wrap;">
-                <input type="text" id="memorySearchInput" placeholder="Search source or translation..." style="max-width:280px;">
-                <select id="memorySortSelect">
-                    <option value="newest">Newest first</option>
-                    <option value="oldest">Oldest first</option>
-                    <option value="most_used">Most used as hint</option>
-                    <option value="least_used">Least used as hint</option>
-                </select>
-                <button id="exportMemoryBtn">Export JSON</button>
-                <input type="file" id="importMemoryFile" accept="application/json" class="hidden">
-                <button id="importMemoryBtn">Import JSON</button>
+            <div class="tab-bar">
+                <button class="tab-btn active" id="tabBtnCorrections" data-tab="corrections">Corrections</button>
+                <button class="tab-btn" id="tabBtnGlossary" data-tab="glossary">Glossary</button>
             </div>
 
             <div id="noProject" class="hidden text-muted">Open a project from the sidebar first.</div>
-            <div id="correctionList"></div>
+
+            <div id="correctionsTab">
+                <p class="text-muted">Every stored correction is a candidate hint for future translations in this project. Delete an entry to stop it from being suggested.</p>
+
+                <div style="display:flex; gap:8px; margin-bottom:12px; flex-wrap:wrap; align-items:center;">
+                    <input type="text" id="memorySearchInput" placeholder="Search source or translation..." style="max-width:280px;">
+                    <select id="memorySortSelect">
+                        <option value="newest">Newest first</option>
+                        <option value="oldest">Oldest first</option>
+                        <option value="most_used">Most used as hint</option>
+                        <option value="least_used">Least used as hint</option>
+                    </select>
+                    <span class="badge" id="correctionsCountBadge"></span>
+                    <button id="exportMemoryBtn">Export JSON</button>
+                    <input type="file" id="importMemoryFile" accept="application/json" class="hidden">
+                    <button id="importMemoryBtn">Import JSON</button>
+                </div>
+
+                <div id="correctionList"></div>
+            </div>
+
+            <div id="glossaryTab" class="hidden">
+                <p class="text-muted">Fixed term translations, always injected when the source word appears - independent of the memory similarity threshold above. Good for names and invented words the AI keeps rendering inconsistently.</p>
+
+                <div class="glossary-add-row">
+                    <input type="text" id="glossarySourceInput" placeholder="English term (e.g. Wyvern)">
+                    <span class="text-muted">&rarr;</span>
+                    <input type="text" id="glossaryTargetInput" placeholder="Polish term (e.g. Wywern)">
+                    <button id="glossaryAddBtn" class="primary">Add term</button>
+                    <span class="badge" id="glossaryCountBadge"></span>
+                    <button id="scanSuggestionsBtn">Scan corrections for suggestions</button>
+                    <button id="exportGlossaryBtn">Export JSON</button>
+                    <input type="file" id="importGlossaryFile" accept="application/json" class="hidden">
+                    <button id="importGlossaryBtn">Import JSON</button>
+                </div>
+                <p class="text-muted" id="glossaryStatus" style="font-size:12px;"></p>
+
+                <div id="suggestionsBlock" class="hidden" style="margin-bottom:16px;">
+                    <h3>Suggested terms</h3>
+                    <div id="suggestionsList"></div>
+                </div>
+
+                <div id="glossaryList"></div>
+            </div>
         </main>
     </div>
 
     <script type="module" src="js/memory.js"></script>
+    <script type="module" src="js/glossary.js"></script>
 </body>
 </html>

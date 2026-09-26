@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 from core.database import get_db
 from models.models import Page, Project, Correction
 from models.schemas import CorrectionSchema
-from services.memory_service import save_correction, delete_correction, encode_embedding, embed_text
+from services.memory_service import save_correction, delete_correction, encode_embedding, embed_text, get_correction_usage
 from services.page_export import page_paths, update_bubble_translation
 
 router = APIRouter(prefix="/corrections", tags=["Corrections"])
@@ -96,7 +96,22 @@ async def remove_correction(correction_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Correction not found")
     return {"message": "Correction deleted"}
 
+@router.get("/{correction_id}/usage")
+async def correction_usage(correction_id: int, db: Session = Depends(get_db)):
+    """Every logged translation where this correction was injected as the hint - for the memory browser's expandable usage panel."""
+    correction = db.query(Correction).filter(Correction.id == correction_id).first()
+    if not correction:
+        raise HTTPException(status_code=404, detail="Correction not found")
 
+    logs = get_correction_usage(correction_id, db)
+    return [
+        {
+            "source_text": log.source_text, "output_text": log.output_text,
+            "similarity_score": log.similarity_score, "page_id": log.page_id,
+            "created_at": log.created_at.isoformat() if log.created_at else None,
+        }
+        for log in logs
+    ]
 
 
 @router.get("/export/{project_id}")

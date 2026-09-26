@@ -128,3 +128,14 @@ function escapeHtml(text) {
     div.textContent = text;
     return div.innerHTML;
 }
+
+document.getElementById("exportLogsBtn")?.addEventListener("click", async () => {
+    const data = await api.logs.export(projectId);
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `logs_${data.project_name}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+});

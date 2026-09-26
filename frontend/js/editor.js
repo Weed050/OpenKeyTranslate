@@ -65,6 +65,8 @@ async function init() {
     document.getElementById("zoomResetBtn").addEventListener("click", () => setZoom(1, { persist: true }));
     document.getElementById("zoomFitWidthBtn").addEventListener("click", fitToWidth);
     document.getElementById("retranslateBtn").addEventListener("click", runRetranslate);
+    document.getElementById("prevPageBtn").addEventListener("click", () => goToAdjacentPage(-1));
+    document.getElementById("nextPageBtn").addEventListener("click", () => goToAdjacentPage(1));
     el.imageViewport.addEventListener("wheel", onWheelZoom, { passive: false });
     window.addEventListener("keydown", onGlobalKeydown);
 
@@ -759,6 +761,14 @@ async function navigateToAdjacentPage(direction) {
     const target = state.flatPageList[targetIdx];
     const enter = direction > 0 ? "first" : "last";
     window.location.href = `editor.html?project=${state.projectId}&page=${target.page_id}&enterAt=${enter}`;
+}
+
+async function goToAdjacentPage(direction) {
+    if (state.selectedIndex !== null) {
+        const ok = await saveCurrentBubble();
+        if (!ok) return;
+    }
+    await navigateToAdjacentPage(direction);
 }
 
 function onGlobalKeydown(event) {
