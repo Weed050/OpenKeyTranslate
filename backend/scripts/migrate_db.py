@@ -54,6 +54,7 @@ def main():
 
     # --- migrations list: add new ones here as the schema grows ---
     _add_column_if_missing(cur, "translation_logs", "threshold_used", "FLOAT")
+    _add_column_if_missing(cur, "translation_logs", "glossary_terms_used", "TEXT")
 
     conn.commit()
     conn.close()

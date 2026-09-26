@@ -78,9 +78,21 @@ export const api = {
         delete: (correctionId) => request(`/corrections/${correctionId}`, { method: "DELETE" }),
         export: (projectId) => request(`/corrections/export/${projectId}`),
         import: (projectId, payload) => request(`/corrections/import/${projectId}`, { method: "POST", body: JSON.stringify(payload) }),
+        usage: (correctionId) => request(`/corrections/${correctionId}/usage`),
+    },
+
+    glossary: {
+    listByProject: (projectId) => request(`/glossary/by-project/${projectId}`),
+    add: (projectId, payload) => request(`/glossary/by-project/${projectId}`, { method: "POST", body: JSON.stringify(payload) }),
+    delete: (termId) => request(`/glossary/${termId}`, { method: "DELETE" }),
+    suggestions: (projectId, minOccurrences = 2) => request(`/glossary/suggestions/${projectId}?min_occurrences=${minOccurrences}`),
+    usage: (termId) => request(`/glossary/${termId}/usage`),
+    export: (projectId) => request(`/glossary/export/${projectId}`),
+    import: (projectId, payload) => request(`/glossary/import/${projectId}`, { method: "POST", body: JSON.stringify(payload) }),
     },
 
     logs: {
-        listByProject: (projectId) => request(`/logs/by-project/${projectId}`),
+    listByProject: (projectId) => request(`/logs/by-project/${projectId}`),
+    export: (projectId) => request(`/logs/export/${projectId}`),
     },
 };

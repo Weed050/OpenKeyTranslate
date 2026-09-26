@@ -9,7 +9,7 @@ Text Blocks, and the correction-memory system (Corrections, TranslationLogs)
 used by the OCR/Translation pipeline.
 """
 
-from sqlalchemy import Column, Integer, String, Float, ForeignKey, DateTime, Text, LargeBinary
+from sqlalchemy import Column, Integer, String, Float, ForeignKey, DateTime, Text, LargeBinary, Boolean
 from sqlalchemy.orm import relationship, declarative_base
 from datetime import datetime, timezone
 
@@ -36,6 +36,7 @@ class Project(Base):
     # Relationships
     chapters = relationship("Chapter", back_populates="project", cascade="all, delete-orphan")
     corrections = relationship("Correction", back_populates="project", cascade="all, delete-orphan")
+    glossary_terms = relationship("GlossaryTerm", back_populates="project", cascade="all, delete-orphan")
 
 class Chapter(Base):
     """Represents a comic chapter (e.g., volume section or book chapter)."""
@@ -162,6 +163,8 @@ class TranslationLog(Base):
 
     model_used = Column(String)
     key_label = Column(String, nullable=True)  # which key from the provider's pool served this call
+    glossary_terms_used = Column(Text,
+                                 nullable=True)  # JSON list of {"source_term":..., "target_term":...} that fired for this bubble
     run_id = Column(String, nullable=False)  # groups the zero_shot / memory_injected pair from one translation pass
 
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
@@ -169,3 +172,28 @@ class TranslationLog(Base):
     # Relationships
     page = relationship("Page")
     matched_correction = relationship("Correction")
+
+class GlossaryTerm(Base):
+    """
+    Deterministic term-base (English -> Polish), separate from the fuzzy
+    embedding-based Correction memory. Correction suggests STYLE for a
+    similar whole segment; GlossaryTerm forces a FIXED translation for one
+    word/phrase, regardless of what sentence it shows up in.
+
+    Matched by word presence (word-boundary regex), not similarity -
+    catches recurring proper nouns/invented terms that will never clear a
+    whole-bubble similarity threshold.
+    """
+    __tablename__ = "glossary_terms"
+
+    id = Column(Integer, primary_key=True, index=True)
+    project_id = Column(Integer, ForeignKey("projects.id"), nullable=False)
+
+    source_term = Column(String, nullable=False)
+    target_term = Column(String, nullable=False)
+
+    auto_detected = Column(Boolean, default=False)
+    occurrences = Column(Integer, default=1)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+    project = relationship("Project", back_populates="glossary_terms")

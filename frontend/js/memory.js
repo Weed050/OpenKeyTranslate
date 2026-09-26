@@ -2,7 +2,8 @@
  * @file frontend/js/memory.js
  * @description Correction-memory browser (the "TM analytics" panel):
  * lists every stored Correction for a project with a trash button, so a
- * stale or wrong hint can be removed from future retrieval.
+ * stale or wrong hint can be removed from future retrieval. Also owns the
+ * Corrections/Glossary tab switcher shared with glossary.js.
  */
 
 import { api } from "./api.js";
@@ -13,6 +14,7 @@ const projectId = params.get("project");
 
 window.addEventListener("DOMContentLoaded", () => {
     renderSidebar(projectId);
+    setupTabs();
     if (!projectId) {
         document.getElementById("noProject").classList.remove("hidden");
         return;
@@ -20,7 +22,20 @@ window.addEventListener("DOMContentLoaded", () => {
     loadCorrections();
 });
 
+function setupTabs() {
+    const buttons = document.querySelectorAll(".tab-btn");
+    buttons.forEach((btn) => {
+        btn.addEventListener("click", () => {
+            buttons.forEach((b) => b.classList.remove("active"));
+            btn.classList.add("active");
+            document.getElementById("correctionsTab").classList.toggle("hidden", btn.dataset.tab !== "corrections");
+            document.getElementById("glossaryTab").classList.toggle("hidden", btn.dataset.tab !== "glossary");
+        });
+    });
+}
+
 let allCorrections = [];
+const usageCache = new Map();
 
 async function loadCorrections() {
     const listEl = document.getElementById("correctionList");
@@ -31,7 +46,7 @@ async function loadCorrections() {
         return;
     }
 
-    document.getElementById("countBadge").textContent = allCorrections.length;
+    document.getElementById("correctionsCountBadge").textContent = `${allCorrections.length} corrections`;
 
     if (!allCorrections.length) {
         listEl.innerHTML = `<p class="text-muted">No corrections stored yet for this project.</p>`;
@@ -70,13 +85,13 @@ function renderList() {
 
 function correctionRow(c) {
     const details = document.createElement("details");
-    details.className = "correction-row";
+    details.className = "item-row";
     details.innerHTML = `
         <summary>
-            <span class="correction-summary-text">${escapeHtml(c.final_translation)}</span>
+            <span class="item-summary-text">${escapeHtml(c.final_translation)}</span>
             <span class="badge" title="Times used as a hint">used ${c.reuse_count || 0}×</span>
         </summary>
-        <div class="correction-body">
+        <div class="item-body">
             <div>
                 <div class="field-label">Source (EN)</div>
                 <div class="field-value">${escapeHtml(c.source_text)}</div>
@@ -90,14 +105,61 @@ function correctionRow(c) {
                 <div class="field-value">${escapeHtml(c.final_translation)}</div>
             </div>
             <div class="text-muted" style="font-size:11px;">Saved ${formatDate(c.created_at)}</div>
-            <button class="danger" data-id="${c.id}">Delete from memory</button>
+            <div style="display:flex; gap:8px;">
+                <button class="copy-btn usage-toggle" data-usage="${c.id}">Show usage (${c.reuse_count || 0})</button>
+                <button class="danger" data-id="${c.id}">Delete from memory</button>
+            </div>
+            <div class="usage-panel hidden" id="usage-${c.id}"></div>
         </div>
     `;
     details.querySelector("button.danger").addEventListener("click", (event) => {
         event.preventDefault();
         deleteCorrection(c.id, details);
     });
+    details.querySelector("[data-usage]").addEventListener("click", (event) => {
+        event.preventDefault();
+        toggleUsage(c.id);
+    });
     return details;
+}
+
+async function toggleUsage(correctionId) {
+    const panel = document.getElementById(`usage-${correctionId}`);
+    if (!panel) return;
+
+    if (!panel.classList.contains("hidden")) {
+        panel.classList.add("hidden");
+        return;
+    }
+
+    panel.classList.remove("hidden");
+    if (usageCache.has(correctionId)) {
+        renderUsage(panel, usageCache.get(correctionId));
+        return;
+    }
+
+    panel.innerHTML = `<p class="usage-empty">Loading...</p>`;
+    try {
+        const usage = await api.corrections.usage(correctionId);
+        usageCache.set(correctionId, usage);
+        renderUsage(panel, usage);
+    } catch (e) {
+        panel.innerHTML = `<p class="usage-empty">Couldn't load usage: ${e.message}</p>`;
+    }
+}
+
+function renderUsage(panel, usage) {
+    if (!usage.length) {
+        panel.innerHTML = `<p class="usage-empty">Never used as a hint yet.</p>`;
+        return;
+    }
+    panel.innerHTML = usage.map((u) => `
+        <div class="usage-row">
+            <div><strong>${escapeHtml(u.source_text)}</strong> <span class="badge">${Math.round((u.similarity_score || 0) * 100)}%</span></div>
+            <div>&rarr; ${escapeHtml(u.output_text)}</div>
+            <div class="text-muted" style="font-size:10px;">Page #${u.page_id} · ${formatDate(u.created_at)}</div>
+        </div>
+    `).join("");
 }
 
 async function deleteCorrection(id, rowEl) {
@@ -106,8 +168,8 @@ async function deleteCorrection(id, rowEl) {
         await api.corrections.delete(id);
         rowEl.remove();
         allCorrections = allCorrections.filter((c) => c.id !== id);
-        const badge = document.getElementById("countBadge");
-        badge.textContent = Math.max(0, parseInt(badge.textContent || "0", 10) - 1);
+        usageCache.delete(id);
+        document.getElementById("correctionsCountBadge").textContent = `${allCorrections.length} corrections`;
     } catch (e) {
         alert(`Delete failed: ${e.message}`);
     }
@@ -123,7 +185,6 @@ function escapeHtml(text) {
     div.textContent = text;
     return div.innerHTML;
 }
-
 
 document.getElementById("memorySearchInput")?.addEventListener("input", renderList);
 document.getElementById("memorySortSelect")?.addEventListener("change", renderList);

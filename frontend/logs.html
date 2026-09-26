@@ -46,7 +46,10 @@
         <main class="main-content">
             <div class="page-header">
                 <h1>Translation logs</h1>
-                <span class="badge" id="countBadge"></span>
+                <div style="display:flex; align-items:center; gap:8px;">
+                    <button id="exportLogsBtn">Export JSON</button>
+                    <span class="badge" id="countBadge"></span>
+                </div>
             </div>
             <p class="text-muted">Every zero-shot vs. memory-injected pair the correction-memory experiment is evaluated from. Read-only - never fed back into translation.</p>
 

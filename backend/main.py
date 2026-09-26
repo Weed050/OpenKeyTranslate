@@ -22,7 +22,7 @@ setup_logging()  # capture stdout/stderr to a rotating log file before anything 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
-from routers import projects, corrections, pages, logs, settings, system
+from routers import projects, corrections, pages, logs, settings, system, glossary
 from routers.projects import reconcile_projects_from_disk
 import uvicorn
 from core.database import init_db, SessionLocal
@@ -73,6 +73,7 @@ app.include_router(pages.router)
 app.include_router(logs.router)
 app.include_router(settings.router)
 app.include_router(system.router)
+app.include_router(glossary.router)
 
 # NOTE: PaddleOCR is no longer instantiated here directly. Importing
 # routers.pages (above) already pulls in services/ocr_pipeline.py, whose

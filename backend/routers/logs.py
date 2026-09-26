@@ -87,3 +87,33 @@ async def translation_stats(project_id: int, db: Session = Depends(get_db)):
         {"key_label": k or "unknown", "model_used": m or "unknown", "total_requests": c, "last_24h": recent_map.get((k, m), 0)}
         for k, m, c in total_counts
     ]
+
+@router.get("/export/{project_id}")
+async def export_logs(project_id: int, db: Session = Depends(get_db)):
+    """Dump every TranslationLog row for a project as JSON, for offline analysis."""
+    project = db.query(Project).filter(Project.id == project_id).first()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    logs = (
+        db.query(TranslationLog)
+        .join(Page, TranslationLog.page_id == Page.id)
+        .join(Chapter, Page.chapter_id == Chapter.id)
+        .filter(Chapter.project_id == project_id)
+        .order_by(TranslationLog.created_at.asc())
+        .all()
+    )
+    return {
+        "project_name": project.name,
+        "exported_at": datetime.now(timezone.utc).isoformat(),
+        "logs": [
+            {
+                "run_id": log.run_id, "page_id": log.page_id, "bubble_id": log.bubble_id,
+                "variant": log.variant, "source_text": log.source_text, "output_text": log.output_text,
+                "matched_correction_id": log.matched_correction_id, "similarity_score": log.similarity_score,
+                "threshold_used": log.threshold_used, "model_used": log.model_used,
+                "key_label": log.key_label, "created_at": log.created_at.isoformat() if log.created_at else None,
+            }
+            for log in logs
+        ],
+    }
