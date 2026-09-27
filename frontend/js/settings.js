@@ -20,6 +20,7 @@ async function loadSettings() {
         appSettings = await api.settings.get();
         document.getElementById("currentWorkspacePath").textContent = appSettings.app_root_dir;
         document.getElementById("memoryMinWordsInput").value = appSettings.memory_min_words ?? 3;
+        document.getElementById("memorySimilarityInput").value = appSettings.memory_similarity_threshold ?? 0.80;
         document.getElementById("appVersionLabel").textContent = appSettings.app_version || "unknown";
     } catch (e) {
         document.getElementById("currentWorkspacePath").textContent = `Error: ${e.message}`;
@@ -59,9 +60,6 @@ document.getElementById("resetWorkspaceBtn").addEventListener("click", async () 
         flashStatus(result.message);
         loadSettings();
     } catch (e) {
-        // NOTE: /settings/reset-to-default is commented out in the backend
-        // (routers/settings.py) as of this build - this will fail until
-        // that endpoint is uncommented server-side.
         flashStatus(`Failed: ${e.message}`);
     }
 });
@@ -71,19 +69,23 @@ function flashStatus(message) {
 }
  
 document.getElementById("saveMemorySettingsBtn").addEventListener("click", async () => {
-    const value = parseInt(document.getElementById("memoryMinWordsInput").value, 10);
-    if (!Number.isFinite(value) || value < 0) {
+    const words = parseInt(document.getElementById("memoryMinWordsInput").value, 10);
+    const threshold = parseFloat(document.getElementById("memorySimilarityInput").value);
+    if (!Number.isFinite(words) || words < 0) {
         document.getElementById("memorySettingsStatus").textContent = "Enter a number >= 0.";
         return;
     }
+    if (!Number.isFinite(threshold) || threshold < 0 || threshold > 1) {
+        document.getElementById("memorySettingsStatus").textContent = "Threshold must be 0.0–1.0.";
+        return;
+    }
     try {
-        const result = await api.settings.updateMemory({ memory_min_words: value });
+        const result = await api.settings.updateMemory({ memory_min_words: words, memory_similarity_threshold: threshold });
         document.getElementById("memorySettingsStatus").textContent = result.message;
     } catch (e) {
         document.getElementById("memorySettingsStatus").textContent = `Failed: ${e.message}`;
     }
 });
- 
  
 document.getElementById("openLogFolderBtn").addEventListener("click", async () => {
     if (!appSettings.log_file_path) return;

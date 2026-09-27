@@ -108,6 +108,7 @@
   align-items: center;
   gap: 8px;
   flex-shrink: 0;
+  flex-wrap: wrap;
 }
 .row-actions button,
 .row-actions .badge {
