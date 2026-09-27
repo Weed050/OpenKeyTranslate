@@ -7,6 +7,7 @@
  */
 
 import { api } from "./api.js";
+import { diffHtml } from "./diff.js";
 
 const params = new URLSearchParams(window.location.search);
 const projectId = params.get("project");
@@ -96,13 +97,27 @@ function renderUsage(panel, usage) {
         panel.innerHTML = `<p class="usage-empty">Never fired in a translation yet.</p>`;
         return;
     }
-    panel.innerHTML = usage.map((u) => `
+    panel.innerHTML = usage.map((u) => {
+        const hasZeroShot = u.zero_shot_output != null;
+        const hasMemory = u.memory_injected_output != null;
+        const hasFinal = u.final_correction != null;
+        const base = hasMemory ? u.memory_injected_output : u.zero_shot_output;
+        return `
         <div class="usage-row">
-            <div><strong>${escapeHtml(u.source_text)}</strong> <span class="badge">${escapeHtml(u.variant)}</span></div>
-            <div>&rarr; ${escapeHtml(u.output_text)}</div>
+            <div class="usage-source"><strong>${escapeHtml(u.source_text)}</strong></div>
+
+            ${hasZeroShot ? `<div class="usage-variant"><span class="usage-variant-label">Zero-shot output:</span><span>${escapeHtml(u.zero_shot_output)}</span></div>` : ""}
+            ${hasMemory ? `<div class="usage-variant"><span class="usage-variant-label">Memory-injected output:</span><span>${escapeHtml(u.memory_injected_output)}</span></div>` : ""}
+
+            ${hasFinal ? `
+            <div class="usage-variant">
+                <span class="usage-variant-label">User's final edit:</span>
+                <span>${diffHtml(base, u.final_correction, escapeHtml)}</span>
+            </div>` : `<div class="usage-variant text-muted">Not corrected yet.</div>`}
+
             <div class="text-muted" style="font-size:10px;">Page #${u.page_id} · ${formatDate(u.created_at)}</div>
         </div>
-    `).join("");
+    `}).join("");
 }
 
 async function deleteTerm(id, rowEl) {

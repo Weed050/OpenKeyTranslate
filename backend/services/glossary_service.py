@@ -103,13 +103,14 @@ def suggest_glossary_terms(project_id: int, db: Session, min_occurrences: int = 
 
 def get_term_usage(term: "GlossaryTerm", project_id: int, db: Session) -> list[dict]:
     """
-    Every TranslationLog row whose glossary_terms_used included this term -
-    the "where did this term actually get used" trail. Matched by
-    source_term text (case-insensitive), not a stored foreign key, since
-    matching itself is text-based (see match_glossary) and a term can be
-    edited/re-added without losing its identity for this purpose.
+    Every logged bubble where this glossary term fired, with both the
+    zero-shot and memory-injected outputs (when both were logged for that
+    bubble) and whatever the user eventually saved for that exact source
+    text - mirrors memory_service.get_correction_usage's shape so the two
+    usage panels (Memory / Glossary) read the same way.
     """
     from models.models import TranslationLog, Page, Chapter
+
     logs = (
         db.query(TranslationLog)
         .join(Page, TranslationLog.page_id == Page.id)
@@ -118,16 +119,46 @@ def get_term_usage(term: "GlossaryTerm", project_id: int, db: Session) -> list[d
         .order_by(TranslationLog.created_at.desc())
         .all()
     )
-    usage = []
+
+    matching = []
     for log in logs:
         try:
             terms = json.loads(log.glossary_terms_used)
         except (TypeError, ValueError):
             continue
         if any(t.get("source_term", "").lower() == term.source_term.lower() for t in terms):
-            usage.append({
-                "source_text": log.source_text, "output_text": log.output_text,
-                "variant": log.variant, "page_id": log.page_id,
-                "created_at": log.created_at.isoformat() if log.created_at else None,
-            })
-    return usage
+            matching.append(log)
+
+    if not matching:
+        return []
+
+    grouped: dict = {}
+    for log in matching:
+        grouped.setdefault((log.run_id, log.bubble_id), {})[log.variant] = log
+
+    source_texts = {
+        (variants.get("zero_shot") or variants.get("memory_injected")).source_text
+        for variants in grouped.values()
+    }
+    corrections = (
+        db.query(Correction)
+        .filter(Correction.source_text.in_(source_texts))
+        .order_by(Correction.created_at.desc())
+        .all()
+    )
+    final_by_source = {}
+    for c in corrections:
+        final_by_source.setdefault(c.source_text, c.final_translation)
+
+    result = []
+    for variants in grouped.values():
+        base = variants.get("zero_shot") or variants.get("memory_injected")
+        result.append({
+            "source_text": base.source_text,
+            "page_id": base.page_id,
+            "created_at": base.created_at.isoformat() if base.created_at else None,
+            "zero_shot_output": variants["zero_shot"].output_text if "zero_shot" in variants else None,
+            "memory_injected_output": variants["memory_injected"].output_text if "memory_injected" in variants else None,
+            "final_correction": final_by_source.get(base.source_text),
+        })
+    return sorted(result, key=lambda r: r["created_at"] or "", reverse=True)

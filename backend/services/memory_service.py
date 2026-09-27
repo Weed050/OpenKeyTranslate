@@ -52,10 +52,17 @@ def _get_embedder():
         _embedder = SentenceTransformer(MEMORY_EMBEDDING_MODEL)
     return _embedder
 
+
+def warm_up_embedder():
+    """Force-load the embedding model now (see _get_embedder) instead of lazily on the first correction save - called once at app startup so the ~5s first-load cost (model cache validation against huggingface.co) happens in the background before the user ever clicks Save."""
+    _get_embedder()
+
+
 def embed_text(text: str) -> np.ndarray:
     """Compute a single L2-normalized embedding vector for a piece of text."""
     vector = _get_embedder().encode(text, normalize_embeddings=True)
     return np.asarray(vector, dtype=np.float32)
+
 
 def encode_embedding(vector: np.ndarray) -> bytes:
     """Serialize an embedding vector to raw bytes for DB storage."""
@@ -68,10 +75,10 @@ def decode_embedding(blob: bytes) -> np.ndarray:
 
 
 def find_best_match(
-    source_text: str,
-    project_id: int,
-    db: Session,
-    threshold: float = MEMORY_SIMILARITY_THRESHOLD,
+        source_text: str,
+        project_id: int,
+        db: Session,
+        threshold: float = MEMORY_SIMILARITY_THRESHOLD,
 ) -> tuple[Correction, float] | None:
     """
     Search this project's correction history for the closest match to `source_text`.
@@ -107,11 +114,11 @@ def find_best_match(
 
 
 def save_correction(
-    db: Session,
-    project_id: int,
-    source_text: str,
-    ai_translation: str | None,
-    final_translation: str,
+        db: Session,
+        project_id: int,
+        source_text: str,
+        ai_translation: str | None,
+        final_translation: str,
 ) -> Correction | None:
     """
     Persist a confirmed user correction and its embedding - subject to two
@@ -182,16 +189,54 @@ def delete_correction(db: Session, correction_id: int) -> bool:
     db.commit()
     return True
 
-def get_correction_usage(correction_id: int, db: Session) -> list[TranslationLog]:
+
+def get_correction_usage(correction_id: int, db: Session) -> list[dict]:
     """
-    Every TranslationLog row where this correction was the injected hint -
-    the "where did this hint actually get used" trail for the memory
-    browser's expandable usage panel.
+    Full usage trail for a correction: every bubble where it was injected
+    as a hint, alongside the zero-shot counterfactual for that same bubble
+    (when AB-logging caught one) and whatever the user eventually saved
+    for that exact source text - so the memory browser can show not just
+    "it fired" but "did it help, and did the user still have to fix it
+    afterward" (see memory.js renderUsage).
     """
-    return (
+    injected_logs = (
         db.query(TranslationLog)
         .filter(TranslationLog.matched_correction_id == correction_id,
                 TranslationLog.variant == "memory_injected")
         .order_by(TranslationLog.created_at.desc())
         .all()
     )
+    if not injected_logs:
+        return []
+
+    run_ids = {log.run_id for log in injected_logs}
+    zero_shot_logs = (
+        db.query(TranslationLog)
+        .filter(TranslationLog.variant == "zero_shot", TranslationLog.run_id.in_(run_ids))
+        .all()
+    )
+    zero_shot_by_pair = {(log.run_id, log.bubble_id): log.output_text for log in zero_shot_logs}
+
+    source_texts = {log.source_text for log in injected_logs}
+    corrections = (
+        db.query(Correction)
+        .filter(Correction.source_text.in_(source_texts))
+        .order_by(Correction.created_at.desc())
+        .all()
+    )
+    final_by_source = {}
+    for c in corrections:
+        final_by_source.setdefault(c.source_text, c.final_translation)
+
+    return [
+        {
+            "source_text": log.source_text,
+            "similarity_score": log.similarity_score,
+            "page_id": log.page_id,
+            "created_at": log.created_at.isoformat() if log.created_at else None,
+            "zero_shot_output": zero_shot_by_pair.get((log.run_id, log.bubble_id)),
+            "memory_injected_output": log.output_text,
+            "final_correction": final_by_source.get(log.source_text),
+        }
+        for log in injected_logs
+    ]

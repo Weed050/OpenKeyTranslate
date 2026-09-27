@@ -1,5 +1,5 @@
 <!-- frontend/index.html -->
-
+ 
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -11,36 +11,36 @@
     <link rel="stylesheet" href="css/layout.css">
 </head>
 <body>
-
+ 
     <div class="app-shell">
         <nav class="sidebar">
             <div class="sidebar-brand">OpenKeyTranslate</div>
-
+ 
             <div class="sidebar-section">
                 <div class="sidebar-label">Active</div>
                 <div id="sidebarActive"></div>
             </div>
-
+ 
             <div class="sidebar-section hidden" id="sidebarArchivedSection">
                 <div class="sidebar-label">Archived</div>
                 <div id="sidebarArchived"></div>
             </div>
-
+ 
             <div class="sidebar-footer">
                 <div class="hidden" id="sidebarProjectLinks"></div>
                 <a class="sidebar-link" href="index.html">Projects</a>
                 <a class="sidebar-link" href="settings.html">Settings</a>
             </div>
         </nav>
-
-        <main class="main-content">
+ 
+        <main class="main-content center-content">
             <div class="content-narrow">
-                <div class="page-header">
+                <div class="page-header" style="justify-content:center;">
                     <h1>Projects</h1>
                 </div>
-
+ 
                 <div id="projectList"></div>
-
+ 
                 <div class="card" style="margin-top: 32px;">
                     <h2>Create new project</h2>
                     <div style="display:flex; flex-direction:column; gap:10px; max-width:420px;">
@@ -64,7 +64,8 @@
             </div>
         </main>
     </div>
-
+ 
     <script type="module" src="js/dashboard.js"></script>
 </body>
 </html>
+ 

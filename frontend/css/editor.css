@@ -1,15 +1,15 @@
 /* frontend/css/editor.css
    Layout for editor.html only: the zoomable image pane on the left and the
    side panel (page nav / bubble list / detail editor) on the right. */
-
+ 
 .editor-layout {
   display: flex;
   height: 100vh;
   min-width: 0;
 }
-
+ 
 /* ---------- image pane ---------- */
-
+ 
 .image-pane {
   flex: 1;
   min-width: 0;
@@ -17,7 +17,7 @@
   flex-direction: column;
   background: var(--bg-page);
 }
-
+ 
 .image-toolbar {
   flex-shrink: 0;
   display: flex;
@@ -28,7 +28,7 @@
   font-size: 12px;
   color: var(--text-muted);
 }
-
+ 
 .image-viewport {
   flex: 1;
   overflow: auto;
@@ -37,12 +37,12 @@
   justify-content: center;
   padding: var(--space-lg);
 }
-
+ 
 .image-canvas {
   position: relative;
   flex-shrink: 0;
 }
-
+ 
 .image-canvas img {
   display: block;
   width: 100%;
@@ -50,7 +50,7 @@
   user-select: none;
   border-radius: 2px;
 }
-
+ 
 .bubble-outline {
   position: absolute;
   border: 1.5px solid rgba(0, 0, 0, 0.55);
@@ -64,7 +64,7 @@
   border: 2px solid var(--accent);
   box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.6);
 }
-
+ 
 .image-state {
   margin: auto;
   text-align: center;
@@ -72,9 +72,9 @@
   font-size: 13px;
 }
 .image-state button { margin-top: var(--space-sm); }
-
+ 
 /* ---------- side panel ---------- */
-
+ 
 .side-panel {
   width: var(--panel-w);
   flex-shrink: 0;
@@ -84,7 +84,7 @@
   flex-direction: column;
   overflow: hidden;
 }
-
+ 
 .chapter-nav {
   flex-shrink: 0;
   border-bottom: 1px solid var(--border);
@@ -95,12 +95,16 @@
   color: var(--text-secondary);
   cursor: pointer;
   list-style: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
 }
 .chapter-nav summary::-webkit-details-marker { display: none; }
 .chapter-nav summary::before { content: "\25B8  "; color: var(--text-muted); }
 .chapter-nav[open] summary::before { content: "\25BE  "; }
 .chapter-nav-body { max-height: 220px; overflow-y: auto; padding: 0 var(--space-sm) var(--space-sm); }
-
+ 
 .chapter-group-label {
   font-size: 11px;
   color: var(--text-muted);
@@ -115,7 +119,7 @@
 }
 .page-nav-row:hover { background: var(--bg-hover); color: var(--text-primary); text-decoration: none; }
 .page-nav-row.selected { background: var(--bg-selected); color: var(--text-primary); }
-
+ 
 .bubble-list-header {
   flex-shrink: 0;
   padding: var(--space-sm) var(--space-md);
@@ -123,14 +127,14 @@
   color: var(--text-muted);
   border-bottom: 1px solid var(--border);
 }
-
+ 
 .bubble-list {
   flex: 1;
   min-height: 60px;
   overflow-y: auto;
   padding: 4px;
 }
-
+ 
 .bubble-row {
   display: flex;
   align-items: baseline;
@@ -154,7 +158,7 @@
   width: 6px; height: 6px; border-radius: 50%;
   background: var(--success); flex-shrink: 0; margin-left: auto;
 }
-
+ 
 .bubble-detail {
   flex-shrink: 0;
   border-top: 1px solid var(--border);
@@ -162,10 +166,10 @@
   display: flex;
   flex-direction: column;
   gap: var(--space-sm);
-  max-height: 55vh;
+  height: var(--detail-h, 55vh);
   overflow-y: auto;
 }
-
+ 
 .bubble-detail-title {
   font-size: 12px;
   font-weight: 500;
@@ -174,7 +178,7 @@
   justify-content: space-between;
   align-items: center;
 }
-
+ 
 .source-text {
   font-size: 12px;
   color: var(--text-muted);
@@ -182,7 +186,7 @@
   border-radius: var(--radius-sm);
   padding: 8px 10px;
 }
-
+ 
 .detail-actions {
   display: flex;
   gap: 6px;
@@ -195,7 +199,7 @@
   border-color: var(--accent);
   color: var(--accent);
 }
-
+ 
 .empty-warning {
   font-size: 12px;
   color: var(--text-primary);
@@ -204,7 +208,7 @@
   border-radius: var(--radius-sm);
   padding: 8px 10px;
 }
-
+ 
 .save-toast {
   position: fixed;
   bottom: 18px;
@@ -221,8 +225,39 @@
   transition: opacity 0.25s;
 }
 .save-toast.show { opacity: 1; }
-
+ 
 #editorLayout,
 #pagePicker {
   width: 100%;
 }
+ 
+.process-prompt-meta {
+  text-align: left;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 16px;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+ 
+.panel-resizer-x {
+  width: 5px;
+  flex-shrink: 0;
+  cursor: col-resize;
+  background: var(--border);
+  transition: background 0.1s;
+}
+.panel-resizer-x:hover,
+.panel-resizer-x.dragging { background: var(--accent); }
+ 
+.panel-resizer-y {
+  height: 5px;
+  flex-shrink: 0;
+  cursor: row-resize;
+  background: var(--border);
+  transition: background 0.1s;
+}
+.panel-resizer-y:hover,
+.panel-resizer-y.dragging { background: var(--accent); }
+ 

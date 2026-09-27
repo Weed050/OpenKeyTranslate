@@ -1,5 +1,5 @@
 <!-- frontend/editor.html -->
-
+ 
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -12,30 +12,30 @@
     <link rel="stylesheet" href="css/editor.css">
 </head>
 <body>
-
+ 
     <div class="app-shell">
         <nav class="sidebar">
             <div class="sidebar-brand">OpenKeyTranslate</div>
-
+ 
             <div class="sidebar-section">
                 <div class="sidebar-label">Active</div>
                 <div id="sidebarActive"></div>
             </div>
-
+ 
             <div class="sidebar-section hidden" id="sidebarArchivedSection">
                 <div class="sidebar-label">Archived</div>
                 <div id="sidebarArchived"></div>
             </div>
-
+ 
             <div class="sidebar-footer">
                 <div class="hidden" id="sidebarProjectLinks"></div>
                 <a class="sidebar-link" href="index.html">Projects</a>
                 <a class="sidebar-link" href="settings.html">Settings</a>
             </div>
         </nav>
-
+ 
         <main class="main-content no-scroll">
-
+ 
             <div class="editor-layout hidden" id="editorLayout">
                 <div class="image-pane">
                     <div class="image-toolbar">
@@ -50,6 +50,7 @@
                         <button id="zoomInBtn" class="icon-btn" title="Zoom in (Ctrl + scroll up)">+</button>
                         <button id="zoomFitWidthBtn" class="icon-btn" title="Fit page width to ~80% of the viewport">Fit width</button>
                         <button id="zoomResetBtn" class="icon-btn" title="Reset zoom to fit the viewport height">Fit height</button>
+                        <button id="resetLayoutBtn" class="icon-btn" title="Reset panel sizes to default">Reset layout</button>
                     </div>
                     <div class="image-viewport" id="imageViewport">
                         <div class="image-state hidden" id="imageState"></div>
@@ -58,26 +59,48 @@
                         </div>
                     </div>
                 </div>
-
+ 
+                <div class="editor-layout hidden" id="editorLayout">
+                    <div class="image-pane">
+                        ...
+                    </div>
+ 
+                    <div class="panel-resizer-x" id="panelResizerX" title="Drag to resize"></div>
+ 
+                    <div class="side-panel" id="sidePanel">
+                        <details class="chapter-nav" id="chapterNav">
+                            ...
+                        </details>
+ 
+                        <div class="bubble-list-header" id="bubbleListHeader">Bubbles</div>
+                        <div class="bubble-list" id="bubbleList"></div>
+ 
+                        <div class="panel-resizer-y" id="panelResizerY" title="Drag to resize"></div>
+ 
+                        <div class="bubble-detail hidden" id="bubbleDetail"></div>
+                    </div>
+                </div>
+ 
                 <div class="side-panel">
                     <details class="chapter-nav" id="chapterNav">
                         <summary>Chapters &amp; pages</summary>
                         <div class="chapter-nav-body" id="chapterNavBody"></div>
                     </details>
-
+ 
                     <div class="bubble-list-header" id="bubbleListHeader">Bubbles</div>
                     <div class="bubble-list" id="bubbleList"></div>
                     <div class="bubble-detail hidden" id="bubbleDetail"></div>
                 </div>
             </div>
-
+ 
             <div class="image-state" id="processPrompt" style="margin:auto; max-width:420px;">
+                <div id="processPromptInfo"></div>
                 <p id="processPromptMsg">This page hasn't been processed yet.</p>
                 <button id="processBtn" class="primary">Run OCR + translation</button>
                 <p class="text-muted" id="processStatus"></p>
                 <p style="margin-top:12px;"><a id="backToPagesLink" href="#">&larr; Back to page list</a></p>
             </div>
-
+ 
             <div class="hidden" id="pagePicker" style="height:100%; overflow-y:auto; padding: var(--space-lg);">
                 <div class="content-narrow">
                     <h1>Pages</h1>
@@ -85,6 +108,7 @@
                         <input type="text" id="pageSearchInput" placeholder="Filter by filename..." style="max-width:280px;">
                         <button id="collapseAllBtn">Collapse all</button>
                         <button id="expandAllBtn">Expand all</button>
+                        <button id="goToNextUnprocessedBtn">Go to next unprocessed</button>
                         <button id="addChaptersBtn">Import new chapters...</button>
                         <label style="display:flex; align-items:center; gap:4px; font-size:12px; color:var(--text-muted); margin-left:auto;">
                             <input type="checkbox" id="showExcludedCheckbox"> Show excluded
@@ -93,12 +117,13 @@
                     <div id="pagePickerBody"></div>
                 </div>
             </div>
-
+ 
         </main>
     </div>
-
+ 
     <div class="save-toast" id="saveToast">Saved</div>
-
+ 
     <script type="module" src="js/editor.js"></script>
 </body>
 </html>
+ 

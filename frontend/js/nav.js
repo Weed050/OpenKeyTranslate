@@ -9,17 +9,17 @@
  * hidden until that workflow exists. The grouping is already in place so
  * nothing else needs to change when it does.
  */
-
+ 
 import { api } from "./api.js";
-
+ 
 export async function renderSidebar(currentProjectId) {
     const activeEl = document.getElementById("sidebarActive");
     if (!activeEl) return;
-
+ 
     const archivedSection = document.getElementById("sidebarArchivedSection");
     const archivedEl = document.getElementById("sidebarArchived");
     const projectLinksEl = document.getElementById("sidebarProjectLinks");
-
+ 
     if (projectLinksEl) {
         if (currentProjectId) {
             projectLinksEl.classList.remove("hidden");
@@ -31,7 +31,7 @@ export async function renderSidebar(currentProjectId) {
             projectLinksEl.classList.add("hidden");
         }
     }
-
+ 
     let projects;
     try {
         projects = await api.projects.list();
@@ -40,24 +40,24 @@ export async function renderSidebar(currentProjectId) {
         console.error("[NAV] Failed to load projects:", e);
         return;
     }
-
+ 
     const active = projects.filter((p) => p.status !== "archived");
     const archived = projects.filter((p) => p.status === "archived");
-
+ 
     activeEl.innerHTML = "";
     if (!active.length) {
         activeEl.innerHTML = `<p class="sidebar-error">No projects yet.</p>`;
     } else {
         active.forEach((p) => activeEl.appendChild(projectRow(p, currentProjectId)));
     }
-
+ 
     if (archivedEl && archivedSection) {
         archivedEl.innerHTML = "";
         archived.forEach((p) => archivedEl.appendChild(projectRow(p, currentProjectId)));
         archivedSection.classList.toggle("hidden", archived.length === 0);
     }
 }
-
+ 
 function projectRow(project, currentProjectId) {
     const row = document.createElement("a");
     row.href = `editor.html?project=${project.id}`;

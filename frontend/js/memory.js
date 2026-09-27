@@ -5,13 +5,14 @@
  * stale or wrong hint can be removed from future retrieval. Also owns the
  * Corrections/Glossary tab switcher shared with glossary.js.
  */
-
+ 
 import { api } from "./api.js";
 import { renderSidebar } from "./nav.js";
-
+import { diffHtml } from "./diff.js";
+ 
 const params = new URLSearchParams(window.location.search);
 const projectId = params.get("project");
-
+ 
 window.addEventListener("DOMContentLoaded", () => {
     renderSidebar(projectId);
     setupTabs();
@@ -21,7 +22,7 @@ window.addEventListener("DOMContentLoaded", () => {
     }
     loadCorrections();
 });
-
+ 
 function setupTabs() {
     const buttons = document.querySelectorAll(".tab-btn");
     buttons.forEach((btn) => {
@@ -33,10 +34,10 @@ function setupTabs() {
         });
     });
 }
-
+ 
 let allCorrections = [];
 const usageCache = new Map();
-
+ 
 async function loadCorrections() {
     const listEl = document.getElementById("correctionList");
     try {
@@ -45,28 +46,28 @@ async function loadCorrections() {
         listEl.innerHTML = `<p class="text-muted">Couldn't load corrections: ${e.message}</p>`;
         return;
     }
-
+ 
     document.getElementById("correctionsCountBadge").textContent = `${allCorrections.length} corrections`;
-
+ 
     if (!allCorrections.length) {
         listEl.innerHTML = `<p class="text-muted">No corrections stored yet for this project.</p>`;
         return;
     }
-
+ 
     renderList();
 }
-
+ 
 function renderList() {
     const listEl = document.getElementById("correctionList");
     const query = (document.getElementById("memorySearchInput").value || "").toLowerCase();
     const sortMode = document.getElementById("memorySortSelect").value;
-
+ 
     let items = allCorrections.filter((c) =>
         !query ||
         c.source_text.toLowerCase().includes(query) ||
         c.final_translation.toLowerCase().includes(query)
     );
-
+ 
     const sorters = {
         newest: (a, b) => new Date(b.created_at) - new Date(a.created_at),
         oldest: (a, b) => new Date(a.created_at) - new Date(b.created_at),
@@ -74,7 +75,7 @@ function renderList() {
         least_used: (a, b) => (a.reuse_count || 0) - (b.reuse_count || 0),
     };
     items = [...items].sort(sorters[sortMode] || sorters.newest);
-
+ 
     listEl.innerHTML = "";
     if (!items.length) {
         listEl.innerHTML = `<p class="text-muted">No corrections match "${escapeHtml(query)}".</p>`;
@@ -82,7 +83,7 @@ function renderList() {
     }
     items.forEach((c) => listEl.appendChild(correctionRow(c)));
 }
-
+ 
 function correctionRow(c) {
     const details = document.createElement("details");
     details.className = "item-row";
@@ -122,22 +123,22 @@ function correctionRow(c) {
     });
     return details;
 }
-
+ 
 async function toggleUsage(correctionId) {
     const panel = document.getElementById(`usage-${correctionId}`);
     if (!panel) return;
-
+ 
     if (!panel.classList.contains("hidden")) {
         panel.classList.add("hidden");
         return;
     }
-
+ 
     panel.classList.remove("hidden");
     if (usageCache.has(correctionId)) {
         renderUsage(panel, usageCache.get(correctionId));
         return;
     }
-
+ 
     panel.innerHTML = `<p class="usage-empty">Loading...</p>`;
     try {
         const usage = await api.corrections.usage(correctionId);
@@ -147,21 +148,41 @@ async function toggleUsage(correctionId) {
         panel.innerHTML = `<p class="usage-empty">Couldn't load usage: ${e.message}</p>`;
     }
 }
-
+ 
 function renderUsage(panel, usage) {
     if (!usage.length) {
         panel.innerHTML = `<p class="usage-empty">Never used as a hint yet.</p>`;
         return;
     }
-    panel.innerHTML = usage.map((u) => `
+    panel.innerHTML = usage.map((u) => {
+        const hasZeroShot = u.zero_shot_output != null;
+        const hasFinal = u.final_correction != null;
+        return `
         <div class="usage-row">
-            <div><strong>${escapeHtml(u.source_text)}</strong> <span class="badge">${Math.round((u.similarity_score || 0) * 100)}%</span></div>
-            <div>&rarr; ${escapeHtml(u.output_text)}</div>
+            <div class="usage-source"><strong>${escapeHtml(u.source_text)}</strong> <span class="badge" title="Similarity to this correction's source text">${Math.round((u.similarity_score || 0) * 100)}% match</span></div>
+ 
+            ${hasZeroShot ? `
+            <div class="usage-variant">
+                <span class="usage-variant-label">Without hint (zero-shot):</span>
+                <span>${escapeHtml(u.zero_shot_output)}</span>
+            </div>` : ""}
+ 
+            <div class="usage-variant">
+                <span class="usage-variant-label">With this hint (shown to user):</span>
+                <span>${escapeHtml(u.memory_injected_output)}</span>
+            </div>
+ 
+            ${hasFinal ? `
+            <div class="usage-variant">
+                <span class="usage-variant-label">User's final edit for this line:</span>
+                <span>${diffHtml(u.memory_injected_output, u.final_correction, escapeHtml)}</span>
+            </div>` : `<div class="usage-variant text-muted">Not corrected yet - hint was accepted as-is (or the line hasn't been saved).</div>`}
+ 
             <div class="text-muted" style="font-size:10px;">Page #${u.page_id} · ${formatDate(u.created_at)}</div>
         </div>
-    `).join("");
+    `}).join("");
 }
-
+ 
 async function deleteCorrection(id, rowEl) {
     if (!confirm("Remove this correction from memory? It will no longer be suggested as a hint.")) return;
     try {
@@ -174,21 +195,21 @@ async function deleteCorrection(id, rowEl) {
         alert(`Delete failed: ${e.message}`);
     }
 }
-
+ 
 function formatDate(iso) {
     if (!iso) return "unknown date";
     return new Date(iso).toLocaleString();
 }
-
+ 
 function escapeHtml(text) {
     const div = document.createElement("div");
     div.textContent = text;
     return div.innerHTML;
 }
-
+ 
 document.getElementById("memorySearchInput")?.addEventListener("input", renderList);
 document.getElementById("memorySortSelect")?.addEventListener("change", renderList);
-
+ 
 document.getElementById("exportMemoryBtn")?.addEventListener("click", async () => {
     const data = await api.corrections.export(projectId);
     const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
@@ -199,7 +220,7 @@ document.getElementById("exportMemoryBtn")?.addEventListener("click", async () =
     a.click();
     URL.revokeObjectURL(url);
 });
-
+ 
 document.getElementById("importMemoryBtn")?.addEventListener("click", () => {
     document.getElementById("importMemoryFile").click();
 });
