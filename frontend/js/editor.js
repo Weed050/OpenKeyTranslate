@@ -140,6 +140,8 @@ async function init() {
     el.pagePicker = document.getElementById("pagePicker");
     el.pagePickerBody = document.getElementById("pagePickerBody");
     el.pageToolsMenu = document.getElementById("pageToolsMenu");
+
+    document.getElementById("resetLayoutBtn").addEventListener("click", resetPanelLayout);
  
     if (!pageId && !state.projectId) {
         document.querySelector(".main-content").innerHTML = "<p>Missing ?project= or ?page= in the URL.</p>";
@@ -156,15 +158,6 @@ async function init() {
     document.getElementById("nextPageBtn").addEventListener("click", () => goToAdjacentPage(1));
     el.imageViewport.addEventListener("wheel", onWheelZoom, { passive: false });
     window.addEventListener("keydown", onGlobalKeydown);
- 
-    document.getElementById("spellcheckToggleBtn").addEventListener("click", (e) => {
-    const next = !isSpellcheckEnabled();
-    setSpellcheckEnabled(next);
-    const ta = document.getElementById("translationInput");
-    if (ta) ta.spellcheck = next;
-    e.target.textContent = `Spellcheck: ${next ? "On" : "Off"}`;
-    e.target.classList.toggle("primary", next);
-    });
  
     restorePanelLayout();
     setupResizers(); 
@@ -804,6 +797,14 @@ function renderBubbleDetail() {
  
     autoGrowTextarea(textarea);
     textarea.addEventListener("input", () => autoGrowTextarea(textarea));
+
+    document.getElementById("spellcheckToggleBtn").addEventListener("click", (e) => {
+    const next = !isSpellcheckEnabled();
+    setSpellcheckEnabled(next);
+    textarea.spellcheck = next;
+    e.target.textContent = `Spellcheck: ${next ? "On" : "Off"}`;
+    e.target.classList.toggle("primary", next);
+    });
  
     document.getElementById("resetBtn").addEventListener("click", () => {
         textarea.value = bubble.ai_translation || "";

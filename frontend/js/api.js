@@ -18,10 +18,10 @@ async function request(path, options = {}) {
         let detail = `HTTP ${response.status}`;
         try {
             const err = await response.json();
-            if (err.detail) detail = err.detail;
-        } catch {
-            /* body wasn't JSON - keep the generic HTTP status message */
-        }
+            if (Array.isArray(err.detail)) detail = err.detail.map(d => d.msg || JSON.stringify(d)).join("; ");
+            else if (err.detail && typeof err.detail === "object") detail = JSON.stringify(err.detail);
+            else if (err.detail) detail = err.detail;
+        } catch {}
         throw new Error(detail);
     }
  

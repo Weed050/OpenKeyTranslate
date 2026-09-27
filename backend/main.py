@@ -26,6 +26,7 @@ from routers import projects, corrections, pages, logs, settings, system, glossa
 from routers.projects import reconcile_projects_from_disk
 import uvicorn
 from core.database import init_db, SessionLocal
+from services.memory_service import warm_up_embedder
 
 
 @asynccontextmanager
@@ -45,6 +46,10 @@ async def lifespan(app: FastAPI):
         reconcile_projects_from_disk(db)
     finally:
         db.close()
+
+    print("[LIFECYCLE] Warming up embedding model for correction memory...")
+    warm_up_embedder()
+    print("[LIFECYCLE] Embedder ready.")
 
     yield
 
