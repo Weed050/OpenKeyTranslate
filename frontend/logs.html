@@ -1,5 +1,5 @@
 <!-- frontend/logs.html -->
-
+ 
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -19,12 +19,10 @@
         }
         table.logs-table td { padding: 8px 12px; border-bottom: 1px solid var(--border); vertical-align: top; color: var(--text-secondary); }
         table.logs-table tr:last-child td { border-bottom: none; }
-        .diff-removed { color: var(--danger); text-decoration: line-through; opacity: 0.8; }
-        .diff-added { color: var(--success); }
     </style>
 </head>
 <body>
-
+ 
     <div class="app-shell">
         <nav class="sidebar">
             <div class="sidebar-brand">OpenKeyTranslate</div>
@@ -42,7 +40,7 @@
                 <a class="sidebar-link" href="settings.html">Settings</a>
             </div>
         </nav>
-
+ 
         <main class="main-content">
             <div class="page-header">
                 <h1>Translation logs</h1>
@@ -52,9 +50,9 @@
                 </div>
             </div>
             <p class="text-muted">Every zero-shot vs. memory-injected pair the correction-memory experiment is evaluated from. Read-only - never fed back into translation.</p>
-
+ 
             <div id="noProject" class="hidden text-muted">Open a project from the sidebar first.</div>
-
+ 
             <div class="logs-table-wrap">
                 <table class="logs-table">
                     <thead>
@@ -70,7 +68,8 @@
             </div>
         </main>
     </div>
-
+ 
     <script type="module" src="js/logs.js"></script>
 </body>
 </html>
+ 

@@ -1,5 +1,5 @@
 <!-- frontend/settings.html -->
-
+ 
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -11,33 +11,33 @@
     <link rel="stylesheet" href="css/layout.css">
 </head>
 <body>
-
+ 
     <div class="app-shell">
         <nav class="sidebar">
             <div class="sidebar-brand">OpenKeyTranslate</div>
-
+ 
             <div class="sidebar-section">
                 <div class="sidebar-label">Active</div>
                 <div id="sidebarActive"></div>
             </div>
-
+ 
             <div class="sidebar-section hidden" id="sidebarArchivedSection">
                 <div class="sidebar-label">Archived</div>
                 <div id="sidebarArchived"></div>
             </div>
-
+ 
             <div class="sidebar-footer">
                 <div class="hidden" id="sidebarProjectLinks"></div>
                 <a class="sidebar-link" href="index.html">Projects</a>
                 <a class="sidebar-link" href="settings.html">Settings</a>
             </div>
         </nav>
-
+ 
         <main class="main-content">
             <div class="page-header">
                 <h1>Settings</h1>
             </div>
-
+ 
             <div class="card">
                 <h2>Workspace</h2>
                 <div class="row">
@@ -53,7 +53,7 @@
                 </div>
                 <p class="text-muted" id="settingsStatus" style="margin-top:10px;"></p>
             </div>
-
+ 
             <div class="card">
                 <h2>Correction memory</h2>
                 <div class="row">
@@ -63,7 +63,7 @@
                 <button id="saveMemorySettingsBtn" class="primary">Save</button>
                 <p class="text-muted" id="memorySettingsStatus" style="margin-top:10px;"></p>
             </div>
-
+ 
             <div class="card">
                 <h2>About</h2>
                 <div class="row">
@@ -88,9 +88,18 @@
                     <pre id="logViewerContent" class="text-mono" style="max-height:300px; overflow-y:auto; background:var(--bg-panel-2); padding:10px; border-radius:var(--radius-sm); font-size:11px; white-space:pre-wrap;"></pre>
                 </div>
             </div>
+            <div class="card">
+                <h2>Editor</h2>
+                <div class="row">
+                    <div class="text-muted">Polish spellcheck in translation text field (browser's built-in dictionary - needs a Polish language pack in your OS/browser to actually underline anything)</div>
+                    <label style="display:flex; align-items:center; gap:6px;">
+                        <input type="checkbox" id="spellcheckSettingCheckbox"> Enable
+                    </label>
+                </div>
+            </div>
         </main>
     </div>
-
+ 
     <script type="module" src="js/settings.js"></script>
 </body>
 </html>

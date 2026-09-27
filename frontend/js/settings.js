@@ -4,17 +4,17 @@
  * dashboard into its own page. Behavior unchanged from the original
  * app.js - just centralized through api.js and restyled.
  */
-
+ 
 import { api } from "./api.js";
 import { renderSidebar } from "./nav.js";
-
+ 
 let appSettings = {};
-
+ 
 window.addEventListener("DOMContentLoaded", () => {
     renderSidebar(null);
     loadSettings();
 });
-
+ 
 async function loadSettings() {
     try {
         appSettings = await api.settings.get();
@@ -25,7 +25,7 @@ async function loadSettings() {
         document.getElementById("currentWorkspacePath").textContent = `Error: ${e.message}`;
     }
 }
-
+ 
 document.getElementById("copyWorkspaceBtn").addEventListener("click", async () => {
     try {
         await navigator.clipboard.writeText(appSettings.app_root_dir || "");
@@ -34,14 +34,14 @@ document.getElementById("copyWorkspaceBtn").addEventListener("click", async () =
         flashStatus("Couldn't copy - copy it manually.");
     }
 });
-
+ 
 document.getElementById("changeWorkspaceBtn").addEventListener("click", async () => {
     const data = await api.projects.selectFolder();
     if (!data.path) return;
-
+ 
     const shouldMigrate = confirm("Do you want to MIGRATE existing project data to the new workspace location?");
     const payload = { ...appSettings, app_root_dir: data.path, migrate_data: shouldMigrate };
-
+ 
     try {
         const result = await api.settings.update(payload);
         flashStatus(result.message);
@@ -50,10 +50,10 @@ document.getElementById("changeWorkspaceBtn").addEventListener("click", async ()
         flashStatus(`Failed: ${e.message}`);
     }
 });
-
+ 
 document.getElementById("resetWorkspaceBtn").addEventListener("click", async () => {
     if (!confirm("Reset to the default AppData location? All project data will be moved there.")) return;
-
+ 
     try {
         const result = await api.settings.resetToDefault();
         flashStatus(result.message);
@@ -65,11 +65,11 @@ document.getElementById("resetWorkspaceBtn").addEventListener("click", async () 
         flashStatus(`Failed: ${e.message}`);
     }
 });
-
+ 
 function flashStatus(message) {
     document.getElementById("settingsStatus").textContent = message;
 }
-
+ 
 document.getElementById("saveMemorySettingsBtn").addEventListener("click", async () => {
     const value = parseInt(document.getElementById("memoryMinWordsInput").value, 10);
     if (!Number.isFinite(value) || value < 0) {
@@ -83,8 +83,8 @@ document.getElementById("saveMemorySettingsBtn").addEventListener("click", async
         document.getElementById("memorySettingsStatus").textContent = `Failed: ${e.message}`;
     }
 });
-
-
+ 
+ 
 document.getElementById("openLogFolderBtn").addEventListener("click", async () => {
     if (!appSettings.log_file_path) return;
     try {
@@ -93,7 +93,7 @@ document.getElementById("openLogFolderBtn").addEventListener("click", async () =
         alert(`Couldn't open log file: ${e.message}`);
     }
 });
-
+ 
 document.getElementById("openDbFolderBtn").addEventListener("click", async () => {
     if (!appSettings.database_path) return;
     try {
@@ -102,15 +102,15 @@ document.getElementById("openDbFolderBtn").addEventListener("click", async () =>
         alert(`Couldn't open database file: ${e.message}`);
     }
 });
-
-
+ 
+ 
 document.getElementById("viewLogBtn").addEventListener("click", async () => {
     const block = document.getElementById("logViewerBlock");
     block.classList.toggle("hidden");
     if (!block.classList.contains("hidden")) await refreshLogViewer();
 });
 document.getElementById("logErrorsOnlyCheckbox").addEventListener("change", refreshLogViewer);
-
+ 
 async function refreshLogViewer() {
     const errorsOnly = document.getElementById("logErrorsOnlyCheckbox").checked;
     const content = document.getElementById("logViewerContent");
@@ -121,4 +121,13 @@ async function refreshLogViewer() {
     } catch (e) {
         content.textContent = `Couldn't load log: ${e.message}`;
     }
+}
+ 
+const SPELLCHECK_STORAGE_KEY = "okt-spellcheck-enabled";
+const spellcheckCheckbox = document.getElementById("spellcheckSettingCheckbox");
+if (spellcheckCheckbox) {
+    spellcheckCheckbox.checked = localStorage.getItem(SPELLCHECK_STORAGE_KEY) === "1";
+    spellcheckCheckbox.addEventListener("change", () => {
+        localStorage.setItem(SPELLCHECK_STORAGE_KEY, spellcheckCheckbox.checked ? "1" : "0");
+    });
 }

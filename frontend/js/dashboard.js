@@ -2,15 +2,15 @@
  * @file frontend/js/dashboard.js
  * @description Project list and "create new project" flow for index.html.
  */
-
+ 
 import { api } from "./api.js";
 import { renderSidebar } from "./nav.js";
-
+ 
 window.addEventListener("DOMContentLoaded", () => {
     renderSidebar(null); // no project is "open" on the dashboard itself
     loadProjects();
 });
-
+ 
 async function loadProjects() {
     const list = document.getElementById("projectList");
     let projects;
@@ -20,12 +20,12 @@ async function loadProjects() {
         list.innerHTML = `<p class="text-muted">Couldn't load projects: ${e.message}</p>`;
         return;
     }
-
+ 
     if (!projects.length) {
         list.innerHTML = `<p class="text-muted">No projects found. Create one below.</p>`;
         return;
     }
-
+ 
     list.innerHTML = "";
     projects.forEach(async (p) => {
         const row = document.createElement("div");
@@ -34,7 +34,7 @@ async function loadProjects() {
         const resumeHref = lastEdit
             ? `editor.html?project=${p.id}&page=${lastEdit.pageId}&bubble=${lastEdit.bubbleIndex}`
             : null;
-
+ 
         row.innerHTML = `
             <div>
                 <strong>${p.name}</strong>
@@ -52,7 +52,7 @@ async function loadProjects() {
             </div>
         `;
         list.appendChild(row);
-
+ 
         row.querySelector("[data-copy]").addEventListener("click", async (e) => {
             await navigator.clipboard.writeText(e.target.dataset.copy);
             e.target.textContent = "Copied";
@@ -65,6 +65,7 @@ async function loadProjects() {
             try {
                 await api.projects.delete(id);
                 loadProjects();
+                renderSidebar(null);
             } catch (err) {
                 alert(`Delete failed: ${err.message}`);
             }
@@ -76,7 +77,7 @@ async function loadProjects() {
                 alert(`Couldn't open folder: ${err.message}`);
             }
         });
-
+ 
         try {
             const pages = await api.pages.listByProject(p.id);
             const done = pages.filter((pg) => pg.status === "processed").length;
@@ -86,41 +87,42 @@ async function loadProjects() {
         }
     });
 }
-
+ 
 document.getElementById("selectFolderBtn").addEventListener("click", async () => {
     const data = await api.projects.selectFolder();
     if (!data.path) return;
-
+ 
     document.getElementById("pathPreview").textContent = data.path;
-
+ 
     const projectInput = document.getElementById("projectName");
     if (!projectInput.value) {
         const parts = data.path.split(/[\\/]/).filter((p) => p.length > 0);
         projectInput.value = parts.pop() || "";
     }
 });
-
+ 
 document.getElementById("importBtn").addEventListener("click", async () => {
     const path = document.getElementById("pathPreview").textContent;
     const projectName = document.getElementById("projectName").value;
     const statusMsg = document.getElementById("statusMsg");
-
+ 
     if (path === "None selected" || !projectName.trim()) {
         statusMsg.textContent = "Select a folder and enter a project name.";
         return;
     }
-
+ 
     try {
         const result = await api.projects.import(path, projectName);
         statusMsg.textContent = result.message;
         document.getElementById("projectName").value = "";
         document.getElementById("pathPreview").textContent = "None selected";
         loadProjects();
+        renderSidebar(null);
     } catch (e) {
         statusMsg.textContent = `Failed: ${e.message}`;
     }
 });
-
+ 
 function getLastEdit(projectId) {
     try {
         const raw = localStorage.getItem(`okt-lastedit-project-${projectId}`);

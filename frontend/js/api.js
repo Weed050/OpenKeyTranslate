@@ -4,16 +4,16 @@
  * Every fetch() call in the app goes through here - if the host/port or an
  * endpoint path ever changes, this is the one file to edit.
  */
-
+ 
 export const API_BASE = "http://127.0.0.1:8000";
-
+ 
 async function request(path, options = {}) {
     const hasBody = options.body !== undefined;
     const response = await fetch(`${API_BASE}${path}`, {
         ...options,
         headers: hasBody ? { "Content-Type": "application/json", ...(options.headers || {}) } : options.headers,
     });
-
+ 
     if (!response.ok) {
         let detail = `HTTP ${response.status}`;
         try {
@@ -24,11 +24,11 @@ async function request(path, options = {}) {
         }
         throw new Error(detail);
     }
-
+ 
     if (response.status === 204) return null;
     return response.json();
 }
-
+ 
 export const api = {
     projects: {
         list: () => request("/projects/"),
@@ -37,16 +37,17 @@ export const api = {
             request("/projects/import", { method: "POST", body: JSON.stringify({ path, projectName }) }),
         importChapters: (projectId, path) =>
             request(`/projects/${projectId}/import-chapters`, { method: "POST", body: JSON.stringify({ path }) }),
+        deleteChapter: (chapterId) => request(`/projects/chapters/${chapterId}`, { method: "DELETE" }),
         delete: (id) => request(`/projects/${id}`, { method: "DELETE" }),
     },
-
+ 
     settings: {
         get: () => request("/settings/"),
         update: (payload) => request("/settings/", { method: "POST", body: JSON.stringify(payload) }),
         resetToDefault: () => request("/settings/reset-to-default", { method: "POST" }),
         updateMemory: (payload) => request("/settings/memory", { method: "POST", body: JSON.stringify(payload) }),
     },
-
+ 
     pages: {
         listByProject: (projectId, includeExcluded = false) =>
             request(`/pages/by-project/${projectId}${includeExcluded ? "?include_excluded=true" : ""}`),
@@ -61,13 +62,13 @@ export const api = {
         exclude: (pageId) => request(`/pages/${pageId}/exclude`, { method: "POST" }),
         restore: (pageId) => request(`/pages/${pageId}/restore`, { method: "POST" }),
     },
-
+ 
     system: {
         openPath: (path) => request("/system/open-path", { method: "POST", body: JSON.stringify({ path }) }),
         tailLog: (lines = 200, errorsOnly = false) =>
             request(`/system/tail-log?lines=${lines}&errors_only=${errorsOnly}`),
     },
-
+ 
     corrections: {
         save: (pageId, bubbleId, payload) =>
             request(`/corrections/pages/${pageId}/bubbles/${bubbleId}`, {
@@ -80,7 +81,7 @@ export const api = {
         import: (projectId, payload) => request(`/corrections/import/${projectId}`, { method: "POST", body: JSON.stringify(payload) }),
         usage: (correctionId) => request(`/corrections/${correctionId}/usage`),
     },
-
+ 
     glossary: {
     listByProject: (projectId) => request(`/glossary/by-project/${projectId}`),
     add: (projectId, payload) => request(`/glossary/by-project/${projectId}`, { method: "POST", body: JSON.stringify(payload) }),
@@ -90,9 +91,10 @@ export const api = {
     export: (projectId) => request(`/glossary/export/${projectId}`),
     import: (projectId, payload) => request(`/glossary/import/${projectId}`, { method: "POST", body: JSON.stringify(payload) }),
     },
-
+ 
     logs: {
     listByProject: (projectId) => request(`/logs/by-project/${projectId}`),
     export: (projectId) => request(`/logs/export/${projectId}`),
     },
 };
+ 

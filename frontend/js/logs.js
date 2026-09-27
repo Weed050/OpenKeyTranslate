@@ -5,13 +5,13 @@
  * (run_id + bubble_id), and diffs the shown variant against whatever the
  * user eventually confirmed for that exact source text (if anything).
  */
-
+ 
 import { api } from "./api.js";
 import { renderSidebar } from "./nav.js";
-
+ 
 const params = new URLSearchParams(window.location.search);
 const projectId = params.get("project");
-
+ 
 window.addEventListener("DOMContentLoaded", async () => {
     renderSidebar(projectId);
     if (!projectId) {
@@ -20,7 +20,7 @@ window.addEventListener("DOMContentLoaded", async () => {
     }
     await loadLogs();
 });
-
+ 
 async function loadLogs() {
     const tableBody = document.getElementById("logsBody");
     let logs, corrections;
@@ -33,37 +33,37 @@ async function loadLogs() {
         tableBody.innerHTML = `<tr><td colspan="4">Couldn't load logs: ${e.message}</td></tr>`;
         return;
     }
-
+ 
     // Corrections come back newest-first, so the first match per source text is the latest one.
     const correctionBySource = new Map();
     corrections.forEach((c) => {
         if (!correctionBySource.has(c.source_text)) correctionBySource.set(c.source_text, c);
     });
-
+ 
     const groups = new Map();
     logs.forEach((log) => {
         const key = `${log.run_id}:${log.bubble_id}`;
         if (!groups.has(key)) groups.set(key, {});
         groups.get(key)[log.variant] = log;
     });
-
+ 
     const rows = [...groups.values()].filter((g) => g.zero_shot || g.memory_injected);
     document.getElementById("countBadge").textContent = rows.length;
-
+ 
     if (!rows.length) {
         tableBody.innerHTML = `<tr><td colspan="4" class="text-muted">No translation logs yet - process a page to generate some.</td></tr>`;
         return;
     }
-
+ 
     tableBody.innerHTML = "";
     rows.forEach((g) => tableBody.appendChild(logRow(g, correctionBySource)));
 }
-
+ 
 function logRow(group, correctionBySource) {
     const base = group.zero_shot || group.memory_injected;
     const finalCorrection = correctionBySource.get(base.source_text);
     const shownVariant = group.memory_injected || group.zero_shot;
-
+ 
     const tr = document.createElement("tr");
     tr.innerHTML = `
         <td class="text-mono">${escapeHtml(base.source_text)}</td>
@@ -77,19 +77,19 @@ function logRow(group, correctionBySource) {
     `;
     return tr;
 }
-
+ 
 function similarityBadge(score) {
     if (score === null || score === undefined) return "";
     return ` <span class="badge">${Math.round(score * 100)}%</span>`;
 }
-
+ 
 function keyBadge(label) {
     if (!label) return "";
     return ` <span class="badge" title="API key used">${escapeHtml(label)}</span>`;
 }
-
+ 
 /* --- lightweight word-level diff (LCS-based), for the last column --- */
-
+ 
 function wordDiff(a, b) {
     const aw = a.split(/(\s+)/);
     const bw = b.split(/(\s+)/);
@@ -111,7 +111,7 @@ function wordDiff(a, b) {
     while (j < n) { parts.push({ t: bw[j], type: "added" }); j++; }
     return parts;
 }
-
+ 
 function diffHtml(a, b) {
     if (a.trim() === b.trim()) return `<span class="text-muted">identical</span>`;
     return wordDiff(a, b)
@@ -122,13 +122,13 @@ function diffHtml(a, b) {
         })
         .join("");
 }
-
+ 
 function escapeHtml(text) {
     const div = document.createElement("div");
     div.textContent = text;
     return div.innerHTML;
 }
-
+ 
 document.getElementById("exportLogsBtn")?.addEventListener("click", async () => {
     const data = await api.logs.export(projectId);
     const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
