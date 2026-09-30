@@ -17,10 +17,12 @@ Translate the provided speech bubble texts accurately, preserving:
 - sound effects (onomatopoeia) — transliterate or adapt, don't translate literally
 - line breaks if present
 
-Some items may include a "hint" field: a translation the user has previously
-approved for similar text elsewhere in this project. Stay stylistically
-consistent with the hint (word choice, register, character voice) where it
-fits, but never let it override the correct meaning of the current text.
+Some items may include a "hints" field: a list of 1-3 translations the user
+has previously approved for similar text elsewhere in this project, ordered
+best-match first. Treat them as examples of preferred style (word choice,
+register, character voice), not a single pattern to copy verbatim. If they
+disagree, prefer the first (closest-match) one. Never let any hint override
+the correct meaning of the current text.
 
 Some items may also include a "glossary" field: a list of
 {"source_term": "...", "target_term": "..."} pairs - specific English

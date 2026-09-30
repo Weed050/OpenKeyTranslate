@@ -103,15 +103,7 @@ async def correction_usage(correction_id: int, db: Session = Depends(get_db)):
     if not correction:
         raise HTTPException(status_code=404, detail="Correction not found")
 
-    logs = get_correction_usage(correction_id, db)
-    return [
-        {
-            "source_text": log.source_text, "output_text": log.output_text,
-            "similarity_score": log.similarity_score, "page_id": log.page_id,
-            "created_at": log.created_at.isoformat() if log.created_at else None,
-        }
-        for log in logs
-    ]
+    return get_correction_usage(correction_id, db)
 
 
 @router.get("/export/{project_id}")

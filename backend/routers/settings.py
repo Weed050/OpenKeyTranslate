@@ -123,6 +123,8 @@ async def update_memory_settings(payload: dict):
         current_settings["memory_min_words"] = max(0, int(payload["memory_min_words"]))
     if "memory_similarity_threshold" in payload:
         current_settings["memory_similarity_threshold"] = float(payload["memory_similarity_threshold"])
+    if "memory_top_k" in payload:
+        current_settings["memory_top_k"] = max(1, int(payload["memory_top_k"]))
 
     with open(SETTINGS_FILE, "w", encoding="utf-8") as file:
         json.dump(current_settings, file, indent=4, ensure_ascii=False)

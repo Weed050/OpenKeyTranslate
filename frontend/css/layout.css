@@ -137,6 +137,7 @@
   gap: var(--space-md);
   padding: 10px 0;
   border-bottom: 1px solid var(--border);
+  flex-wrap: wrap;
 }
 .row:last-child { border-bottom: none; }
  

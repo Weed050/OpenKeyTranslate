@@ -112,6 +112,33 @@ def find_best_match(
 
     return corrections[best_idx], best_score
 
+def find_top_matches(
+        source_text: str,
+        project_id: int,
+        db: Session,
+        threshold: float = MEMORY_SIMILARITY_THRESHOLD,
+        top_k: int = 3,
+) -> list[tuple[Correction, float]]:
+    """
+    Like find_best_match, but returns up to top_k matches clearing threshold,
+    best-first. Empty list if nothing clears it.
+    """
+    corrections = db.query(Correction).filter(Correction.project_id == project_id).all()
+    if not corrections:
+        return []
+
+    query_vector = embed_text(source_text)
+    stored_vectors = np.stack([decode_embedding(c.embedding) for c in corrections])
+    similarities = stored_vectors @ query_vector
+
+    order = np.argsort(similarities)[::-1]
+    results = []
+    for idx in order[:top_k]:
+        score = float(similarities[idx])
+        if score < threshold:
+            break
+        results.append((corrections[idx], score))
+    return results
 
 def save_correction(
         db: Session,
