@@ -39,9 +39,9 @@ import json
 import uuid
 from sqlalchemy.orm import Session
 
-from core.config import MEMORY_AB_TEST_LOGGING, ACTIVE_MODEL_NAME, MEMORY_SIMILARITY_THRESHOLD
+from core.config import MEMORY_AB_TEST_LOGGING, ACTIVE_MODEL_NAME, MEMORY_SIMILARITY_THRESHOLD, MEMORY_TOP_K
 from models.models import TranslationLog
-from services.memory_service import find_best_match
+from services.memory_service import find_top_matches
 from services.glossary_service import load_glossary, match_glossary
 from services.providers import get_provider
 
@@ -84,7 +84,7 @@ def translate_bubbles(
     # 1. Look up correction-memory matches up front, before touching the LLM.
     #    bubble_id -> (Correction, similarity_score). Skipped entirely when
     #    no DB context was passed in (see module docstring, point 5).
-    matches: dict[str, tuple] = {}
+    matches: dict[str, list[tuple]] = {}
     glossary_by_bubble: dict[str, list[dict]] = {}
     if memory_enabled:
         glossary_terms = load_glossary(project_id, db)
@@ -92,9 +92,9 @@ def translate_bubbles(
             text = b.get("text", "").strip()
             if not text:
                 continue
-            match = find_best_match(text, project_id, db)
-            if match is not None:
-                matches[b["bubble_id"]] = match
+            top = find_top_matches(text, project_id, db, top_k=MEMORY_TOP_K)
+            if top:
+                matches[b["bubble_id"]] = top
             g = match_glossary(text, glossary_terms)
             if g:
                 glossary_by_bubble[b["bubble_id"]] = g
@@ -105,7 +105,7 @@ def translate_bubbles(
         {
             "id": b["bubble_id"],
             "text": b["text"],
-            **({"hint": matches[b["bubble_id"]][0].final_translation} if b["bubble_id"] in matches else {}),
+            **({"hints": [m.final_translation for m, _ in matches[b["bubble_id"]]]} if b["bubble_id"] in matches else {}),
             **({"glossary": glossary_by_bubble[b["bubble_id"]]} if b["bubble_id"] in glossary_by_bubble else {}),
         }
         for b in bubbles
@@ -146,14 +146,16 @@ def translate_bubbles(
         glossary_json = json.dumps(glossary_by_bubble[bubble_id]) if bubble_id in glossary_by_bubble else None
 
         if bubble_id in matches:
-            correction, score = matches[bubble_id]
-            correction.reuse_count = (correction.reuse_count or 0) + 1
-            db.add(correction)
+            top_matches = matches[bubble_id]
+            best_correction, best_score = top_matches[0]
+            for m, _ in top_matches:
+                m.reuse_count = (m.reuse_count or 0) + 1
+                db.add(m)
 
             log_rows.append(TranslationLog(
                 page_id=page_id, bubble_id=bubble_id, variant="memory_injected",
                 source_text=b["text"], output_text=translation,
-                matched_correction_id=correction.id, similarity_score=score,
+                matched_correction_id=best_correction.id, similarity_score=best_score,
                 threshold_used=MEMORY_SIMILARITY_THRESHOLD,
                 model_used=ACTIVE_MODEL_NAME, key_label=shown_key_label, run_id=run_id,
                 glossary_terms_used=glossary_json,
@@ -163,7 +165,7 @@ def translate_bubbles(
                 log_rows.append(TranslationLog(
                     page_id=page_id, bubble_id=bubble_id, variant="zero_shot",
                     source_text=b["text"], output_text=zero_shot_translations[bubble_id],
-                    matched_correction_id=correction.id, similarity_score=score,
+                    matched_correction_id=best_correction.id, similarity_score=best_score,
                     threshold_used=MEMORY_SIMILARITY_THRESHOLD,
                     model_used=ACTIVE_MODEL_NAME, key_label=zero_shot_key_label, run_id=run_id,
                     glossary_terms_used=glossary_json,

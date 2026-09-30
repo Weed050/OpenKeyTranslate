@@ -82,9 +82,9 @@ async def import_folder(data: dict, db: Session = Depends(get_db)):
 
         for root_dir, dirs, files in os.walk(actual_source_path):
 
-            dirs.sort()
+            dirs.sort(key=natural_sort_key)
 
-            pages = sorted([f for f in files if f.lower().endswith(img_extensions)])
+            pages = sorted([f for f in files if f.lower().endswith(img_extensions)], key=natural_sort_key)
 
             if pages:
                 # Define the chapter label based on the counter

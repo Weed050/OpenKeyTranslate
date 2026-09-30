@@ -89,6 +89,7 @@ DEFAULT_SETTINGS = {
     #   parameter, not a fixed constant - similarity_score is logged for
     #   every match so this can be tuned after the fact against real data.
     "memory_similarity_threshold": 0.80,
+    "memory_top_k": 3,
     # Local sentence-transformers model used to embed English source text.
     "memory_embedding_model": "all-MiniLM-L6-v2",
     # Minimum word count in the final translation before it's persisted as a
@@ -213,6 +214,7 @@ TRANSLATION_MAX_TOKENS = settings.get("translation_max_tokens", 4096)
 
 # Correction Memory
 MEMORY_SIMILARITY_THRESHOLD = settings.get("memory_similarity_threshold", 0.80)
+MEMORY_TOP_K = settings.get("memory_top_k", 3)
 MEMORY_EMBEDDING_MODEL = settings.get("memory_embedding_model", "all-MiniLM-L6-v2")
 MEMORY_MIN_WORDS = settings.get("memory_min_words", 3)
 MEMORY_AB_TEST_LOGGING = settings.get("memory_ab_test_logging", True)

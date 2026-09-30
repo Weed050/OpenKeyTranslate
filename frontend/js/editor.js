@@ -386,13 +386,19 @@ async function showPagePicker() {
     el.pagePickerBody.innerHTML = "";
     const byChapter = groupByChapter(pages);
     for (const [chapter, chapterPages] of byChapter) {
+        const processedCount = chapterPages.filter((p) => p.status === "processed").length;
+        const fullyDone = processedCount === chapterPages.length;
+
         const details = document.createElement("details");
-        details.className = "chapter-nav";
+        details.className = "page-picker-chapter";
         details.dataset.chapter = chapter;
- 
+
         const summary = document.createElement("summary");
         summary.innerHTML = `
-            <span>${escapeHtml(chapter)} (${chapterPages.length})</span>
+            <span>
+                ${fullyDone ? '<span class="chapter-done-check" title="All pages processed">&#10003;</span> ' : ""}
+                ${escapeHtml(chapter)} (${processedCount}/${chapterPages.length})
+            </span>
             <button class="copy-btn danger chapter-delete-btn" data-chapter-id="${chapterPages[0].chapter_id}" data-chapter-name="${escapeHtml(chapter)}" title="Delete this chapter and its pages">Delete chapter</button>
         `;
         details.appendChild(summary);
@@ -475,7 +481,7 @@ async function showPagePicker() {
 }
  
 function filterPagePicker(query) {
-    const chapters = el.pagePickerBody.querySelectorAll("details.chapter-nav");
+    const chapters = el.pagePickerBody.querySelectorAll("details.page-picker-chapter");
     chapters.forEach((details) => {
         let anyVisible = false;
         details.querySelectorAll(".page-picker-row").forEach((row) => {
@@ -489,7 +495,7 @@ function filterPagePicker(query) {
 }
  
 function togglePagePickerChapters(open) {
-    el.pagePickerBody.querySelectorAll("details.chapter-nav").forEach((d) => { d.open = open; });
+    el.pagePickerBody.querySelectorAll("details.page-picker-chapter").forEach((d) => { d.open = open; });
 }
  
 function groupByChapter(pages) {
@@ -739,7 +745,17 @@ async function selectBubble(index, { scroll = true, save = true } = {}) {
  
 function renderBubbleDetail() {
     if (state.selectedIndex === null) {
-        el.bubbleDetail.classList.add("hidden");
+        el.bubbleDetail.classList.remove("hidden");
+        el.bubbleDetail.innerHTML = `
+            <div class="detail-actions" style="justify-content:flex-end;">
+                <div class="detail-nav-actions">
+                    <button id="prevBtn" title="Previous page">&#8592;</button>
+                    <button id="nextBtn" title="Next page">&#8594;</button>
+                </div>
+            </div>
+        `;
+        document.getElementById("prevBtn").addEventListener("click", () => goToAdjacentPage(-1));
+        document.getElementById("nextBtn").addEventListener("click", () => goToAdjacentPage(1));
         return;
     }
  
