@@ -23,6 +23,7 @@ async function loadSettings() {
         document.getElementById("memorySimilarityInput").value = appSettings.memory_similarity_threshold ?? 0.80;
         document.getElementById("appVersionLabel").textContent = appSettings.app_version || "unknown";
         document.getElementById("memoryTopKInput").value = appSettings.memory_top_k ?? 3;
+        document.getElementById("memoryShortPhraseInput").value = appSettings.memory_short_phrase_max_words ?? 2;
     } catch (e) {
         document.getElementById("currentWorkspacePath").textContent = `Error: ${e.message}`;
     }
@@ -70,28 +71,25 @@ function flashStatus(message) {
 }
  
 document.getElementById("saveMemorySettingsBtn").addEventListener("click", async () => {
+    const status = document.getElementById("memorySettingsStatus");
     const words = parseInt(document.getElementById("memoryMinWordsInput").value, 10);
     const threshold = parseFloat(document.getElementById("memorySimilarityInput").value);
     const topK = parseInt(document.getElementById("memoryTopKInput").value, 10);
-    if (!Number.isFinite(words) || words < 0) {
-        document.getElementById("memorySettingsStatus").textContent = "Enter a number >= 0.";
-        return;
-    }
-    if (!Number.isFinite(threshold) || threshold < 0 || threshold > 1) {
-        document.getElementById("memorySettingsStatus").textContent = "Threshold must be 0.0–1.0.";
-        return;
-    }
-    if (!Number.isFinite(topK) || topK < 1) {
-        document.getElementById("memorySettingsStatus").textContent = "Top-K must be >= 1.";
-        return;
-    }
+    const shortMax = parseInt(document.getElementById("memoryShortPhraseInput").value, 10);
+    if (!Number.isFinite(words) || words < 0) { status.textContent = "Min words must be >= 0."; return; }
+    if (!Number.isFinite(threshold) || threshold < 0 || threshold > 1) { status.textContent = "Threshold must be 0.0-1.0."; return; }
+    if (!Number.isFinite(topK) || topK < 1) { status.textContent = "Top-K must be >= 1."; return; }
+    if (!Number.isFinite(shortMax) || shortMax < 0) { status.textContent = "Short phrase limit must be >= 0."; return; }
     try {
         const result = await api.settings.updateMemory({
-            memory_min_words: words, memory_similarity_threshold: threshold, memory_top_k: topK,
+            memory_min_words: words,
+            memory_similarity_threshold: threshold,
+            memory_top_k: topK,
+            memory_short_phrase_max_words: shortMax,
         });
-        document.getElementById("memorySettingsStatus").textContent = result.message;
+        status.textContent = result.message;
     } catch (e) {
-        document.getElementById("memorySettingsStatus").textContent = `Failed: ${e.message}`;
+        status.textContent = `Failed: ${e.message}`;
     }
 });
  
