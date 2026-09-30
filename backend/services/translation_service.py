@@ -20,14 +20,17 @@ Key Architectural Features:
        usage compared to translating bubbles one by one.
     3. Correction-Memory Injection: Before translating, each bubble's source
        text is checked against the project's correction history (see
-       services/memory_service.py). A close-enough past correction is
-       injected into the payload as a per-bubble "hint", nudging the model
-       toward phrasing the user has already approved for similar text.
+       services/memory_service.py). Two lanes, depending on text length:
+         - longer text: up to MEMORY_TOP_K similar past corrections are
+           injected as a per-bubble "hints" list (style examples);
+         - short text (interjections, sound effects): the user's latest
+           translation of that EXACT line is injected as "exact".
     4. Zero-Shot vs. Memory-Injected Logging: When a hint is used, the same
        bubble is additionally translated a second time without the hint,
        purely for logging (see models.models.TranslationLog). This produces
        the paired data the thesis experiment is evaluated from. Only the
-       hinted result is ever shown to the user.
+       hinted result is ever shown to the user. TranslationLog keeps only the
+       best (top-1) matched correction per bubble.
     5. Optional DB Context: project_id/page_id/db are optional. Pass them
        (from an active session) to enable correction-memory hints and A/B
        logging. Omit them for standalone runs with no DB-backed project -
@@ -41,9 +44,24 @@ from sqlalchemy.orm import Session
 
 from core.config import MEMORY_AB_TEST_LOGGING, ACTIVE_MODEL_NAME, MEMORY_SIMILARITY_THRESHOLD, MEMORY_TOP_K
 from models.models import TranslationLog
-from services.memory_service import find_top_matches
+from services.memory_service import find_top_matches, is_short_phrase
 from services.glossary_service import load_glossary, match_glossary
 from services.providers import get_provider
+
+
+def _memory_payload_fields(bubble: dict, matches: dict) -> dict:
+    """
+    Memory-related keys for one bubble's provider payload entry:
+    "exact" (one verbatim translation) for the short-phrase lane, or
+    "hints" (list of style examples, best first) for the embedding lane.
+    Empty dict when the bubble has no memory match.
+    """
+    found = matches.get(bubble["bubble_id"])
+    if not found:
+        return {}
+    if is_short_phrase(bubble["text"]):
+        return {"exact": found[0][0].final_translation}
+    return {"hints": [correction.final_translation for correction, _ in found]}
 
 
 def translate_bubbles(
@@ -54,14 +72,14 @@ def translate_bubbles(
 ) -> list[dict]:
     """
     Translate extracted speech bubble texts via the active LLM provider,
-    injecting correction-memory hints where the project has a similar past
-    correction.
+    injecting correction-memory hints where the project has similar past
+    corrections.
 
     Params:
         bubbles (list[dict]): A list of bubble dictionaries. Each dictionary must
                               contain at least 'bubble_id' and 'text'.
         project_id (int | None): Used to scope correction-memory lookups to this
-                          project (see services/memory_service.find_best_match).
+                          project (see services/memory_service.find_top_matches).
                           Memory lookup is skipped entirely if None.
         page_id (int | None): Used to tag logged TranslationLog rows with their
                           source page. Required (together with db) for logging.
@@ -82,8 +100,8 @@ def translate_bubbles(
     logging_enabled = memory_enabled and page_id is not None
 
     # 1. Look up correction-memory matches up front, before touching the LLM.
-    #    bubble_id -> (Correction, similarity_score). Skipped entirely when
-    #    no DB context was passed in (see module docstring, point 5).
+    #    bubble_id -> [(Correction, similarity_score), ...] best first. Skipped
+    #    entirely when no DB context was passed in (see module docstring, point 5).
     matches: dict[str, list[tuple]] = {}
     glossary_by_bubble: dict[str, list[dict]] = {}
     if memory_enabled:
@@ -105,7 +123,7 @@ def translate_bubbles(
         {
             "id": b["bubble_id"],
             "text": b["text"],
-            **({"hints": [m.final_translation for m, _ in matches[b["bubble_id"]]]} if b["bubble_id"] in matches else {}),
+            **_memory_payload_fields(b, matches),
             **({"glossary": glossary_by_bubble[b["bubble_id"]]} if b["bubble_id"] in glossary_by_bubble else {}),
         }
         for b in bubbles
@@ -148,15 +166,19 @@ def translate_bubbles(
         if bubble_id in matches:
             top_matches = matches[bubble_id]
             best_correction, best_score = top_matches[0]
-            for m, _ in top_matches:
-                m.reuse_count = (m.reuse_count or 0) + 1
-                db.add(m)
+            for correction, _ in top_matches:
+                correction.reuse_count = (correction.reuse_count or 0) + 1
+                db.add(correction)
+
+            # The similarity threshold only applies to the embedding lane;
+            # exact-match (short phrase) hits have no threshold.
+            threshold_used = None if is_short_phrase(b["text"]) else MEMORY_SIMILARITY_THRESHOLD
 
             log_rows.append(TranslationLog(
                 page_id=page_id, bubble_id=bubble_id, variant="memory_injected",
                 source_text=b["text"], output_text=translation,
                 matched_correction_id=best_correction.id, similarity_score=best_score,
-                threshold_used=MEMORY_SIMILARITY_THRESHOLD,
+                threshold_used=threshold_used,
                 model_used=ACTIVE_MODEL_NAME, key_label=shown_key_label, run_id=run_id,
                 glossary_terms_used=glossary_json,
             ))
@@ -166,7 +188,7 @@ def translate_bubbles(
                     page_id=page_id, bubble_id=bubble_id, variant="zero_shot",
                     source_text=b["text"], output_text=zero_shot_translations[bubble_id],
                     matched_correction_id=best_correction.id, similarity_score=best_score,
-                    threshold_used=MEMORY_SIMILARITY_THRESHOLD,
+                    threshold_used=threshold_used,
                     model_used=ACTIVE_MODEL_NAME, key_label=zero_shot_key_label, run_id=run_id,
                     glossary_terms_used=glossary_json,
                 ))

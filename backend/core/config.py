@@ -96,6 +96,7 @@ DEFAULT_SETTINGS = {
     # Correction. Below this, short interjections ("Tak", "Nie", "Aaa!")
     # embed poorly and produce noisy, over-eager similarity matches.
     "memory_min_words": 3,
+    "memory_short_phrase_max_words": 2,
     # When True, matched bubbles are translated a second time without the
     # hint (hint-free "counterfactual"), purely for A/B logging. Turn off
     # once the experiment is done to save on API calls.
@@ -217,6 +218,7 @@ MEMORY_SIMILARITY_THRESHOLD = settings.get("memory_similarity_threshold", 0.80)
 MEMORY_TOP_K = settings.get("memory_top_k", 3)
 MEMORY_EMBEDDING_MODEL = settings.get("memory_embedding_model", "all-MiniLM-L6-v2")
 MEMORY_MIN_WORDS = settings.get("memory_min_words", 3)
+MEMORY_SHORT_PHRASE_MAX_WORDS = settings.get("memory_short_phrase_max_words", 2)
 MEMORY_AB_TEST_LOGGING = settings.get("memory_ab_test_logging", True)
 
 # Environment Debugging
