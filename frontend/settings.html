@@ -57,23 +57,31 @@
             <div class="card">
                 <h2>Correction memory</h2>
                 <div class="row">
+                    <div class="text-muted">Similarity threshold for memory hints (0.0-1.0, lower = more matches)</div>
+                    <input type="text" id="memorySimilarityInput" style="max-width:80px;" inputmode="decimal">
+                </div>
+                <div class="row">
+                    <div class="text-muted">Max memory hints sent per bubble (1-3 recommended)</div>
+                    <input type="text" id="memoryTopKInput" style="max-width:80px;" inputmode="numeric">
+                </div>
+                <div class="row">
                     <div class="text-muted">Minimum words in the translation to store a correction - only for sources longer than the short-phrase limit below (0 = no minimum)</div>
                     <input type="text" id="memoryMinWordsInput" style="max-width:80px;" inputmode="numeric">
                 </div>
                 <div class="row">
-                    <div class="text-muted">Similarity threshold for memory hints (0.0-1.0, lower = more matches)</div>
-                    <input type="text" id="memorySimilarityInput" style="max-width:80px;">
-                </div>
-                <div class="row">
-                    <div class="text-muted">Max memory hints sent per bubble (1-3 recommended)</div>
-                    <input type="text" id="memoryTopKInput" style="max-width:80px;">
-                </div>
-                <div class="row">
                     <div class="text-muted">Short phrase limit: sources with this many words or fewer are matched by exact text, not embeddings (0 = off)</div>
-                    <input type="text" id="memoryShortPhraseInput" style="max-width:80px;">
+                    <input type="text" id="memoryShortPhraseInput" style="max-width:80px;" inputmode="numeric">
                 </div>
                 <button id="saveMemorySettingsBtn" class="primary">Save</button>
                 <p class="text-muted" id="memorySettingsStatus" style="margin-top:10px;"></p>
+            </div>
+
+            <div class="card">
+                <h2>OCR: ignored text</h2>
+                <p class="text-muted">Bubbles whose text matches any of these regular expressions (one per line, case-insensitive, "contains" match) are dropped before translation - watermarks, site URLs, credits. Applies to pages processed after a restart; use scripts/purge_ignored_bubbles.py for pages already processed. Example: ^\W*\d+\W*$ also drops number-only bubbles.</p>
+                <textarea id="ignorePatternsInput" class="text-mono" rows="5" spellcheck="false"></textarea>
+                <button id="saveIgnorePatternsBtn" class="primary" style="margin-top:8px;">Save</button>
+                <p class="text-muted" id="ignorePatternsStatus" style="margin-top:10px;"></p>
             </div>
  
             <div class="card">

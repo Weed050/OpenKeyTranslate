@@ -21,9 +21,10 @@ async function loadSettings() {
         document.getElementById("currentWorkspacePath").textContent = appSettings.app_root_dir;
         document.getElementById("memoryMinWordsInput").value = appSettings.memory_min_words ?? 3;
         document.getElementById("memorySimilarityInput").value = appSettings.memory_similarity_threshold ?? 0.80;
-        document.getElementById("appVersionLabel").textContent = appSettings.app_version || "unknown";
         document.getElementById("memoryTopKInput").value = appSettings.memory_top_k ?? 3;
         document.getElementById("memoryShortPhraseInput").value = appSettings.memory_short_phrase_max_words ?? 2;
+        document.getElementById("ignorePatternsInput").value = (appSettings.ocr_ignore_patterns || []).join("\n");
+        document.getElementById("appVersionLabel").textContent = appSettings.app_version || "unknown";
     } catch (e) {
         document.getElementById("currentWorkspacePath").textContent = `Error: ${e.message}`;
     }
@@ -92,6 +93,19 @@ document.getElementById("saveMemorySettingsBtn").addEventListener("click", async
         status.textContent = `Failed: ${e.message}`;
     }
 });
+
+document.getElementById("saveIgnorePatternsBtn").addEventListener("click", async () => {
+    const status = document.getElementById("ignorePatternsStatus");
+    const patterns = document.getElementById("ignorePatternsInput").value
+        .split("\n").map((line) => line.trim()).filter(Boolean);
+    try {
+        const result = await api.settings.updateIgnorePatterns({ patterns });
+        status.textContent = result.message;
+    } catch (e) {
+        status.textContent = `Failed: ${e.message}`;
+    }
+});
+ 
  
 document.getElementById("openLogFolderBtn").addEventListener("click", async () => {
     if (!appSettings.log_file_path) return;

@@ -89,6 +89,7 @@ DEFAULT_SETTINGS = {
     #   parameter, not a fixed constant - similarity_score is logged for
     #   every match so this can be tuned after the fact against real data.
     "memory_similarity_threshold": 0.80,
+    # How many similar past corrections are sent to the LLM as style hints per bubble.
     "memory_top_k": 3,
     # Local sentence-transformers model used to embed English source text.
     "memory_embedding_model": "all-MiniLM-L6-v2",
@@ -96,11 +97,22 @@ DEFAULT_SETTINGS = {
     # Correction. Below this, short interjections ("Tak", "Nie", "Aaa!")
     # embed poorly and produce noisy, over-eager similarity matches.
     "memory_min_words": 3,
+    # Sources with this many words or fewer (interjections, sound effects) are
+    # matched by EXACT normalized text instead of embeddings - see
+    # services/memory_service.is_short_phrase. 0 disables that lane.
     "memory_short_phrase_max_words": 2,
     # When True, matched bubbles are translated a second time without the
     # hint (hint-free "counterfactual"), purely for A/B logging. Turn off
     # once the experiment is done to save on API calls.
     "memory_ab_test_logging": True,
+
+    # OCR post-filter: bubbles whose text matches any of these regexes
+    # (case-insensitive, re.search) are dropped before translation - scanlation
+    # watermarks, site URLs, credits. Editable on the Settings page. See
+    # utils/ignore_filter.py.
+    "ocr_ignore_patterns": [
+        r"\b[\w-]+\.(?:com|net|org|gg|io)\b",
+    ],
 
     # Debug Flags
     "ocr_debug": True,
@@ -196,6 +208,9 @@ IOU_THRESH = settings.get("ocr_iou_thresh")
 DEDUP_WORD_THRESH = settings.get("ocr_dedup_word_thresh")
 DEDUP_GEO_THRESH = settings.get("ocr_dedup_geo_thresh")
 DEDUP_MIN_OVERLAP_PX = settings.get("ocr_dedup_min_overlap_px")
+
+# OCR ignore-list (see utils/ignore_filter.py)
+OCR_IGNORE_PATTERNS = settings.get("ocr_ignore_patterns", [])
 
 # OCR Markers
 MARKER_FONT_SCALE = settings.get("ocr_marker_font_scale")

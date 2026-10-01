@@ -46,6 +46,7 @@ export const api = {
         update: (payload) => request("/settings/", { method: "POST", body: JSON.stringify(payload) }),
         resetToDefault: () => request("/settings/reset-to-default", { method: "POST" }),
         updateMemory: (payload) => request("/settings/memory", { method: "POST", body: JSON.stringify(payload) }),
+        updateIgnorePatterns: (payload) => request("/settings/ignore-patterns", { method: "POST", body: JSON.stringify(payload) }),
     },
  
     pages: {
@@ -97,4 +98,3 @@ export const api = {
     export: (projectId) => request(`/logs/export/${projectId}`),
     },
 };
- 
