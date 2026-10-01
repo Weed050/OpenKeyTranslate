@@ -3,6 +3,7 @@
 
 from fastapi import APIRouter, HTTPException
 import os
+import re
 import json
 import shutil
 from models.schemas import SettingsSchema
@@ -132,3 +133,30 @@ async def update_memory_settings(payload: dict):
         json.dump(current_settings, file, indent=4, ensure_ascii=False)
 
     return {"message": "Memory settings saved. Restart the application to apply changes.", "settings": current_settings}
+
+
+@router.post("/ignore-patterns")
+async def update_ignore_patterns(payload: dict):
+    """
+    Replace the list of regexes that mark OCR bubbles as not worth translating
+    (watermarks, site URLs, credits - see utils/ignore_filter.py). Each pattern
+    is validated before anything is written, so one typo can never break OCR.
+    """
+    raw = payload.get("patterns", [])
+    if not isinstance(raw, list):
+        raise HTTPException(status_code=400, detail="patterns must be a list of strings")
+
+    patterns = [str(p).strip() for p in raw if str(p).strip()]
+    for pattern in patterns:
+        try:
+            re.compile(pattern)
+        except re.error as e:
+            raise HTTPException(status_code=400, detail=f"Invalid regex {pattern!r}: {e}")
+
+    current_settings = load_settings()
+    current_settings["ocr_ignore_patterns"] = patterns
+
+    with open(SETTINGS_FILE, "w", encoding="utf-8") as file:
+        json.dump(current_settings, file, indent=4, ensure_ascii=False)
+
+    return {"message": f"Saved {len(patterns)} pattern(s). Restart the application to apply changes.", "count": len(patterns)}

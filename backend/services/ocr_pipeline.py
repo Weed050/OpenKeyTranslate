@@ -64,6 +64,7 @@ from utils.draw_debug import make_marker_record
 from utils.handle_duplicates import smart_deduplicate_by_lines, remove_slice_boundary_duplicates
 from utils.merge_boxes import build_text_lines, group_lines_into_bubbles, \
     filter_noise_lines, filter_noise_bubbles
+from utils.ignore_filter import filter_ignored_bubbles
 from utils.marker import (
     inject_marker, resolve_marker_state, detect_rotation,
     correct_boxes_by_angle, remove_marker, pad_crop_right
