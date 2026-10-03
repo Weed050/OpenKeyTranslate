@@ -56,6 +56,13 @@ async def open_path(payload: OpenPathRequest):
     return {"message": "Opened"}
 
 
+@router.get("/health")
+async def health():
+    """Config/connectivity self-check (see core/startup_checks.py) - the frontend shows a banner for error/warn."""
+    from core.startup_checks import run_checks
+    return {"issues": run_checks(check_network=True)}
+
+
 @router.get("/tail-log")
 async def tail_log(lines: int = 200, errors_only: bool = False):
     """Last N lines of today's log file (errors.log when errors_only, else app.log) - for the in-app log viewer."""

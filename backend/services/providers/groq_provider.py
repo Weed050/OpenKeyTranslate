@@ -23,7 +23,7 @@ below (contrast with GeminiProvider, which enforces a real schema).
 
 import json
 import time
-from groq import Groq, RateLimitError, InternalServerError
+from groq import Groq, RateLimitError, InternalServerError, APIConnectionError
 
 from .base import TranslationProvider
 from .prompts import SYSTEM_PROMPT
@@ -88,6 +88,19 @@ class GroqProvider(TranslationProvider):
                     print(f"[GROQ] key '{label}' rate-limited (429) — trying next key in pool...")
                     self._exhausted_labels.add(label)
                     break  # move to the next key, retrying this one won't help
+
+                except APIConnectionError as e:
+                    # DNS / no internet / timeout - same for every key: retry briefly, then stop clearly.
+                    if attempt < _SERVER_ERROR_RETRIES:
+                        wait = _SERVER_ERROR_BACKOFF_SECONDS * (attempt + 1)
+                        print(f"[GROQ] network error ({type(e).__name__}) - retry "
+                              f"{attempt + 1}/{_SERVER_ERROR_RETRIES} in {wait}s...")
+                        time.sleep(wait)
+                        continue
+                    raise RuntimeError(
+                        f"Can't reach the Groq API ({type(e).__name__}). "
+                        f"Check internet / DNS / VPN / firewall, then use Retranslate."
+                    ) from e
 
                 except InternalServerError:
                     if attempt < _SERVER_ERROR_RETRIES:

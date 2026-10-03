@@ -46,6 +46,19 @@ async def add_term(project_id: int, payload: dict, db: Session = Depends(get_db)
     if not source_term or not target_term:
         raise HTTPException(status_code=400, detail="source_term and target_term are required")
 
+    duplicate = (
+        db.query(GlossaryTerm)
+        .filter(GlossaryTerm.project_id == project_id)
+        .all()
+    )
+    for existing_term in duplicate:
+        if existing_term.source_term.strip().lower() == source_term.lower():
+            raise HTTPException(
+                status_code=409,
+                detail=f"'{existing_term.source_term}' is already in the glossary "
+                       f"(-> '{existing_term.target_term}'). Delete it first to change the translation.",
+            )
+
     term = GlossaryTerm(
         project_id=project_id, source_term=source_term, target_term=target_term,
         auto_detected=payload.get("auto_detected", False), occurrences=payload.get("occurrences", 1),

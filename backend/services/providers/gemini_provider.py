@@ -25,6 +25,7 @@ directly instead of defensively parsing a raw string.
 
 import json
 import time
+import httpx
 from pydantic import BaseModel
 from google import genai
 from google.genai import types
@@ -105,6 +106,21 @@ class GeminiProvider(TranslationProvider):
                         self._exhausted_labels.add(label)
                         break
                     raise  # non-quota client error - don't retry or rotate
+
+                except (httpx.TransportError, OSError) as e:
+                    # DNS failure ("[Errno 11001] getaddrinfo failed"), no internet, VPN/firewall, timeout.
+                    # Identical for every key in the pool -> retry briefly, then stop with a clear message
+                    # instead of rotating through (and "using up") all keys.
+                    if attempt < _SERVER_ERROR_RETRIES:
+                        wait = _SERVER_ERROR_BACKOFF_SECONDS * (attempt + 1)
+                        print(f"[GEMINI] network error ({type(e).__name__}: {e}) - retry "
+                              f"{attempt + 1}/{_SERVER_ERROR_RETRIES} in {wait}s...")
+                        time.sleep(wait)
+                        continue
+                    raise RuntimeError(
+                        f"Can't reach the Gemini API ({type(e).__name__}: {e}). "
+                        f"Check internet / DNS / VPN / firewall, then use Retranslate."
+                    ) from e
 
                 except genai_errors.ServerError:
                     if attempt < _SERVER_ERROR_RETRIES:

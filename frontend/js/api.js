@@ -35,9 +35,14 @@ export const api = {
         selectFolder: () => request("/projects/select-folder"),
         import: (path, projectName) =>
             request("/projects/import", { method: "POST", body: JSON.stringify({ path, projectName }) }),
-        importChapters: (projectId, path) =>
-            request(`/projects/${projectId}/import-chapters`, { method: "POST", body: JSON.stringify({ path }) }),
+        // add chapters: scan -> user picks/renames in a dialog -> import exactly that selection
+        previewChapters: (projectId, path) =>
+            request(`/projects/${projectId}/chapters/preview`, { method: "POST", body: JSON.stringify({ path }) }),
+        importChapterSelection: (projectId, payload) =>
+            request(`/projects/${projectId}/chapters/import`, { method: "POST", body: JSON.stringify(payload) }),
         deleteChapter: (chapterId) => request(`/projects/chapters/${chapterId}`, { method: "DELETE" }),
+        deleteChapters: (chapterIds) =>
+            request(`/projects/chapters/delete-many`, { method: "POST", body: JSON.stringify({ chapter_ids: chapterIds }) }),
         delete: (id) => request(`/projects/${id}`, { method: "DELETE" }),
     },
  
@@ -65,6 +70,7 @@ export const api = {
     },
  
     system: {
+        health: () => request("/system/health"),
         openPath: (path) => request("/system/open-path", { method: "POST", body: JSON.stringify({ path }) }),
         tailLog: (lines = 200, errorsOnly = false) =>
             request(`/system/tail-log?lines=${lines}&errors_only=${errorsOnly}`),

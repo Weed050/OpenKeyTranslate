@@ -153,3 +153,29 @@
 }
 .copy-btn:hover { color: var(--text-primary); border-color: var(--border-strong); }
  
+/* config / connectivity banner (js/nav.js renderHealthBanner) */
+.health-banner {
+  position: fixed;
+  top: 10px;
+  right: 10px;
+  z-index: 60;
+  width: min(440px, calc(100vw - 20px));
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.health-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 10px;
+  font-size: 12px;
+  color: var(--text-primary);
+  background: var(--bg-panel-2);
+  border: 1px solid var(--border-strong);
+  border-left-width: 3px;
+  border-radius: var(--radius-sm);
+}
+.health-row.error { border-left-color: var(--danger); }
+.health-row.warn { border-left-color: #d9a441; }

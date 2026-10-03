@@ -20,6 +20,7 @@ from models.models import Project, Chapter, Page
 from models.schemas import ProjectSchema
 from core.database import get_db
 from core.config import WORKSPACE_DIR
+from services.chapter_import import auto_selections, import_selected
 
 # Initialize the router for project-related endpoints
 router = APIRouter(
@@ -52,11 +53,13 @@ async def select_folder():
 async def import_folder(data: dict, db: Session = Depends(get_db)):
     """
     Import a folder from the local filesystem to create a new project.
-    Copies images, normalizes filenames, and creates corresponding database entries.
+
+    Chapter labels come from the SOURCE FOLDER NAMES (chapter_13_5 -> Chapter_13.5),
+    not from a counter - see utils/chapter_labels.py and services/chapter_import.py.
     """
 
     actual_source_path = data.get("path")
-    project_name = data.get("projectName")
+    project_name = (data.get("projectName") or "").strip()
 
     if not actual_source_path or not project_name:
         raise HTTPException(status_code=400, detail="Missing path or project name")
@@ -65,69 +68,36 @@ async def import_folder(data: dict, db: Session = Depends(get_db)):
     raw_dir = os.path.join(target_project_path, "raw")
     processed_dir = os.path.join(target_project_path, "processed")
 
-    try:
-        if os.path.exists(target_project_path):
-            raise HTTPException(status_code=400, detail="Project already exists in workspace")
+    # These checks MUST stay outside the try/except below. Inside it, the 400 was caught by
+    # `except Exception`, which then rmtree'd target_project_path - i.e. re-using an existing
+    # project name DELETED that project's files from disk.
+    if db.query(Project).filter(Project.name == project_name).first() or os.path.exists(target_project_path):
+        raise HTTPException(status_code=400, detail="Project already exists in workspace")
+    if not os.path.isdir(actual_source_path):
+        raise HTTPException(status_code=400, detail="Source folder not found")
 
+    created_project_dir = False
+    try:
         os.makedirs(raw_dir, exist_ok=True)
         os.makedirs(processed_dir, exist_ok=True)
+        created_project_dir = True  # from here on it is OUR folder and safe to clean up
 
         new_project = Project(name=project_name, workspace_path=target_project_path)
         db.add(new_project)
         db.commit()
         db.refresh(new_project)
 
-        img_extensions = ('.jpg', '.jpeg', '.png', '.webp')
-        chapter_counter = 0
-
-        for root_dir, dirs, files in os.walk(actual_source_path):
-
-            dirs.sort(key=natural_sort_key)
-
-            pages = sorted([f for f in files if f.lower().endswith(img_extensions)], key=natural_sort_key)
-
-            if pages:
-                # Define the chapter label based on the counter
-                chapter_label = f"Chapter_{chapter_counter}"
-
-                chapter_raw_dir = os.path.join(raw_dir, chapter_label)
-                chapter_processed_dir = os.path.join(processed_dir, chapter_label)
-
-                os.makedirs(chapter_raw_dir, exist_ok=True)
-                os.makedirs(chapter_processed_dir, exist_ok=True)
-
-                # Use chapter_label as the chapter chapter_name
-                new_chapter = Chapter(
-                    project_id=new_project.id,
-                    number=chapter_label,  # e.g., Chapter_0
-                    title=f"Chapter {chapter_counter}",
-                    raw_path=chapter_raw_dir,
-                    processed_path=chapter_processed_dir
-                )
-                db.add(new_chapter)
-                db.flush()
-
-                for indx, page_file in enumerate(pages):
-                    ext = os.path.splitext(page_file)[1].lower()
-                    standard_filename = f"page_{indx + 1:03d}{ext}"
-
-                    src_file_path = os.path.join(root_dir, page_file)
-                    dest_file_path = os.path.join(chapter_raw_dir, standard_filename)
-
-                    shutil.copy2(src_file_path, dest_file_path)
-
-                    new_page = Page(chapter_id=new_chapter.id, file_name=standard_filename, order=indx + 1)
-                    db.add(new_page)
-
-                chapter_counter += 1
-
-        db.commit()
-        return {"message": "Import successful", "id": new_project.id}
+        result = import_selected(db, new_project, auto_selections(actual_source_path), allow_duplicates=True)
+        return {"message": "Import successful", "id": new_project.id, **result}
 
     except Exception as e:
         db.rollback()
-        if 'target_project_path' in locals() and os.path.exists(target_project_path):
-            shutil.rmtree(target_project_path)
+        if created_project_dir and os.path.exists(target_project_path):
+            shutil.rmtree(target_project_path, ignore_errors=True)
+        leftover = db.query(Project).filter(Project.name == project_name).first()
+        if leftover:
+            db.delete(leftover)
+            db.commit()
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -221,93 +191,19 @@ def reconcile_projects_from_disk(db: Session):
     db.commit()
 
 
-@router.post("/{project_id}/import-chapters")
-async def import_additional_chapters(project_id: int, data: dict, db: Session = Depends(get_db)):
-    """Add new chapters to an existing project from a folder on disk. Doesn't touch existing chapters."""
-    project = db.query(Project).filter(Project.id == project_id).first()
-    if not project:
-        raise HTTPException(status_code=404, detail="Project not found")
-
-    actual_source_path = data.get("path")
-    if not actual_source_path or not os.path.isdir(actual_source_path):
-        raise HTTPException(status_code=400, detail="Missing or invalid source path")
-
-    raw_dir = os.path.join(project.workspace_path, "raw")
-    processed_dir = os.path.join(project.workspace_path, "processed")
-    existing_numbers = {c.number for c in project.chapters}
-    existing_indices = [int(m.group(1)) for c in existing_numbers if (m := re.match(r"Chapter_(\d+)", c))]
-    chapter_counter = max(existing_indices, default=-1) + 1
-
-    img_extensions = ('.jpg', '.jpeg', '.png', '.webp', '.jfif', '.bmp', '.tif', '.tiff')  # .gif/.avif - risky - OpenCV (cv2.imdecode) in pages.py/ocr_pipeline.py cannot handle these properly
-    added_chapters = added_pages = 0
-    skipped_folders = []
-
-    for root_dir, dirs, files in os.walk(actual_source_path):
-        dirs.sort(key=natural_sort_key)
-
-        candidate_files = [f for f in files if f.lower().endswith(img_extensions)]
-
-        if not candidate_files and files:
-            # Folder contains files, but none match the supported formats
-            unsupported = sorted({os.path.splitext(f)[1].lower() for f in files if os.path.splitext(f)[1]})
-            skipped_folders.append({
-                "folder": os.path.relpath(root_dir, actual_source_path) or ".",
-                "extensions_found": unsupported,
-            })
-            continue
-
-        pages = sorted(
-            candidate_files,
-            key=lambda f: (os.path.getmtime(os.path.join(root_dir, f)), natural_sort_key(f))
-        )
-        if not pages:
-            continue
-
-        chapter_label = f"Chapter_{chapter_counter}"
-        chapter_raw_dir = os.path.join(raw_dir, chapter_label)
-        chapter_processed_dir = os.path.join(processed_dir, chapter_label)
-        os.makedirs(chapter_raw_dir, exist_ok=True)
-        os.makedirs(chapter_processed_dir, exist_ok=True)
-
-        new_chapter = Chapter(
-            project_id=project.id,
-            number=chapter_label,
-            title=f"Chapter {chapter_counter}",
-            raw_path=chapter_raw_dir,
-            processed_path=chapter_processed_dir,
-        )
-        db.add(new_chapter)
-        db.flush()
-
-        for indx, page_file in enumerate(pages):
-            ext = os.path.splitext(page_file)[1].lower()
-            standard_filename = f"page_{indx + 1:03d}{ext}"
-            src_file_path = os.path.join(root_dir, page_file)
-            dest_file_path = os.path.join(chapter_raw_dir, standard_filename)
-            shutil.copy2(src_file_path, dest_file_path)
-            new_page = Page(chapter_id=new_chapter.id, file_name=standard_filename, order=indx + 1)
-            db.add(new_page)
-            added_pages += 1
-
-        chapter_counter += 1
-        added_chapters += 1
-
+@router.delete("/chapters/{chapter_id}")
+async def delete_chapter(chapter_id: int, db: Session = Depends(get_db)):
+    """Delete one chapter: DB rows + its raw/ and processed/ folders. (Bulk variant: routers/chapters.py.)"""
+    chapter = db.query(Chapter).filter(Chapter.id == chapter_id).first()
+    if not chapter:
+        raise HTTPException(status_code=404, detail="Chapter not found")
+    workspace = chapter.project.workspace_path
+    for base in ("raw", "processed"):
+        shutil.rmtree(os.path.join(workspace, base, chapter.number), ignore_errors=True)
+    db.delete(chapter)
     db.commit()
+    return {"message": "Chapter deleted"}
 
-    message = f"Added {added_chapters} chapter(s), {added_pages} page(s)."
-    if skipped_folders:
-        exts = sorted({e for sf in skipped_folders for e in sf["extensions_found"]})
-        lines = [f"- {sf['folder']} ({', '.join(sf['extensions_found']) or 'no extension'})" for sf in
-                 skipped_folders]
-        message += (
-                f"\n\nSkipped {len(skipped_folders)} folder(s) — unsupported format: {', '.join(exts)}.\n"
-                + "\n".join(lines)
-                + f"\n\nSupported formats: {', '.join(img_extensions)}"
-        )
-
-    return {
-        "message": message,
-        "chapters_added": added_chapters,
-        "pages_added": added_pages,
-        "skipped_folders": skipped_folders,
-    }
+# NOTE: the old POST /{project_id}/import-chapters is removed on purpose. It copied EVERYTHING from the
+# chosen folder, numbered chapters with a counter and never checked for duplicates. Use
+# POST /projects/{id}/chapters/preview + /chapters/import (routers/chapters.py).

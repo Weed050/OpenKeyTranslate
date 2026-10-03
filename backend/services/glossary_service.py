@@ -29,10 +29,14 @@ def load_glossary(project_id: int, db: Session) -> list[GlossaryTerm]:
 
 
 def match_glossary(source_text: str, terms: list[GlossaryTerm]) -> list[dict]:
-    """Return every term whose source_term appears (whole-word, case-insensitive) in the text."""
+    """
+    Return every term whose source_term appears (whole-word, case-insensitive) in the text.
+    English plural / possessive endings still count as the same word (WYVERN matches
+    WYVERNS, WYVERN'S, WYVERNES) - the LLM is told to inflect the Polish target itself.
+    """
     matches = []
     for t in terms:
-        if re.search(rf"\b{re.escape(t.source_term)}\b", source_text, re.IGNORECASE):
+        if re.search(rf"\b{re.escape(t.source_term)}(?:['\u2019]?s|es)?\b", source_text, re.IGNORECASE):
             matches.append({"source_term": t.source_term, "target_term": t.target_term})
     return matches
 
