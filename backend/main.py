@@ -22,11 +22,13 @@ setup_logging()  # capture stdout/stderr to a rotating log file before anything 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
-from routers import projects, corrections, pages, logs, settings, system, glossary
+from routers import projects, corrections, pages, logs, settings, system, glossary, chapters
 from routers.projects import reconcile_projects_from_disk
+from services.reconcile import reconcile_chapters
 import uvicorn
 from core.database import init_db, SessionLocal
 from services.memory_service import warm_up_embedder
+from core.startup_checks import log_startup_report
 
 
 @asynccontextmanager
@@ -41,9 +43,12 @@ async def lifespan(app: FastAPI):
     init_db()
     print("[LIFECYCLE] Database is ready and operational.")
 
+    log_startup_report()  # missing API key / unreachable API / bad settings -> visible in app.log + /system/health
+
     db = SessionLocal()
     try:
         reconcile_projects_from_disk(db)
+        reconcile_chapters(db)  # chapter folders added/removed on disk by hand -> DB follows (see services/reconcile.py)
     finally:
         db.close()
 
@@ -73,6 +78,7 @@ app.add_middleware(
 
 # API Routes Mount Points
 app.include_router(projects.router)
+app.include_router(chapters.router)
 app.include_router(corrections.router)
 app.include_router(pages.router)
 app.include_router(logs.router)

@@ -12,9 +12,50 @@
  
 import { api } from "./api.js";
  
+/**
+ * Small fixed banner for config/connectivity problems reported by GET /system/health
+ * (missing API key, API host unreachable, ...). Dismissal is remembered per session.
+ */
+async function renderHealthBanner() {
+    if (document.getElementById("healthBanner")) return;
+    let issues;
+    try {
+        issues = (await api.system.health()).issues.filter((i) => i.level === "error" || i.level === "warn");
+    } catch {
+        return; // backend down: the rest of the page already shows its own errors
+    }
+    const dismissed = new Set(JSON.parse(sessionStorage.getItem("okt-health-dismissed") || "[]"));
+    issues = issues.filter((i) => !dismissed.has(i.code));
+    if (!issues.length) return;
+
+    const banner = document.createElement("div");
+    banner.id = "healthBanner";
+    banner.className = "health-banner";
+    issues.forEach((i) => {
+        const row = document.createElement("div");
+        row.className = `health-row ${i.level}`;
+        const text = document.createElement("span");
+        text.textContent = i.message;
+        const close = document.createElement("button");
+        close.className = "icon-btn";
+        close.textContent = "\u00d7";
+        close.title = "Dismiss for this session";
+        close.addEventListener("click", () => {
+            dismissed.add(i.code);
+            sessionStorage.setItem("okt-health-dismissed", JSON.stringify([...dismissed]));
+            row.remove();
+            if (!banner.children.length) banner.remove();
+        });
+        row.append(text, close);
+        banner.appendChild(row);
+    });
+    document.body.appendChild(banner);
+}
+
 export async function renderSidebar(currentProjectId) {
     const activeEl = document.getElementById("sidebarActive");
     if (!activeEl) return;
+    renderHealthBanner();
  
     const archivedSection = document.getElementById("sidebarArchivedSection");
     const archivedEl = document.getElementById("sidebarArchived");

@@ -323,6 +323,7 @@ def process_image(image_bgr: np.ndarray) -> dict:
     grouped_lines = filter_noise_lines(grouped_lines)
     bubbles = group_lines_into_bubbles(grouped_lines)
     bubbles = filter_noise_bubbles(bubbles)
+    bubbles = filter_ignored_bubbles(bubbles)  # watermarks / URLs from settings.json -> ocr_ignore_patterns
 
     return {
         "items": items,

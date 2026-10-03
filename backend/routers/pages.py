@@ -51,6 +51,7 @@ async def list_pages(project_id: int, include_excluded: bool = False, db: Sessio
     return [
         {
             "page_id": page.id,
+            "chapter_id": chapter.id,
             "chapter": chapter.number,
             "file_name": page.file_name,
             "order": page.order,
@@ -287,10 +288,22 @@ def _process_page_pipeline(page_id: int) -> dict:
 
         ocr_result = process_image(image)
 
+        # A translation failure (no internet / DNS, exhausted keys, API outage) must NOT throw away
+        # minutes of GPU OCR work: keep the bubbles with empty translations, mark the page processed
+        # and report the error - the editor shows "(no AI translation)" and its Retranslate button
+        # re-runs ONLY the translation later.
+        translation_error = None
         if TRANSLATION_ON:
-            ocr_result["bubbles"] = translate_bubbles(
-                ocr_result["bubbles"], project_id=page.chapter.project_id, page_id=page.id, db=db,
-            )
+            try:
+                ocr_result["bubbles"] = translate_bubbles(
+                    ocr_result["bubbles"], project_id=page.chapter.project_id, page_id=page.id, db=db,
+                )
+            except Exception as e:
+                translation_error = f"{type(e).__name__}: {e}"
+                print(f"[PIPELINE] page {page_id}: translation FAILED, OCR result kept -> {translation_error}")
+                db.rollback()
+                for b in ocr_result["bubbles"]:
+                    b.setdefault("translation", "")
 
         os.makedirs(paths["out_dir"], exist_ok=True)
         save_ocr_json(paths["out_dir"], paths["file_base_name"], ocr_result)
@@ -301,7 +314,7 @@ def _process_page_pipeline(page_id: int) -> dict:
         page.status = "processed"
         db.commit()
 
-        return {"page_id": page_id, "bubble_count": len(ocr_result["bubbles"])}
+        return {"page_id": page_id, "bubble_count": len(ocr_result["bubbles"]), "translation_error": translation_error}
     except Exception:
         page = db.query(Page).filter(Page.id == page_id).first()
         if page:
@@ -331,7 +344,10 @@ def process_page(page_id: int, db: Session = Depends(get_db)):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Pipeline failed: {e}")
 
-    return {"message": "Page processed", **result}
+    message = "Page processed"
+    if result.get("translation_error"):
+        message += " - BUT translation failed (OCR kept). Fix the connection/keys, then click Retranslate."
+    return {"message": message, **result}
 
 
 @router.post("/{page_id}/process-async")

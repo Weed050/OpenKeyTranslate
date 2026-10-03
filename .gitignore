@@ -3,6 +3,7 @@
 keys.json
 config_private.json
 settings.json
+settings.json.bak
 
 # Pliki systemowe i tymczasowe
 __pycache__/

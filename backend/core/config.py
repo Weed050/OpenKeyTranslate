@@ -3,6 +3,8 @@
 
 import os
 import json
+import copy
+import shutil
 
 """
 Configuration module for OpenKeyTranslate.
@@ -144,39 +146,75 @@ def _migrate_provider_keys(settings_dict: dict) -> bool:
     return changed
 
 
+def _deep_fill(current: dict, defaults: dict) -> bool:
+    """
+    Add keys that exist in `defaults` but not in `current`, recursively through dicts.
+    Never overwrites a value the user already has, never touches lists (e.g. provider key pools).
+    :return: True if anything was added.
+    """
+    changed = False
+    for key, value in defaults.items():
+        if key not in current:
+            current[key] = copy.deepcopy(value)
+            changed = True
+        elif isinstance(value, dict) and isinstance(current[key], dict):
+            if _deep_fill(current[key], value):
+                changed = True
+    return changed
+
+
+def save_settings(data: dict) -> None:
+    """
+    Atomic write: temp file -> fsync -> os.replace, after copying the previous file to settings.json.bak.
+    A crash mid-write can no longer leave a half-written settings.json (= lost API keys).
+    """
+    tmp_path = SETTINGS_FILE + ".tmp"
+    with open(tmp_path, "w", encoding="utf-8") as file:
+        json.dump(data, file, indent=4, ensure_ascii=False)
+        file.flush()
+        os.fsync(file.fileno())
+    if os.path.exists(SETTINGS_FILE):
+        shutil.copy2(SETTINGS_FILE, SETTINGS_FILE + ".bak")
+    os.replace(tmp_path, SETTINGS_FILE)
+
+
+def _read_json(path: str) -> dict:
+    with open(path, "r", encoding="utf-8") as file:
+        return json.load(file)
+
+
 def load_settings():
     """
     Load settings from the JSON file.
 
-    Creates the file with defaults if missing, automatically migrates any
-    new keys added in application updates, and upgrades the providers
-    section to the multi-key pool shape (see _migrate_provider_keys).
+    - Missing file: created from DEFAULT_SETTINGS.
+    - Existing file: NEVER overwritten with defaults. Keys added in newer app versions are filled in
+      (recursively - new nested options too) and the old provider single-key shape is upgraded; the
+      previous file is kept as settings.json.bak whenever that rewrites it.
+    - Unreadable / corrupt file: falls back to settings.json.bak, otherwise stops with a clear error
+      (it does NOT silently replace your keys with an empty template).
     """
-
-    # Create the config file with defaults if it doesn't exist
     if not os.path.exists(SETTINGS_FILE):
-        with open(SETTINGS_FILE, "w", encoding="utf-8") as file:
-            json.dump(DEFAULT_SETTINGS, file, indent=4)
-        return DEFAULT_SETTINGS
+        save_settings(copy.deepcopy(DEFAULT_SETTINGS))
+        return copy.deepcopy(DEFAULT_SETTINGS)
 
-    # Load existing configuration
-    with open(SETTINGS_FILE, "r", encoding="utf-8") as file:
-        current_settings = json.load(file)
+    try:
+        current_settings = _read_json(SETTINGS_FILE)
+    except (json.JSONDecodeError, OSError) as e:
+        backup = SETTINGS_FILE + ".bak"
+        if not os.path.exists(backup):
+            raise RuntimeError(f"settings.json is unreadable ({e}) and there is no settings.json.bak. "
+                               f"Fix or delete {SETTINGS_FILE}.") from e
+        print(f"[CONFIG] settings.json unreadable ({e}) - restoring settings.json.bak")
+        current_settings = _read_json(backup)
+        save_settings(current_settings)
 
-    # Self-healing: Merge missing default keys (exmpl: after an app update)
-    updated = False
-    for key, value in DEFAULT_SETTINGS.items():
-        if key not in current_settings:
-            current_settings[key] = value
-            updated = True
-
+    updated = _deep_fill(current_settings, DEFAULT_SETTINGS)
     if _migrate_provider_keys(current_settings):
         updated = True
 
-    # Save back to file if migration occurred
     if updated:
-        with open(SETTINGS_FILE, "w", encoding="utf-8") as file:
-            json.dump(current_settings, file, indent=4)
+        save_settings(current_settings)
 
     return current_settings
 

@@ -7,7 +7,7 @@ import re
 import json
 import shutil
 from models.schemas import SettingsSchema
-from core.config import APP_ROOT_DIR, SETTINGS_FILE, load_settings, get_default_app_root, APP_VERSION, DATABASE_PATH
+from core.config import APP_ROOT_DIR, load_settings, save_settings, get_default_app_root, APP_VERSION, DATABASE_PATH
 
 """
 API Router - right now used for managing application settings and data migration.
@@ -30,6 +30,13 @@ def get_dir_size_mb(path):
 async def get_settings():
     """Retrieve the current application settings."""
     data = load_settings()
+
+    # API keys never leave the backend: with CORS open to any origin (see main.py) this endpoint would
+    # otherwise hand them to any web page the browser opens. Only the last 4 chars are shown.
+    for provider_cfg in data.get("providers", {}).values():
+        for key_entry in provider_cfg.get("keys", []):
+            if key_entry.get("api_key"):
+                key_entry["api_key"] = "\u2022\u2022\u2022\u2022" + key_entry["api_key"][-4:]
 
     # Explicitly default the migration flag to False for the UI
     data["migrate_data"] = False
@@ -95,8 +102,7 @@ async def update_settings(new_settings: SettingsSchema):
     current_settings["source_lang"] = new_settings.source_lang
     current_settings["target_lang"] = new_settings.target_lang
 
-    with open(SETTINGS_FILE, "w", encoding="utf-8") as file:
-        json.dump(current_settings, file, indent=4, ensure_ascii=False)
+    save_settings(current_settings)
 
     return {"message": f"{migration_msg} Please restart the application to apply changes."}
 
@@ -129,8 +135,7 @@ async def update_memory_settings(payload: dict):
     if "memory_short_phrase_max_words" in payload:
         current_settings["memory_short_phrase_max_words"] = max(0, int(payload["memory_short_phrase_max_words"]))
 
-    with open(SETTINGS_FILE, "w", encoding="utf-8") as file:
-        json.dump(current_settings, file, indent=4, ensure_ascii=False)
+    save_settings(current_settings)
 
     return {"message": "Memory settings saved. Restart the application to apply changes.", "settings": current_settings}
 
@@ -156,7 +161,6 @@ async def update_ignore_patterns(payload: dict):
     current_settings = load_settings()
     current_settings["ocr_ignore_patterns"] = patterns
 
-    with open(SETTINGS_FILE, "w", encoding="utf-8") as file:
-        json.dump(current_settings, file, indent=4, ensure_ascii=False)
+    save_settings(current_settings)
 
     return {"message": f"Saved {len(patterns)} pattern(s). Restart the application to apply changes.", "count": len(patterns)}
