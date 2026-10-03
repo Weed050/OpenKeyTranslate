@@ -392,13 +392,22 @@ async function showPagePicker() {
         const details = document.createElement("details");
         details.className = "page-picker-chapter";
         details.dataset.chapter = chapter;
+        details.name = "chapter-accordion";
+
+        details.addEventListener("toggle", (e) => {
+            if (details.open) {
+                setTimeout(() => {
+                    details.scrollIntoView({ behavior: "smooth", block: "start" });
+                }, 120);
+            }
+        });
 
         const summary = document.createElement("summary");
         summary.innerHTML = `
             <span style="display:flex; align-items:center; gap:8px;">
-                <input type="checkbox" class="chapter-select" data-chapter-id="${chapterPages[0].chapter_id}" data-chapter-name="${escapeHtml(chapter)}" title="Select for bulk delete">
                 ${fullyDone ? '<span class="chapter-done-check" title="All pages processed">&#10003;</span> ' : ""}
                 ${escapeHtml(chapter)} (${processedCount}/${chapterPages.length})
+                <input type="checkbox" class="chapter-select" data-chapter-id="${chapterPages[0].chapter_id}" data-chapter-name="${escapeHtml(chapter)}" title="Select for bulk delete">
             </span>
             <button class="copy-btn danger chapter-delete-btn" data-chapter-id="${chapterPages[0].chapter_id}" data-chapter-name="${escapeHtml(chapter)}" title="Delete this chapter and its pages">Delete chapter</button>
         `;
@@ -418,25 +427,28 @@ async function showPagePicker() {
         });
  
         const card = document.createElement("div");
-        card.className = "card";
-        card.style.margin = "8px 0 16px";
+        card.className = "card page-picker-grid";
+        card.style.margin = "8px 0 0px";
         chapterPages.sort((a, b) => a.order - b.order);
         chapterPages.forEach((p) => {
             const isExcluded = p.status === "excluded";
  
             const row = document.createElement("div");
-            row.className = "row page-picker-row";
+            row.className = "page-picker-row";
             row.dataset.filename = p.file_name.toLowerCase();
             row.style.opacity = isExcluded ? "0.55" : "1";
  
             const link = document.createElement("a");
             link.href = `editor.html?project=${state.projectId}&page=${p.page_id}`;
-            link.style.display = "flex";
+            link.style.alignItems = "center";
+            link.style.justifyContent = "space-between";
             link.style.flex = "1";
+            link.style.minWidth = "0";
             link.style.textDecoration = "none";
+            link.title = p.file_name;
             link.innerHTML = `
-                <span style="color: var(--text-primary);">${escapeHtml(p.file_name)}</span>
-                <span class="badge" data-status="${escapeHtml(p.status)}" style="margin-left:8px;">${escapeHtml(p.status)}</span>
+                <span style="color: var(--text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${escapeHtml(p.file_name)}</span>
+                <span class="badge" data-status="${escapeHtml(p.status)}" style="margin-left:8px; flex-shrink: 0;">${escapeHtml(p.status)}</span>
             `;
             row.appendChild(link);
  
@@ -1163,4 +1175,23 @@ function showToast(message, ms = 1800) {
     clearTimeout(showToast._t);
     showToast._t = setTimeout(() => el.saveToast.classList.remove("show"), ms);
 }
- 
+
+const scrollBtn = document.getElementById('scrollToTopBtn');
+const picker = document.getElementById('pagePicker');
+
+if (scrollBtn && picker) {
+    picker.addEventListener('scroll', () => {
+        if (picker.scrollTop > 150) {
+            scrollBtn.classList.add('visible');
+        } else {
+            scrollBtn.classList.remove('visible');
+        }
+    });
+    
+    scrollBtn.addEventListener('click', () => {
+        picker.scrollTo({
+            top: 0,
+            behavior: 'smooth'
+        });
+    });
+}
