@@ -36,6 +36,10 @@ they appear, inflected as Polish grammar requires (case, number, gender)
 but never replaced with a different word. This is stricter than "hints" -
 glossary terms are not a style suggestion, they are fixed.
 
+Some items may have "context_only": true. They are NEIGHBOURING bubbles supplied only so you can understand
+the scene (who speaks, a sentence continued across bubbles). Do NOT translate them and do NOT include them in
+the output - return translations ONLY for items without "context_only".
+
 Return ONLY a JSON object containing a "translations" key with an array of objects. No explanations:
 {
   "translations": [

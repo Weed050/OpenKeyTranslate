@@ -10,6 +10,8 @@
     <link rel="stylesheet" href="css/base.css">
     <link rel="stylesheet" href="css/layout.css">
     <link rel="stylesheet" href="css/editor.css">
+    <link rel="stylesheet" href="css/pagepicker.css">
+    <link rel="stylesheet" href="css/dialogs.css">
 </head>
 <body>
  
@@ -44,7 +46,10 @@
                         <button id="nextPageBtn" class="icon-btn" title="Następna strona">&rarr;</button>
                         <span id="pageToolsMenu" style="display:flex; gap:6px;"></span>
                         <span style="margin-left:auto"></span>
-                        <button id="retranslateBtn" class="icon-btn" title="Re-run translation only (keeps existing OCR/boxes)">Retranslate</button>
+                        <button id="retranslateBtn" class="icon-btn" title="Re-run translation only. Bubbles you edited are kept (Shift+click overwrites them too)">Retranslate</button>
+                        <button id="reocrBtn" class="icon-btn" title="Run OCR + inpainting again on this page. Translations of bubbles whose text did not change are kept">Re-OCR</button>
+                        <button id="reinpaintBtn" class="icon-btn" title="Rebuild the clean image from the original (after deleting / skipping bubbles) - no OCR, no translation">Rebuild image</button>
+                        <span class="toolbar-sep"></span>
                         <button id="zoomOutBtn" class="icon-btn" title="Zoom out (Ctrl + scroll down)">&minus;</button>
                         <span id="zoomLabel">100%</span>
                         <button id="zoomInBtn" class="icon-btn" title="Zoom in (Ctrl + scroll up)">+</button>
@@ -82,11 +87,16 @@
                 <p id="processPromptMsg">This page hasn't been processed yet.</p>
                 <button id="processBtn" class="primary">Run OCR + translation</button>
                 <p class="text-muted" id="processStatus"></p>
+                <p class="text-muted text-mono hidden" id="processPromptError" style="white-space:pre-wrap; text-align:left;"></p>
+                <div style="display:flex; gap:8px; justify-content:center; margin-top:8px;">
+                    <button id="showRawBtn" title="Reveal the raw image file in the file explorer">Show file</button>
+                    <button id="excludePromptBtn" class="danger" title="Remove this page from the list (file stays on disk, 'Show excluded' restores it)">Exclude page</button>
+                </div>
                 <p style="margin-top:12px;"><a id="backToPagesLink" href="#">&larr; Back to page list</a></p>
             </div>
  
-            <div class="hidden" id="pagePicker" style="height:100%; overflow-y:auto; padding: var(--space-lg);">
-                <div class="content-narrow">
+            <div class="hidden" id="pagePicker">
+                <div class="page-picker-inner">
                     <h1>Pages</h1>
                     <div class="hidden page-picker-controls" id="pagePickerControls">
                         <div class="controls-left">
@@ -94,10 +104,12 @@
                             <button id="collapseAllBtn">Collapse all</button>
                             <button id="expandAllBtn">Expand all</button>
                             <button id="goToNextUnprocessedBtn">Go to next unprocessed</button>
+                            <button id="chapterViewBtn" title="Switch between a grid of chapter cards and a single column">Layout: grid</button>
                         </div>
 
                         <div class="controls-right">
                             <button id="addChaptersBtn" class="primary">Import new chapters...</button>
+                            <button id="rescanBtn" title="Compare the project folders on disk with the database right now (new / missing page files, wrong statuses)">Rescan folders</button>
                             <button id="deleteSelectedChaptersBtn" class="danger" disabled>Delete selected</button>
                             <label class="checkbox-label">
                                 <input type="checkbox" id="showExcludedCheckbox"> Show excluded

@@ -52,14 +52,14 @@ def existing_fingerprints(project: Project) -> dict:
     return {ch.number: chapter_fingerprint(_raw_dir(project, ch.number)) for ch in project.chapters}
 
 
-def build_preview(project: Project, root: str) -> dict:
+def build_preview(project: Project, root: str, order_mode: str = "auto") -> dict:
     """
     Scan `root` and classify every candidate chapter folder against the project:
       new             - free label, unseen content            (selected by default)
       duplicate       - same content as chapter `conflict_with` (not selected)
       label_conflict  - label already used by `conflict_with`   (not selected; rename to import)
     """
-    candidates, skipped = scan_source(root)
+    candidates, skipped = scan_source(root, order_mode)
     existing = existing_fingerprints(project)
     taken = set(existing)
     fp_to_label = {fp: label for label, fp in existing.items() if fp}
@@ -79,6 +79,8 @@ def build_preview(project: Project, root: str) -> dict:
         rows.append({
             "folder": c["folder"], "rel": c["rel"], "source_name": c["name"],
             "label": label, "pages": len(c["images"]),
+            "order_method": c["order_method"], "order_disagree": c["order_disagree"],  # UI: warn when > 0
+            "first_pages": c["images"][:3], "ignored_files": c["ignored_files"],        # UI: what page 1 is / files NOT imported
             "status": status, "conflict_with": conflict_with,
             "selected": status == "new",
         })
@@ -97,7 +99,8 @@ def auto_selections(root: str) -> list[dict]:
     return selections
 
 
-def import_selected(db: Session, project: Project, selections: list[dict], allow_duplicates: bool = False) -> dict:
+def import_selected(db: Session, project: Project, selections: list[dict], allow_duplicates: bool = False,
+                    order_mode: str = "auto") -> dict:
     """
     Import [{"folder": abs path, "label": str}, ...] into `project`.
     Raises ChapterImportError (nothing touched) if validation fails.
@@ -110,7 +113,7 @@ def import_selected(db: Session, project: Project, selections: list[dict], allow
     for sel in selections:
         folder = sel.get("folder") or ""
         label = sanitize_label(sel.get("label") or derive_chapter_label(os.path.basename(os.path.normpath(folder))))
-        images = list_images(folder, by_mtime=True)  # same page order as scan_source
+        images = list_images(folder, by_mtime=True, mode=order_mode)  # same page order as scan_source
         if not os.path.isdir(folder) or not images:
             errors.append(f"'{folder}': folder missing or has no supported images")
             continue

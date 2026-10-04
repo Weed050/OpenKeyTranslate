@@ -32,6 +32,7 @@ router = APIRouter(prefix="/projects", tags=["Chapters"])
 
 class PreviewRequest(BaseModel):
     path: str
+    order_mode: str = "auto"      # auto | name | mtime  (see utils.chapter_labels.order_names)
 
 
 class ChapterChoice(BaseModel):
@@ -42,6 +43,7 @@ class ChapterChoice(BaseModel):
 class ImportRequest(BaseModel):
     chapters: list[ChapterChoice]
     allow_duplicates: bool = False
+    order_mode: str = "auto"
 
 
 class DeleteManyRequest(BaseModel):
@@ -60,7 +62,9 @@ def preview_chapters(project_id: int, payload: PreviewRequest, db: Session = Dep
     project = _project_or_404(db, project_id)
     if not payload.path or not os.path.isdir(payload.path):
         raise HTTPException(status_code=400, detail="Missing or invalid source path")
-    return build_preview(project, payload.path)
+    if payload.order_mode not in ("auto", "name", "mtime"):
+        raise HTTPException(status_code=400, detail="order_mode must be auto, name or mtime")
+    return build_preview(project, payload.path, payload.order_mode)
 
 
 @router.post("/{project_id}/chapters/import")
@@ -70,7 +74,8 @@ def import_chapters(project_id: int, payload: ImportRequest, db: Session = Depen
         raise HTTPException(status_code=400, detail="Nothing selected")
     try:
         result = import_selected(
-            db, project, [c.model_dump() for c in payload.chapters], allow_duplicates=payload.allow_duplicates
+            db, project, [c.model_dump() for c in payload.chapters], allow_duplicates=payload.allow_duplicates,
+            order_mode=payload.order_mode
         )
     except ChapterImportError as e:
         raise HTTPException(status_code=409, detail="Import blocked:\n- " + "\n- ".join(e.errors))

@@ -9,9 +9,9 @@
  
 import { api } from "./api.js";
 import { renderSidebar } from "./nav.js";
+import { params, pageId, state, el, escapeHtml, showToast, openOrAlert, groupByChapter, compareChapterNames } from "./editor-shared.js";
+import { showPagePicker } from "./pagepicker.js";
  
-const params = new URLSearchParams(window.location.search);
-const pageId = params.get("page");
 const enterAt = params.get("enterAt"); // "first" | "last" | null - set when arriving via cross-page nav
 const resumeBubbleIndex = params.get("bubble"); // set by the dashboard's "Resume where I left off" link
  
@@ -24,20 +24,6 @@ function setSpellcheckEnabled(enabled) {
     localStorage.setItem(SPELLCHECK_STORAGE_KEY, enabled ? "1" : "0");
 }
  
-const state = {
-    projectId: params.get("project"),
-    pageId,
-    bubbles: [],
-    selectedIndex: null,
-    savedThisSession: new Set(),
-    zoomFactor: 1,
-    baseScale: 1,
-    naturalW: 0,
-    naturalH: 0,
-    jsonPath: null,
-    pageFolder: null,
-    flatPageList: [], // all pages in the project, sorted, for prev/next-page fallthrough
-};
  
 const PANEL_W_STORAGE_KEY = "okt-panel-width";
 const DETAIL_H_STORAGE_KEY = "okt-detail-height";
@@ -117,7 +103,6 @@ function autoGrowTextarea(el) {
     el.style.height = `${Math.min(el.scrollHeight, 300)}px`; // cap so a huge paste doesn't explode the layout
 }
  
-const el = {}; // populated in init() once the DOM exists
  
 window.addEventListener("DOMContentLoaded", init);
  
@@ -149,11 +134,15 @@ async function init() {
     }
  
     el.processBtn.addEventListener("click", runProcess);
+    document.getElementById("excludePromptBtn").addEventListener("click", excludeCurrentPage);
+    document.getElementById("showRawBtn").addEventListener("click", () => openOrAlert(state.rawPath));
     document.getElementById("zoomInBtn").addEventListener("click", () => zoomBy(1.25));
     document.getElementById("zoomOutBtn").addEventListener("click", () => zoomBy(0.8));
     document.getElementById("zoomResetBtn").addEventListener("click", () => setZoom(1, { persist: true }));
     document.getElementById("zoomFitWidthBtn").addEventListener("click", fitToWidth);
-    document.getElementById("retranslateBtn").addEventListener("click", runRetranslate);
+    document.getElementById("retranslateBtn").addEventListener("click", (e) => runRetranslate(e.shiftKey));
+    document.getElementById("reocrBtn").addEventListener("click", runReocr);
+    document.getElementById("reinpaintBtn").addEventListener("click", runReinpaint);
     document.getElementById("prevPageBtn").addEventListener("click", () => goToAdjacentPage(-1));
     document.getElementById("nextPageBtn").addEventListener("click", () => goToAdjacentPage(1));
     el.imageViewport.addEventListener("wheel", onWheelZoom, { passive: false });
@@ -186,6 +175,7 @@ async function loadPage() {
     state.projectId = String(data.project_id);
     state.jsonPath = data.json_path;
     state.pageFolder = data.page_folder;
+    state.hasLines = !!data.has_lines;
     state.selectedIndex = null;
     state.savedThisSession = new Set();
  
@@ -196,9 +186,10 @@ async function loadPage() {
     renderSidebar(state.projectId);
     renderPageTools();
     await loadChapterNav();
+    loadImage();
+    if (data.pending_translation) await translatePendingPage(); // prefetched page: translate NOW, with the corrections made since
     renderBubbleList();
     renderBubbleDetail();
-    loadImage();
     prefetchNextPage();
  
     if (state.bubbles.length && (enterAt === "first" || enterAt === "last")) {
@@ -209,13 +200,31 @@ async function loadPage() {
     }
 }
  
+/**
+ * A prefetched page only has OCR + a clean image. Translating it here (when it is opened) instead of at
+ * prefetch time means correction-memory and glossary already contain what the user fixed on the previous page.
+ */
+async function translatePendingPage() {
+    el.bubbleListHeader.textContent = "Translating with your latest corrections...";
+    showToast("Translating this page with your latest corrections...", 60000);
+    try {
+        await api.pages.retranslate(pageId);
+        const fresh = await api.pages.get(pageId);
+        state.bubbles = fresh.bubbles;
+        showToast("Translated", 1500);
+    } catch (e) {
+        console.error("[EDITOR] Pending translation failed:", e);
+        showToast(`Translation failed: ${e.message} - use Retranslate`, 7000);
+    }
+}
+
 function prefetchNextPage() {
     if (!state.flatPageList.length) return;
     const idx = state.flatPageList.findIndex((p) => String(p.page_id) === String(pageId));
     if (idx === -1) return;
     const next = state.flatPageList[idx + 1];
     if (!next || next.status !== "pending") return;
-    api.pages.processAsync(next.page_id).catch(() => {}); // best-effort - editor works fine even if this fails
+    api.pages.processAsync(next.page_id, false).catch(() => {}); // OCR + clean image only; translated when opened
 }
  
 async function showProcessPrompt(error) {
@@ -242,8 +251,11 @@ async function showProcessPrompt(error) {
         return;
     }
  
+    const errEl = document.getElementById("processPromptError");
+    errEl.classList.add("hidden");
     try {
-        const { status } = await api.pages.status(pageId);
+        const { status, error: lastError, raw_path } = await api.pages.status(pageId);
+        state.rawPath = raw_path;
         if (status === "queued" || status === "processing") {
             msgEl.textContent = "This page is already processing in the background - it'll load automatically...";
             el.processBtn.disabled = true;
@@ -251,7 +263,8 @@ async function showProcessPrompt(error) {
             return;
         }
         if (status === "failed") {
-            msgEl.textContent = "Background processing failed for this page - try running it manually.";
+            msgEl.textContent = "Processing failed for this page.";
+            if (lastError) { errEl.textContent = lastError; errEl.classList.remove("hidden"); }
             return;
         }
     } catch { /* status endpoint failed - fall through to the normal prompt */ }
@@ -328,394 +341,21 @@ async function excludeCurrentPage() {
     }
 }
  
-async function openOrAlert(path) {
-    if (!path) return;
-    try {
-        await api.system.openPath(path);
-    } catch (e) {
-        alert(`Couldn't open: ${e.message}`);
-    }
-}
  
-/* ------------------------------- page picker ----------------------------- */
  
-/** Shown when the URL has ?project= but no ?page= yet - lets the user pick one. */
-async function showPagePicker() {
-    el.editorLayout.classList.add("hidden");
-    el.processPrompt.classList.add("hidden");
-    el.pagePicker.classList.remove("hidden");
-    el.pagePickerBody.innerHTML = `<p class="text-muted">Loading pages...</p>`;
+
+
+
+
+
+
+
+
  
-    const includeExcluded = document.getElementById("showExcludedCheckbox")?.checked || false;
  
-    let pages;
-    try {
-        pages = await api.pages.listByProject(state.projectId, includeExcluded);
-    } catch (e) {
-        el.pagePickerBody.innerHTML = `<p class="text-muted">Couldn't load pages: ${e.message}</p>`;
-        return;
-    }
  
-    if (!pages.length) {
-        el.pagePickerBody.innerHTML = `<p class="text-muted">No pages found for this project yet - import scans from the Dashboard.</p>`;
-        return;
-    }
  
-    document.getElementById("pagePickerControls").classList.remove("hidden");
- 
-    document.getElementById("goToNextUnprocessedBtn").onclick = async () => {
-    let pages;
-    try {
-        pages = await api.pages.listByProject(state.projectId);
-    } catch (e) {
-        alert(`Couldn't load pages: ${e.message}`);
-        return;
-    }
-    const sorted = [...pages].sort((a, b) => {
-        const c = compareChapterNames(a.chapter, b.chapter);
-        return c !== 0 ? c : a.order - b.order;
-    });
-    const next = sorted.find((p) => p.status === "pending" || p.status === "failed");
-    if (!next) {
-        alert("No unprocessed pages left in this project.");
-        return;
-    }
-    window.location.href = `editor.html?project=${state.projectId}&page=${next.page_id}`;
-};
- 
-    el.pagePickerBody.innerHTML = "";
-    const byChapter = groupByChapter(pages);
-    for (const [chapter, chapterPages] of byChapter) {
-        const processedCount = chapterPages.filter((p) => p.status === "processed").length;
-        const fullyDone = processedCount === chapterPages.length;
 
-        const details = document.createElement("details");
-        details.className = "page-picker-chapter";
-        details.dataset.chapter = chapter;
-        details.name = "chapter-accordion";
-
-        details.addEventListener("toggle", (e) => {
-            if (details.open) {
-                setTimeout(() => {
-                    details.scrollIntoView({ behavior: "smooth", block: "start" });
-                }, 120);
-            }
-        });
-
-        const summary = document.createElement("summary");
-        summary.innerHTML = `
-            <span style="display:flex; align-items:center; gap:8px;">
-                ${fullyDone ? '<span class="chapter-done-check" title="All pages processed">&#10003;</span> ' : ""}
-                ${escapeHtml(chapter)} (${processedCount}/${chapterPages.length})
-                <input type="checkbox" class="chapter-select" data-chapter-id="${chapterPages[0].chapter_id}" data-chapter-name="${escapeHtml(chapter)}" title="Select for bulk delete">
-            </span>
-            <button class="copy-btn danger chapter-delete-btn" data-chapter-id="${chapterPages[0].chapter_id}" data-chapter-name="${escapeHtml(chapter)}" title="Delete this chapter and its pages">Delete chapter</button>
-        `;
-        details.appendChild(summary);
- 
-        summary.querySelector(".chapter-delete-btn").addEventListener("click", async (event) => {
-            event.preventDefault();
-            const chapterId = event.target.dataset.chapterId;
-            const chapterName = event.target.dataset.chapterName;
-            if (!confirm(`Delete chapter "${chapterName}"? Removes its pages and files on disk. Cannot undo.`)) return;
-            try {
-                await api.projects.deleteChapter(chapterId);
-                await showPagePicker();
-            } catch (err) {
-                alert(`Delete failed: ${err.message}`);
-            }
-        });
- 
-        const card = document.createElement("div");
-        card.className = "card page-picker-grid";
-        card.style.margin = "8px 0 0px";
-        chapterPages.sort((a, b) => a.order - b.order);
-        chapterPages.forEach((p) => {
-            const isExcluded = p.status === "excluded";
- 
-            const row = document.createElement("div");
-            row.className = "page-picker-row";
-            row.dataset.filename = p.file_name.toLowerCase();
-            row.style.opacity = isExcluded ? "0.55" : "1";
- 
-            const link = document.createElement("a");
-            link.href = `editor.html?project=${state.projectId}&page=${p.page_id}`;
-            link.style.alignItems = "center";
-            link.style.justifyContent = "space-between";
-            link.style.flex = "1";
-            link.style.minWidth = "0";
-            link.style.textDecoration = "none";
-            link.title = p.file_name;
-            link.innerHTML = `
-                <span style="color: var(--text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${escapeHtml(p.file_name)}</span>
-                <span class="badge" data-status="${escapeHtml(p.status)}" style="margin-left:8px; flex-shrink: 0;">${escapeHtml(p.status)}</span>
-            `;
-            row.appendChild(link);
- 
-            if (isExcluded) {
-                const restoreBtn = document.createElement("button");
-                restoreBtn.className = "copy-btn";
-                restoreBtn.textContent = "Restore";
-                restoreBtn.title = "Bring this page back into the list";
-                restoreBtn.addEventListener("click", async (e) => {
-                    e.preventDefault();
-                    try {
-                        await api.pages.restore(p.page_id);
-                        await showPagePicker();
-                    } catch (err) {
-                        alert(`Restore failed: ${err.message}`);
-                    }
-                });
-                row.appendChild(restoreBtn);
-            }
- 
-            card.appendChild(row);
-        });
-        details.appendChild(card);
-        el.pagePickerBody.appendChild(details);
-    }
- 
-    document.getElementById("pageSearchInput").oninput = (e) => filterPagePicker(e.target.value.toLowerCase());
-    document.getElementById("collapseAllBtn").onclick = () => togglePagePickerChapters(false);
-    document.getElementById("expandAllBtn").onclick = () => togglePagePickerChapters(true);
-    document.getElementById("showExcludedCheckbox").onchange = () => showPagePicker();
- 
-    document.getElementById("addChaptersBtn").onclick = openImportDialog;
-    setupBulkDelete(byChapter);
-}
-
-/* ------------------------- bulk chapter delete -------------------------- */
-
-function setupBulkDelete(byChapter) {
-    const controls = document.getElementById("pagePickerControls");
-    let btn = document.getElementById("deleteSelectedChaptersBtn");
-    if (!btn) {
-        btn = document.createElement("button");
-        btn.id = "deleteSelectedChaptersBtn";
-        btn.className = "danger";
-        controls.insertBefore(btn, document.getElementById("addChaptersBtn").nextSibling);
-    }
-    const boxes = () => [...el.pagePickerBody.querySelectorAll("input.chapter-select")];
-    const refresh = () => {
-        const n = boxes().filter((b) => b.checked).length;
-        btn.textContent = n ? `Delete selected (${n})` : "Delete selected";
-        btn.disabled = n === 0;
-    };
-    boxes().forEach((b) => {
-        b.addEventListener("click", (e) => e.stopPropagation()); // don't toggle the <details> row
-        b.addEventListener("change", refresh);
-    });
-    refresh();
-
-    btn.onclick = async () => {
-        const chosen = boxes().filter((b) => b.checked);
-        if (!chosen.length) return;
-        const lines = chosen.map((b) => {
-            const pages = byChapter.get(b.dataset.chapterName) || [];
-            const done = pages.filter((p) => p.status === "processed").length;
-            return `- ${b.dataset.chapterName}: ${pages.length} pages, ${done} processed`;
-        });
-        if (!confirm(`Delete ${chosen.length} chapter(s)?\n\n${lines.join("\n")}\n\nRemoves their pages and files on disk (raw + processed). Corrections and glossary stay. Cannot undo.`)) return;
-        try {
-            const result = await api.projects.deleteChapters(chosen.map((b) => parseInt(b.dataset.chapterId, 10)));
-            showToast(result.message, 3000);
-            await showPagePicker();
-        } catch (err) {
-            alert(`Delete failed: ${err.message}`);
-        }
-    };
-}
-
-/* ---------------------- add chapters: preview dialog --------------------- */
-
-async function openImportDialog() {
-    const data = await api.projects.selectFolder();
-    if (!data.path) return;
-
-    let preview;
-    try {
-        preview = await api.projects.previewChapters(state.projectId, data.path);
-    } catch (e) {
-        alert(`Scan failed: ${e.message}`);
-        return;
-    }
-
-    if (!preview.chapters.length) {
-        const skipped = preview.skipped_folders.map((s) => `- ${s.folder}: ${s.extensions_found.join(", ")}`).join("\n");
-        alert("No supported images found in that folder." + (skipped ? `\n\nSkipped (unsupported format):\n${skipped}` : ""));
-        return;
-    }
-    showImportDialog(preview);
-}
-
-function showImportDialog(preview) {
-    document.getElementById("importDialog")?.remove();
-    const dlg = document.createElement("dialog");
-    dlg.id = "importDialog";
-    dlg.className = "import-dialog";
-
-    const statusText = (c) => {
-        if (c.status === "duplicate") return `same content as ${c.conflict_with}`;
-        if (c.status === "label_conflict") return `label in use (${c.conflict_with}) - rename`;
-        return "new";
-    };
-
-    const head = document.createElement("div");
-    head.innerHTML = `<h2>Add chapters</h2>
-        <p class="text-muted">Labels come from the folder names - edit them if needed. Duplicates and taken labels are unchecked.</p>`;
-
-    const table = document.createElement("table");
-    table.className = "import-table";
-    table.innerHTML = `<thead><tr><th></th><th>Source folder</th><th>Label</th><th>Pages</th><th>Status</th></tr></thead>`;
-    const tbody = document.createElement("tbody");
-    const rows = preview.chapters.map((c) => {
-        const tr = document.createElement("tr");
-        const tdCheck = document.createElement("td");
-        const check = document.createElement("input");
-        check.type = "checkbox";
-        check.checked = c.selected;
-        tdCheck.appendChild(check);
-
-        const tdSrc = document.createElement("td");
-        tdSrc.textContent = c.rel === "." ? c.source_name : c.rel;
-        tdSrc.title = c.folder;
-        tdSrc.className = "text-mono";
-
-        const tdLabel = document.createElement("td");
-        const labelInput = document.createElement("input");
-        labelInput.type = "text";
-        labelInput.value = c.label;
-        tdLabel.appendChild(labelInput);
-
-        const tdPages = document.createElement("td");
-        tdPages.textContent = c.pages;
-
-        const tdStatus = document.createElement("td");
-        const badge = document.createElement("span");
-        badge.className = "badge";
-        badge.dataset.status = c.status === "new" ? "processed" : "failed";
-        badge.textContent = statusText(c);
-        tdStatus.appendChild(badge);
-
-        tr.append(tdCheck, tdSrc, tdLabel, tdPages, tdStatus);
-        tbody.appendChild(tr);
-        return { c, check, labelInput };
-    });
-    table.appendChild(tbody);
-
-    const tools = document.createElement("div");
-    tools.className = "import-tools";
-    const mkBtn = (text, fn) => { const b = document.createElement("button"); b.textContent = text; b.addEventListener("click", fn); return b; };
-    const allowDup = document.createElement("input");
-    allowDup.type = "checkbox";
-    const allowLabel = document.createElement("label");
-    allowLabel.style.cssText = "display:flex; align-items:center; gap:4px; margin:0;";
-    allowLabel.append(allowDup, "allow duplicates");
-    tools.append(
-        mkBtn("Select new only", () => rows.forEach((r) => { r.check.checked = r.c.status === "new"; refresh(); })),
-        mkBtn("Select all", () => rows.forEach((r) => { r.check.checked = true; refresh(); })),
-        mkBtn("Select none", () => rows.forEach((r) => { r.check.checked = false; refresh(); })),
-        allowLabel,
-    );
-
-    const error = document.createElement("pre");
-    error.className = "import-error hidden";
-
-    const footer = document.createElement("div");
-    footer.className = "import-footer";
-    const cancelBtn = mkBtn("Cancel", () => dlg.close());
-    const importBtn = document.createElement("button");
-    importBtn.className = "primary";
-    footer.append(cancelBtn, importBtn);
-
-    function refresh() {
-        const n = rows.filter((r) => r.check.checked).length;
-        importBtn.textContent = `Import selected (${n})`;
-        importBtn.disabled = n === 0;
-    }
-    rows.forEach((r) => r.check.addEventListener("change", refresh));
-    refresh();
-
-    importBtn.addEventListener("click", async () => {
-        const chapters = rows.filter((r) => r.check.checked)
-            .map((r) => ({ folder: r.c.folder, label: r.labelInput.value.trim() }));
-        if (chapters.some((c) => !c.label)) {
-            error.textContent = "Every selected chapter needs a label.";
-            error.classList.remove("hidden");
-            return;
-        }
-        importBtn.disabled = true;
-        importBtn.textContent = "Importing...";
-        try {
-            const result = await api.projects.importChapterSelection(state.projectId, {
-                chapters, allow_duplicates: allowDup.checked,
-            });
-            dlg.close();
-            showToast(result.message, 3000);
-            await showPagePicker();
-        } catch (e) {
-            error.textContent = e.message; // 409 lists every conflict - fix labels / selection and retry
-            error.classList.remove("hidden");
-            refresh();
-        }
-    });
-
-    const skipped = preview.skipped_folders.length
-        ? `<p class="text-muted">Skipped (unsupported format): ${preview.skipped_folders.map((s) => escapeHtml(`${s.folder} [${s.extensions_found.join(", ")}]`)).join("; ")}</p>`
-        : "";
-    const skippedEl = document.createElement("div");
-    skippedEl.innerHTML = skipped;
-
-    const scroll = document.createElement("div");
-    scroll.className = "import-scroll";
-    scroll.appendChild(table);
-
-    dlg.append(head, tools, scroll, skippedEl, error, footer);
-    dlg.addEventListener("close", () => dlg.remove());
-    document.body.appendChild(dlg);
-    dlg.showModal();
-}
- 
-function filterPagePicker(query) {
-    const chapters = el.pagePickerBody.querySelectorAll("details.page-picker-chapter");
-    chapters.forEach((details) => {
-        let anyVisible = false;
-        details.querySelectorAll(".page-picker-row").forEach((row) => {
-            const match = !query || row.dataset.filename.includes(query);
-            row.classList.toggle("hidden", !match);
-            if (match) anyVisible = true;
-        });
-        details.classList.toggle("hidden", !anyVisible);
-        if (query) details.open = anyVisible; // auto-expand chapters with a match while searching
-    });
-}
- 
-function togglePagePickerChapters(open) {
-    el.pagePickerBody.querySelectorAll("details.page-picker-chapter").forEach((d) => { d.open = open; });
-}
- 
-function groupByChapter(pages) {
-    const map = new Map();
-    pages.forEach((p) => {
-        if (!map.has(p.chapter)) map.set(p.chapter, []);
-        map.get(p.chapter).push(p);
-    });
-    // Natural sort ("Chapter_2" before "Chapter_10") instead of the Map's arrival order.
-    return new Map([...map.entries()].sort((a, b) => compareChapterNames(a[0], b[0])));
-}
- 
-// Mirrors utils/chapter_labels.py chapter_sort_key: Chapter_13 < Chapter_13.5 < Chapter_14 < "Epilog".
-function chapterSortKey(name) {
-    const m = /^Chapter_(\d+)(?:\.(\d+))?$/.exec(name);
-    if (m) return [0, parseInt(m[1], 10), m[2] ? parseFloat(`0.${m[2]}`) : 0];
-    return [1, 0, 0];
-}
-
-function compareChapterNames(a, b) {
-    const ka = chapterSortKey(a), kb = chapterSortKey(b);
-    for (let i = 0; i < 3; i++) if (ka[i] !== kb[i]) return ka[i] - kb[i];
-    return a.localeCompare(b, undefined, { numeric: true });
-}
  
 async function runProcess() {
     el.processBtn.disabled = true;
@@ -732,17 +372,20 @@ async function runProcess() {
     }
 }
  
-async function runRetranslate() {
-    if (!confirm("Re-translate every bubble on this page? This overwrites the current AI translation text (your saved corrections in memory are untouched).")) return;
- 
+async function runRetranslate(overwriteEdited = false) {
+    const warn = overwriteEdited
+        ? "Re-translate EVERY bubble, including the ones you edited? Your edits on this page will be overwritten (corrections already in memory stay)."
+        : "Re-translate this page? Bubbles you edited and skipped bubbles are kept (Shift+click overwrites edited ones too).";
+    if (!confirm(warn)) return;
+
     const btn = document.getElementById("retranslateBtn");
     const originalText = btn.textContent;
     btn.disabled = true;
     btn.textContent = "Retranslating...";
- 
+
     try {
-        const result = await api.pages.retranslate(pageId);
-        showToast(result.message);
+        const result = await api.pages.retranslate(pageId, overwriteEdited);
+        showToast(result.message, 3500);
         await loadPage();
     } catch (e) {
         alert(`Retranslate failed: ${e.message}`);
@@ -751,7 +394,40 @@ async function runRetranslate() {
         btn.textContent = originalText;
     }
 }
- 
+
+async function runReocr() {
+    if (!confirm("Run OCR + inpainting again on this page?\n\nBubbles whose text did not change keep their translation and your edits. New or changed bubbles are translated. This can take a while.")) return;
+    const btn = document.getElementById("reocrBtn");
+    const originalText = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = "Re-OCR...";
+    try {
+        const result = await api.pages.reocr(pageId);
+        showToast(result.message, 5000);
+        await loadPage();
+    } catch (e) {
+        alert(`Re-OCR failed: ${e.message}\n(The previous result is untouched.)`);
+    } finally {
+        btn.disabled = false;
+        btn.textContent = originalText;
+    }
+}
+
+async function runReinpaint() {
+    try {
+        const result = await api.pages.reinpaint(pageId);
+        refreshPageImage();
+        showToast(result.message);
+    } catch (e) {
+        if (/line data/i.test(e.message) && confirm(`${e.message}\n\nRun Re-OCR now?`)) await runReocr();
+        else if (!/line data/i.test(e.message)) alert(`Rebuild failed: ${e.message}`);
+    }
+}
+
+function refreshPageImage() {
+    el.pageImage.src = `${api.pages.imageUrl(pageId)}?t=${Date.now()}`;
+}
+
 /* --------------------------- chapter / page nav ------------------------- */
  
 async function loadChapterNav() {
@@ -913,12 +589,18 @@ function renderBubbleList() {
     el.bubbleListHeader.textContent = `Bubbles — ${state.bubbles.length}`;
     el.bubbleList.innerHTML = "";
     state.bubbles.forEach((bubble, index) => {
-        const isEmpty = !bubble.translation && !bubble.ai_translation;
+        const isSkipped = !!bubble.skip;
+        const isEmpty = !isSkipped && !bubble.translation && !bubble.ai_translation;
+        const textFixed = bubble.text_raw && bubble.text_raw !== bubble.text;
         const row = document.createElement("div");
-        row.className = "bubble-row" + (index === state.selectedIndex ? " selected" : "");
+        row.className = "bubble-row" + (index === state.selectedIndex ? " selected" : "") + (isSkipped ? " skipped" : "");
+        const preview = isSkipped
+            ? `skipped (${escapeHtml(bubble.skip_reason || "")}): ${escapeHtml(bubble.text || "")}`
+            : isEmpty ? '<span style="color: var(--danger);">(no AI translation)</span>' : escapeHtml(bubble.translation || bubble.text || "(empty)");
         row.innerHTML = `
             <span class="bubble-num">${index + 1}</span>
-            <span class="bubble-preview">${isEmpty ? '<span style="color: var(--danger);">(no AI translation)</span>' : escapeHtml(bubble.translation || bubble.text || "(empty)")}</span>
+            <span class="bubble-preview">${preview}</span>
+            ${textFixed ? `<span class="bubble-tag" title="Source text was cleaned / edited. Raw OCR: ${escapeHtml(bubble.text_raw)}">text fixed</span>` : ""}
             ${state.savedThisSession.has(bubble.bubble_id) ? '<span class="bubble-saved-dot" title="Saved this session"></span>' : ""}
         `;
         row.addEventListener("click", () => selectBubble(index));
@@ -926,11 +608,6 @@ function renderBubbleList() {
     });
 }
  
-function escapeHtml(text) {
-    const div = document.createElement("div");
-    div.textContent = text;
-    return div.innerHTML;
-}
  
 /* ------------------------------ bubble detail ---------------------------- */
  
@@ -965,7 +642,10 @@ function renderBubbleDetail() {
     const bubble = state.bubbles[state.selectedIndex];
     const isFirst = state.selectedIndex === 0;
     const isLast = state.selectedIndex === state.bubbles.length - 1;
-    const isEmpty = !bubble.translation && !bubble.ai_translation;
+    const isSkipped = !!bubble.skip;
+    const isEmpty = !isSkipped && !bubble.translation && !bubble.ai_translation;
+    const textFixed = bubble.text_raw && bubble.text_raw !== bubble.text;
+    const skipWhy = { number: "only digits (page number?)", symbols: "only symbols / punctuation", manual: "skipped by you", empty: "empty text" }[bubble.skip_reason] || bubble.skip_reason || "";
  
     el.bubbleDetail.classList.remove("hidden");
     el.bubbleDetail.innerHTML = `
@@ -984,10 +664,29 @@ function renderBubbleDetail() {
         </div>` : ""}
  
         <div>
-            <label>Original text</label>
-            <div class="source-text">${escapeHtml(bubble.text || "")}</div>
+            <div class="source-head">
+                <label>Original text</label>
+                <span style="display:flex; gap:6px;">
+                    ${textFixed ? '<button id="undoCleanupBtn" class="copy-btn" title="Put the raw OCR string back (the automatic cleanup was wrong)">Use raw OCR</button>' : ""}
+                    <button id="editSourceBtn" class="copy-btn" title="Fix an OCR mistake in the source text">Edit</button>
+                </span>
+            </div>
+            <div class="source-text" id="sourceView">${escapeHtml(bubble.text || "")}</div>
+            ${textFixed ? `<div class="source-raw">Raw OCR: ${escapeHtml(bubble.text_raw)}</div>` : ""}
+            <div class="source-edit hidden" id="sourceEdit">
+                <textarea id="sourceInput" rows="3" spellcheck="false">${escapeHtml(bubble.text || "")}</textarea>
+                <div class="detail-actions">
+                    <button id="saveSourceBtn" class="primary">Save source</button>
+                    <button id="cancelSourceBtn">Cancel</button>
+                </div>
+            </div>
         </div>
- 
+
+        ${isSkipped ? `
+        <div class="skip-note">
+            <span>Skipped - ${escapeHtml(skipWhy)}. Not translated, original pixels stay on the page.</span>
+            <button id="unskipBtn" title="Translate this bubble anyway (its text will be erased from the image)">Translate this</button>
+        </div>` : `
         <div>
             <label>Translated text</label>
             <textarea id="translationInput" rows="4" lang="pl" spellcheck="${isSpellcheckEnabled()}">${escapeHtml(bubble.translation || "")}</textarea>
@@ -996,11 +695,13 @@ function renderBubbleDetail() {
         <div class="detail-actions">
             <button id="resetBtn" title="Revert to the AI's original translation (does not save)">Reset to AI</button>
             <button id="undoBtn" title="Revert to the value shown when this bubble was opened">Undo</button>
+            <button id="retranslateBubbleBtn" title="Translate only this bubble again (neighbours are sent as context; memory + glossary apply)">Retranslate</button>
+            <button id="skipBtn" title="Do not translate this bubble and put the original pixels back (page numbers, junk)">Skip</button>
             <button id="spellcheckToggleBtn" class="${isSpellcheckEnabled() ? "primary" : ""}" title="Toggle Polish spellcheck">Spellcheck: ${isSpellcheckEnabled() ? "On" : "Off"}</button>
-        </div>
+        </div>`}
  
         <div class="detail-actions" style="align-items:center;">
-            <button id="saveBtn" class="primary" title="Save this translation (Ctrl/Cmd+Enter also works while typing)">Save</button>
+            ${isSkipped ? "" : '<button id="saveBtn" class="primary" title="Save this translation (Ctrl/Cmd+Enter also works while typing)">Save</button>'}
             <span id="saveInlineStatus" style="font-size:12px;"></span>
             <div class="detail-nav-actions" style="margin-left:auto;">
                 <button id="prevBtn" class="${isFirst ? "nav-crosses-page" : ""}"
@@ -1011,6 +712,25 @@ function renderBubbleDetail() {
         </div>
     `;
  
+    document.getElementById("deleteBubbleBtn").addEventListener("click", () => deleteBubble());
+    document.getElementById("prevBtn").addEventListener("click", () => navigateBubble(-1));
+    document.getElementById("nextBtn").addEventListener("click", () => navigateBubble(1));
+
+    // ---- source text: edit / use raw OCR ----
+    const sourceEdit = document.getElementById("sourceEdit");
+    document.getElementById("editSourceBtn").addEventListener("click", () => {
+        sourceEdit.classList.toggle("hidden");
+        document.getElementById("sourceInput").focus();
+    });
+    document.getElementById("cancelSourceBtn").addEventListener("click", () => sourceEdit.classList.add("hidden"));
+    document.getElementById("saveSourceBtn").addEventListener("click", () => saveSourceText(document.getElementById("sourceInput").value));
+    document.getElementById("undoCleanupBtn")?.addEventListener("click", () => saveSourceText(bubble.text_raw));
+
+    if (isSkipped) {
+        document.getElementById("unskipBtn").addEventListener("click", () => setSkip(false));
+        return;
+    }
+
     const textarea = document.getElementById("translationInput");
     const loadedValue = bubble.translation || "";
  
@@ -1031,10 +751,9 @@ function renderBubbleDetail() {
     document.getElementById("undoBtn").addEventListener("click", () => {
         textarea.value = loadedValue;
     });
-    document.getElementById("deleteBubbleBtn").addEventListener("click", () => deleteBubble());
+    document.getElementById("retranslateBubbleBtn").addEventListener("click", () => retranslateCurrentBubble());
+    document.getElementById("skipBtn").addEventListener("click", () => setSkip(true));
     document.getElementById("saveBtn").addEventListener("click", () => saveCurrentBubble());
-    document.getElementById("prevBtn").addEventListener("click", () => navigateBubble(-1));
-    document.getElementById("nextBtn").addEventListener("click", () => navigateBubble(1));
  
     textarea.addEventListener("keydown", (event) => {
         if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
@@ -1042,6 +761,64 @@ function renderBubbleDetail() {
             saveCurrentBubble();
         }
     });
+}
+
+/* ---------------- per-bubble source edit / skip / retranslate ---------------- */
+
+function replaceCurrentBubble(updated) {
+    state.bubbles[state.selectedIndex] = updated;
+    renderBubbleList();
+    renderBubbleDetail();
+}
+
+async function saveSourceText(newText) {
+    const bubble = state.bubbles[state.selectedIndex];
+    const text = (newText || "").trim();
+    if (!text) { alert("Source text can't be empty (use Skip or Delete instead)."); return; }
+    if (text === bubble.text) { renderBubbleDetail(); return; }
+    try {
+        const result = await api.pages.patchBubble(pageId, bubble.bubble_id, { text });
+        replaceCurrentBubble(result.bubble);
+        if (result.reinpainted) refreshPageImage();
+        showToast("Source text saved");
+        if (!result.bubble.skip && confirm("Source text changed. Retranslate this bubble now?")) await retranslateCurrentBubble(true);
+    } catch (e) {
+        alert(`Couldn't save source text: ${e.message}`);
+    }
+}
+
+async function setSkip(skip) {
+    const bubble = state.bubbles[state.selectedIndex];
+    if (skip && (bubble.translation || "").trim() && !confirm("Skip this bubble? Its translation stays in the file but it will not be translated, and the original pixels come back on the page.")) return;
+    try {
+        const result = await api.pages.patchBubble(pageId, bubble.bubble_id, { skip });
+        replaceCurrentBubble(result.bubble);
+        if (result.reinpainted) refreshPageImage();
+        else if (result.needs_reocr) showToast("Saved, but this older page can't rebuild the image - run Re-OCR to update it.", 6000);
+        if (!skip && !(result.bubble.translation || "").trim()) await retranslateCurrentBubble(true);
+        else showToast(skip ? "Bubble skipped" : "Bubble will be translated");
+    } catch (e) {
+        alert(`Couldn't change skip: ${e.message}`);
+    }
+}
+
+async function retranslateCurrentBubble(silent = false) {
+    const bubble = state.bubbles[state.selectedIndex];
+    const edited = (bubble.translation || "") !== (bubble.ai_translation || "");
+    if (!silent && edited && !confirm("You edited this translation. Retranslate and overwrite it?")) return;
+    const btn = document.getElementById("retranslateBubbleBtn");
+    if (btn) { btn.disabled = true; btn.textContent = "..."; }
+    try {
+        const result = await api.pages.retranslateBubble(pageId, bubble.bubble_id);
+        bubble.translation = result.translation;
+        bubble.ai_translation = result.ai_translation;
+        renderBubbleList();
+        renderBubbleDetail();
+        showToast("Bubble retranslated");
+    } catch (e) {
+        alert(`Retranslate failed: ${e.message}`);
+        renderBubbleDetail();
+    }
 }
  
 let saveInFlight = false;
@@ -1059,6 +836,7 @@ async function saveCurrentBubble() {
  
     const bubble = state.bubbles[state.selectedIndex];
     const textarea = document.getElementById("translationInput");
+    if (!textarea) return true; // skipped bubble: nothing to save
     const newValue = textarea.value.trim();
  
     if (newValue === (bubble.translation || "")) {
@@ -1115,7 +893,7 @@ async function deleteBubble() {
         renderBubbleDetail();
         applyZoom();
         if (state.selectedIndex !== null) scrollToBubble(state.selectedIndex); // the list jumped to the next bubble - move the image too
-        el.pageImage.src = `${api.pages.imageUrl(pageId)}?t=${Date.now()}`;    // backend restored the artwork under the deleted box
+        refreshPageImage();    // backend rebuilt the clean image without this bubble's text lines
         recordLastEdit();
         showToast("Bubble deleted");
     } catch (e) {
@@ -1125,8 +903,15 @@ async function deleteBubble() {
 }
  
 async function navigateBubble(direction) {
-    if (state.selectedIndex === null || !state.bubbles.length) return;
- 
+    if (state.selectedIndex === null) {
+        // nothing selected yet (fresh page) or a page with NO bubbles: arrows used to do nothing at all,
+        // so a blank page was a dead end for keyboard navigation.
+        if (state.bubbles.length) await selectBubble(direction > 0 ? 0 : state.bubbles.length - 1, { save: false });
+        else await navigateToAdjacentPage(direction);
+        return;
+    }
+    if (!state.bubbles.length) return;
+
     const next = state.selectedIndex + direction;
     if (next < 0 || next >= state.bubbles.length) {
         const ok = await saveCurrentBubble();
@@ -1167,31 +952,4 @@ function onGlobalKeydown(event) {
  
     if (event.key === "ArrowLeft") navigateBubble(-1);
     if (event.key === "ArrowRight") navigateBubble(1);
-}
- 
-function showToast(message, ms = 1800) {
-    el.saveToast.textContent = message;
-    el.saveToast.classList.add("show");
-    clearTimeout(showToast._t);
-    showToast._t = setTimeout(() => el.saveToast.classList.remove("show"), ms);
-}
-
-const scrollBtn = document.getElementById('scrollToTopBtn');
-const picker = document.getElementById('pagePicker');
-
-if (scrollBtn && picker) {
-    picker.addEventListener('scroll', () => {
-        if (picker.scrollTop > 150) {
-            scrollBtn.classList.add('visible');
-        } else {
-            scrollBtn.classList.remove('visible');
-        }
-    });
-    
-    scrollBtn.addEventListener('click', () => {
-        picker.scrollTo({
-            top: 0,
-            behavior: 'smooth'
-        });
-    });
 }

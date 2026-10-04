@@ -25,6 +25,10 @@ async function loadSettings() {
         document.getElementById("memoryShortPhraseInput").value = appSettings.memory_short_phrase_max_words ?? 2;
         document.getElementById("ignorePatternsInput").value = (appSettings.ocr_ignore_patterns || []).join("\n");
         document.getElementById("appVersionLabel").textContent = appSettings.app_version || "unknown";
+        fillTranslationForm();
+        document.getElementById("ocrTextfixCheckbox").checked = appSettings.ocr_textfix !== false;
+        document.getElementById("ocrSkipNumericCheckbox").checked = appSettings.ocr_skip_numeric !== false;
+        document.getElementById("ocrSkipSymbolsCheckbox").checked = appSettings.ocr_skip_symbols !== false;
     } catch (e) {
         document.getElementById("currentWorkspacePath").textContent = `Error: ${e.message}`;
     }
@@ -153,3 +157,114 @@ if (spellcheckCheckbox) {
         localStorage.setItem(SPELLCHECK_STORAGE_KEY, spellcheckCheckbox.checked ? "1" : "0");
     });
 }
+
+/* ----------------------------- translation (BYOK) ----------------------------- */
+
+// working copy of the form: provider -> {model, keys:[{label, api_key}]}; api_key is either the masked string the
+// server returned (= "keep the stored secret") or something the user just typed.
+let formProviders = {};
+
+function fillTranslationForm() {
+    const providers = appSettings.providers || {};
+    formProviders = JSON.parse(JSON.stringify(providers));
+    document.getElementById("translationOnCheckbox").checked = appSettings.translation_on !== false;
+    document.getElementById("providerSelect").value = appSettings.active_provider || "groq";
+    document.getElementById("temperatureInput").value = appSettings.translation_temperature ?? 0.4;
+    renderProviderForm();
+}
+
+function currentProviderName() {
+    return document.getElementById("providerSelect").value;
+}
+
+function renderProviderForm() {
+    const name = currentProviderName();
+    const cfg = (formProviders[name] ||= { model: "", keys: [{ label: "default", api_key: "" }] });
+    document.getElementById("providerModelInput").value = cfg.model || "";
+
+    const list = document.getElementById("keyList");
+    list.innerHTML = "";
+    cfg.keys.forEach((k, i) => {
+        const row = document.createElement("div");
+        row.style.cssText = "display:flex; gap:6px; margin-bottom:6px;";
+        const label = document.createElement("input");
+        label.type = "text"; label.value = k.label; label.placeholder = "label"; label.style.maxWidth = "130px";
+        label.addEventListener("input", () => { k.label = label.value; });
+        const key = document.createElement("input");
+        key.type = "text"; key.value = k.api_key; key.placeholder = "paste API key"; key.spellcheck = false; key.autocomplete = "off";
+        key.className = "text-mono";
+        key.addEventListener("input", () => { k.api_key = key.value; });
+        const del = document.createElement("button");
+        del.className = "danger"; del.textContent = "Remove";
+        del.addEventListener("click", () => { cfg.keys.splice(i, 1); renderProviderForm(); });
+        row.append(label, key, del);
+        list.appendChild(row);
+    });
+    if (!cfg.keys.length) list.innerHTML = `<p class="text-muted">No keys. Add one below.</p>`;
+}
+
+document.getElementById("providerSelect")?.addEventListener("change", renderProviderForm);
+document.getElementById("providerModelInput")?.addEventListener("input", (e) => {
+    (formProviders[currentProviderName()] ||= { keys: [] }).model = e.target.value;
+});
+document.getElementById("addKeyBtn")?.addEventListener("click", () => {
+    const cfg = (formProviders[currentProviderName()] ||= { model: "", keys: [] });
+    cfg.keys.push({ label: `key${cfg.keys.length + 1}`, api_key: "" });
+    renderProviderForm();
+});
+
+document.getElementById("saveTranslationBtn")?.addEventListener("click", async () => {
+    const status = document.getElementById("translationStatus");
+    const temperature = parseFloat(document.getElementById("temperatureInput").value);
+    if (!Number.isFinite(temperature) || temperature < 0 || temperature > 2) { status.textContent = "Temperature must be 0.0-2.0."; return; }
+    const name = currentProviderName();
+    const cfg = formProviders[name];
+    if (cfg && cfg.keys.some((k) => !k.api_key.trim())) {
+        status.textContent = "Fill in or remove the empty key rows first.";
+        return;
+    }
+    try {
+        const result = await api.settings.updateTranslation({
+            translation_on: document.getElementById("translationOnCheckbox").checked,
+            active_provider: name,
+            translation_temperature: temperature,
+            providers: { [name]: { model: cfg.model, keys: cfg.keys } },
+        });
+        status.textContent = result.message;
+        await loadSettings();      // re-reads (masked) keys, so the form shows what is really stored
+        renderSidebar(null);       // health banner: a "no API key" warning disappears right away
+        document.getElementById("healthBanner")?.remove();
+        renderSidebar(null);
+    } catch (e) {
+        status.textContent = `Failed: ${e.message}`;
+    }
+});
+
+document.getElementById("testTranslationBtn")?.addEventListener("click", async () => {
+    const status = document.getElementById("translationStatus");
+    const btn = document.getElementById("testTranslationBtn");
+    btn.disabled = true;
+    status.textContent = "Testing...";
+    try {
+        const result = await api.settings.testTranslation();
+        status.textContent = (result.ok ? "\u2713 " : "\u2717 ") + result.message;
+    } catch (e) {
+        status.textContent = `Test failed: ${e.message}`;
+    } finally {
+        btn.disabled = false;
+    }
+});
+
+document.getElementById("saveOcrOptionsBtn")?.addEventListener("click", async () => {
+    const status = document.getElementById("ocrOptionsStatus");
+    try {
+        const result = await api.settings.updateOcrOptions({
+            ocr_textfix: document.getElementById("ocrTextfixCheckbox").checked,
+            ocr_skip_numeric: document.getElementById("ocrSkipNumericCheckbox").checked,
+            ocr_skip_symbols: document.getElementById("ocrSkipSymbolsCheckbox").checked,
+        });
+        status.textContent = result.message;
+    } catch (e) {
+        status.textContent = `Failed: ${e.message}`;
+    }
+});

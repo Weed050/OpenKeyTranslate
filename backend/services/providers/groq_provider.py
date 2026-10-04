@@ -68,11 +68,11 @@ class GroqProvider(TranslationProvider):
 
         available = [
             k for k in self._keys
-            if k.get("api_key") and k.get("label", "default") not in self._exhausted_labels
+            if k.get("api_key") and not self._is_cooling(k.get("label", "default"))
         ]
         if not available:
             raise RuntimeError(
-                "No Groq keys available — all configured keys are rate-limited or unset."
+                f"No Groq keys available — all keys are rate-limited (retry in ~{self._seconds_until_any_key()}s) or unset."
             )
 
         for key_entry in available:
@@ -86,7 +86,7 @@ class GroqProvider(TranslationProvider):
 
                 except RateLimitError:
                     print(f"[GROQ] key '{label}' rate-limited (429) — trying next key in pool...")
-                    self._exhausted_labels.add(label)
+                    self._cool_down(label)
                     break  # move to the next key, retrying this one won't help
 
                 except APIConnectionError as e:
