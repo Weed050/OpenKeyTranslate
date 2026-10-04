@@ -110,7 +110,56 @@ def page_order_key(folder: str):
     return key
 
 
-def list_images(folder: str, by_mtime: bool = False) -> list[str]:
+def _is_clean_sequence(names: list[str]) -> bool:
+    """
+    True when file names are a legit page sequence: every stem has a number, all stems share the same
+    non-digit skeleton (page_01, page_02, ... / 001, 002, ...) and the numbers are unique.
+    Hash-like / mixed names (cover.jpg, a3f9.jpg, IMG_1 (2).jpg ...) return False.
+    """
+    if len(names) < 2:
+        return False
+    skeletons, numbers = set(), []
+    for n in names:
+        stem = os.path.splitext(n)[0]
+        groups = list(re.finditer(r'\d+', stem))
+        if not groups:
+            return False
+        g = groups[-1]
+        skeletons.add((stem[:g.start()] + '#' + stem[g.end():]).lower())
+        numbers.append(int(g.group()))
+    return len(skeletons) == 1 and len(set(numbers)) == len(numbers)
+
+
+def order_names(folder: str, names: list[str], mode: str = "auto") -> dict:
+    """
+    Decide page order. mode: "auto" | "name" | "mtime".
+
+    auto  -> by NAME when the names are a clean numeric sequence (page_01..page_28): the name is then the
+             author's intent and mtime is only download noise (parallel scrapers finish out of order).
+             Otherwise by mtime (then natural name) = the old behaviour, for hash-like / unsortable names.
+
+    :return: {"names": ordered list, "method": "name"|"mtime", "clean_names": bool,
+              "disagree": how many positions differ between name order and mtime order}
+              -> show a warning in the import preview when disagree > 0.
+    """
+    def mtime(n):
+        try:
+            return os.path.getmtime(os.path.join(folder, n))
+        except OSError:
+            return 0.0
+
+    by_name = sorted(names, key=natural_sort_key)
+    by_mtime = sorted(names, key=lambda n: (mtime(n), natural_sort_key(n)))
+    clean = _is_clean_sequence(names)
+    if mode == "name" or (mode == "auto" and clean):
+        chosen, method = by_name, "name"
+    else:
+        chosen, method = by_mtime, "mtime"
+    disagree = sum(1 for a, b in zip(by_name, by_mtime) if a != b)
+    return {"names": chosen, "method": method, "clean_names": clean, "disagree": disagree}
+
+
+def list_images(folder: str, by_mtime: bool = False, mode: str = "auto") -> list[str]:
     """Image file names directly inside `folder`: natural-sorted, or (mtime, natural) when by_mtime."""
     try:
         names = os.listdir(folder)
@@ -118,7 +167,9 @@ def list_images(folder: str, by_mtime: bool = False) -> list[str]:
         return []
     imgs = [n for n in names
             if n.lower().endswith(IMG_EXTENSIONS) and os.path.isfile(os.path.join(folder, n))]
-    return sorted(imgs, key=page_order_key(folder) if by_mtime else natural_sort_key)
+    if by_mtime:  # historical name: now "smart order" (name when clean sequence, else mtime) - see order_names
+        return order_names(folder, imgs, mode)["names"]
+    return sorted(imgs, key=natural_sort_key)
 
 
 def chapter_fingerprint(folder: str):
@@ -134,7 +185,7 @@ def chapter_fingerprint(folder: str):
     return (len(imgs), hashlib.sha1("\n".join(digests).encode()).hexdigest())
 
 
-def scan_source(root: str):
+def scan_source(root: str, order_mode: str = "auto"):
     """
     Walk `root` (natural folder order) and return (chapters, skipped).
     chapters: [{"folder": abs path, "name": folder name, "rel": path relative to root, "images": [names]}]
@@ -144,13 +195,19 @@ def scan_source(root: str):
     chapters, skipped = [], []
     for dirpath, dirs, files in os.walk(root):
         dirs.sort(key=natural_sort_key)
-        images = sorted((f for f in files if f.lower().endswith(IMG_EXTENSIONS)), key=page_order_key(dirpath))
-        if images:
+        found = [f for f in files if f.lower().endswith(IMG_EXTENSIONS)]
+        if found:
+            order = order_names(dirpath, found, order_mode)
             chapters.append({
                 "folder": dirpath,
                 "name": os.path.basename(os.path.normpath(dirpath)),
                 "rel": os.path.relpath(dirpath, root),
-                "images": images,
+                "images": order["names"],
+                "order_method": order["method"],
+                "order_disagree": order["disagree"],
+                "ignored_files": sorted(f for f in files
+                                        if not f.lower().endswith(IMG_EXTENSIONS)
+                                        and os.path.splitext(f)[1].lower() not in _IGNORABLE_EXTENSIONS),
             })
             continue
         exts = sorted({os.path.splitext(f)[1].lower() for f in files if os.path.splitext(f)[1]} - _IGNORABLE_EXTENSIONS)

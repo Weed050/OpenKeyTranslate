@@ -65,6 +65,7 @@ from utils.handle_duplicates import smart_deduplicate_by_lines, remove_slice_bou
 from utils.merge_boxes import build_text_lines, group_lines_into_bubbles, \
     filter_noise_lines, filter_noise_bubbles
 from utils.ignore_filter import filter_ignored_bubbles
+from utils.bubble_post import apply_bubble_postprocess
 from utils.marker import (
     inject_marker, resolve_marker_state, detect_rotation,
     correct_boxes_by_angle, remove_marker, pad_crop_right
@@ -296,10 +297,12 @@ def run_ocr_sliced(image: np.ndarray) -> tuple[list[dict], list[tuple[int, int]]
 # THE BLACK BOX
 # =====================================================================
 
-def process_image(image_bgr: np.ndarray) -> dict:
+def process_image(image_bgr: np.ndarray, protected_terms=()) -> dict:
     """
     Main entry point for the OCR module.
     Accepts an image, processes it entirely, and returns structured data.
+
+    protected_terms: names (glossary source terms) the post-OCR text cleanup must never alter.
     """
     image_scaled = cv2.resize(image_bgr, None, fx=SCALE, fy=SCALE)
     image_width = image_scaled.shape[1]
@@ -325,7 +328,7 @@ def process_image(image_bgr: np.ndarray) -> dict:
     bubbles = filter_noise_bubbles(bubbles)
     bubbles = filter_ignored_bubbles(bubbles)  # watermarks / URLs from settings.json -> ocr_ignore_patterns
 
-    return {
+    result = {
         "items": items,
         "lines": grouped_lines,
         "bubbles": bubbles,
@@ -335,3 +338,6 @@ def process_image(image_bgr: np.ndarray) -> dict:
             "image_scaled": image_scaled
         }
     }
+    # text cleanup + skip flags (numbers / symbols) -> result["inpaint_lines"] = lines that really get erased
+    apply_bubble_postprocess(result, protected_terms)
+    return result

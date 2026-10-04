@@ -618,6 +618,7 @@ def group_lines_into_bubbles(grouped_lines, x_overlap_thresh=0.35, y_dist_mult=1
             "text": combined_text,
             "box_coords": merged_box,
             "line_count": len(b_group),
+            "line_ids": [l["line_id"] for l in b_group],   # which text lines belong to this bubble (inpainting / re-inpainting)
             "avg_score": sum(l["score"] for l in b_group) / len(b_group),
         })
 

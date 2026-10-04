@@ -42,7 +42,7 @@ import json
 import uuid
 from sqlalchemy.orm import Session
 
-from core.config import MEMORY_AB_TEST_LOGGING, ACTIVE_MODEL_NAME, MEMORY_SIMILARITY_THRESHOLD, MEMORY_TOP_K
+from core.config import get_setting, get_active_model_name   # LIVE values: Settings page applies without a restart
 from models.models import TranslationLog
 from services.memory_service import find_top_matches, is_short_phrase
 from services.glossary_service import load_glossary, match_glossary
@@ -69,6 +69,7 @@ def translate_bubbles(
     project_id: int | None = None,
     page_id: int | None = None,
     db: Session | None = None,
+    context: list[dict] | None = None,
 ) -> list[dict]:
     """
     Translate extracted speech bubble texts via the active LLM provider,
@@ -93,6 +94,21 @@ def translate_bubbles(
     if not bubbles:
         return bubbles
 
+    # Bubbles flagged skip (page numbers, "?!", "...": see utils/bubble_post.py) and empty ones are never sent to
+    # the LLM, never logged and never counted as memory hits.
+    for b in bubbles:
+        if b.get("skip") or not (b.get("text") or "").strip():
+            b["translation"] = ""
+    all_bubbles = bubbles
+    bubbles = [b for b in all_bubbles if not b.get("skip") and (b.get("text") or "").strip()]
+    if not bubbles:
+        return all_bubbles
+
+    MEMORY_TOP_K = get_setting("memory_top_k", 3)
+    MEMORY_SIMILARITY_THRESHOLD = get_setting("memory_similarity_threshold", 0.80)
+    MEMORY_AB_TEST_LOGGING = get_setting("memory_ab_test_logging", True)
+    ACTIVE_MODEL_NAME = get_active_model_name()
+
     provider = get_provider()
     run_id = str(uuid.uuid4())
 
@@ -104,13 +120,22 @@ def translate_bubbles(
     #    entirely when no DB context was passed in (see module docstring, point 5).
     matches: dict[str, list[tuple]] = {}
     glossary_by_bubble: dict[str, list[dict]] = {}
+    memory_failed = False
     if memory_enabled:
         glossary_terms = load_glossary(project_id, db)
         for b in bubbles:
             text = b.get("text", "").strip()
             if not text:
                 continue
-            top = find_top_matches(text, project_id, db, top_k=MEMORY_TOP_K)
+            try:
+                top = find_top_matches(text, project_id, db, top_k=MEMORY_TOP_K)
+            except Exception as e:
+                # embedder failed to load (offline first run, broken cache...): translate WITHOUT memory hints instead
+                # of failing the whole page. Reported once per page, health banner shows the cause.
+                if not memory_failed:
+                    print(f"[TRANSLATION] memory lookup failed, continuing without hints: {type(e).__name__}: {e}")
+                memory_failed = True
+                top = []
             if top:
                 matches[b["bubble_id"]] = top
             g = match_glossary(text, glossary_terms)
@@ -130,10 +155,17 @@ def translate_bubbles(
         if b.get("text", "").strip()
     ]
 
+    # Single-bubble retranslation: neighbouring bubbles ride along ONLY as context (see prompts.py "context_only").
+    if context:
+        texts_payload = [
+            {"id": c["bubble_id"], "text": c["text"], "context_only": True}
+            for c in context if (c.get("text") or "").strip() and not c.get("skip")
+        ] + texts_payload
+
     if not texts_payload:
         for b in bubbles:
             b["translation"] = ""
-        return bubbles
+        return all_bubbles
 
     shown_translations = provider.translate(texts_payload)
     shown_key_label = provider.current_key_label
@@ -201,8 +233,15 @@ def translate_bubbles(
                 glossary_terms_used=glossary_json,
             ))
 
+    bubbles = all_bubbles
     if logging_enabled and log_rows:
-        db.add_all(log_rows)
-        db.commit()
+        # Logging is secondary: a failed commit (old DB schema, "database is locked") must NOT throw away
+        # translations that were already paid for.
+        try:
+            db.add_all(log_rows)
+            db.commit()
+        except Exception as e:
+            db.rollback()
+            print(f"[TRANSLATION] logging FAILED, translations kept: {type(e).__name__}: {e}")
 
-    return bubbles
+    return all_bubbles

@@ -20,6 +20,11 @@ right after a page loads.
 from concurrent.futures import ThreadPoolExecutor
 import threading
 
+# ONE lock for every PaddleOCR call. The single worker thread below is not enough: the synchronous
+# POST /pages/{id}/process runs in FastAPI's threadpool and used to hit the same GPU model concurrently
+# with the background worker. routers/pages.py wraps process_image() in `with OCR_LOCK:`.
+OCR_LOCK = threading.Lock()
+
 _executor = ThreadPoolExecutor(max_workers=1)
 _queued_or_running: set[int] = set()
 _lock = threading.Lock()

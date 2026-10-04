@@ -8,6 +8,7 @@
  
 import { api } from "./api.js";
 import { renderSidebar } from "./nav.js";
+import { diffHtml as sharedDiffHtml } from "./diff.js";
  
 const params = new URLSearchParams(window.location.search);
 const projectId = params.get("project");
@@ -49,6 +50,7 @@ async function loadLogs() {
  
     const rows = [...groups.values()].filter((g) => g.zero_shot || g.memory_injected);
     document.getElementById("countBadge").textContent = rows.length;
+    renderSummary(rows);
  
     if (!rows.length) {
         tableBody.innerHTML = `<tr><td colspan="4" class="text-muted">No translation logs yet - process a page to generate some.</td></tr>`;
@@ -69,15 +71,47 @@ function logRow(group, correctionBySource) {
         <td class="text-mono">${escapeHtml(base.source_text)}</td>
         <td>${group.zero_shot ? escapeHtml(group.zero_shot.output_text) : '<span class="text-muted">—</span>'}</td>
         <td>${group.memory_injected
-            ? escapeHtml(group.memory_injected.output_text) + similarityBadge(group.memory_injected.similarity_score) + keyBadge(group.memory_injected.key_label)
+            ? escapeHtml(group.memory_injected.output_text) + similarityBadge(group.memory_injected.similarity_score) + keyBadge(group.memory_injected.key_label) + glossaryBadge(group.memory_injected)
             : '<span class="text-muted">no memory match</span>'}</td>
         <td>${finalCorrection
-            ? diffHtml(shownVariant.output_text, finalCorrection.final_translation)
+            ? sharedDiffHtml(shownVariant.output_text, finalCorrection.final_translation, escapeHtml)
             : '<span class="text-muted">not corrected yet</span>'}</td>
     `;
     return tr;
 }
  
+function glossaryTerms(log) {
+    try { return log.glossary_terms_used ? JSON.parse(log.glossary_terms_used) : []; } catch { return []; }
+}
+
+function glossaryBadge(log) {
+    const terms = glossaryTerms(log);
+    if (!terms.length) return "";
+    const text = terms.map((t) => `${t.source_term} \u2192 ${t.target_term}`).join(", ");
+    return ` <span class="badge" title="Glossary terms injected: ${escapeHtml(text)}">glossary ${terms.length}</span>`;
+}
+
+/** Quick health numbers for the memory experiment: does the hint fire at all, and does it change the output? */
+function renderSummary(rows) {
+    const box = document.getElementById("logsSummary");
+    const injected = rows.filter((g) => g.memory_injected);
+    const changed = injected.filter((g) => g.zero_shot && g.zero_shot.output_text !== g.memory_injected.output_text);
+    const sims = injected.map((g) => g.memory_injected.similarity_score).filter((s) => s != null);
+    const thresholds = [...new Set(rows.flatMap((g) => [g.memory_injected, g.zero_shot]).filter(Boolean).map((l) => l.threshold_used).filter((t) => t != null))];
+    const glossaryFired = rows.filter((g) => glossaryTerms(g.zero_shot || g.memory_injected).length || (g.memory_injected && glossaryTerms(g.memory_injected).length)).length;
+    const pct = (n) => rows.length ? ` (${Math.round((100 * n) / rows.length)}%)` : "";
+    const stat = (label, value, hint = "") => `<div title="${escapeHtml(hint)}"><div class="field-label">${label}</div><div>${value}</div></div>`;
+    box.innerHTML = [
+        stat("Bubbles translated", rows.length),
+        stat("Memory hint used", `${injected.length}${pct(injected.length)}`, "Bubbles where a stored correction cleared the similarity threshold"),
+        stat("Hint changed the output", `${changed.length}${injected.length ? ` / ${injected.length}` : ""}`, "memory-injected text differs from the hint-free (zero-shot) text of the same bubble"),
+        stat("Similarity of hints", sims.length ? `${Math.min(...sims).toFixed(2)} - ${Math.max(...sims).toFixed(2)}` : "-", "min - max cosine similarity among used hints"),
+        stat("Threshold(s) seen", thresholds.length ? thresholds.map((t) => t.toFixed(2)).join(", ") : "-"),
+        stat("Glossary fired", `${glossaryFired}${pct(glossaryFired)}`, "Bubbles with at least one glossary term injected"),
+    ].join("");
+    box.classList.remove("hidden");
+}
+
 function similarityBadge(score) {
     if (score === null || score === undefined) return "";
     return ` <span class="badge">${Math.round(score * 100)}%</span>`;
@@ -86,41 +120,6 @@ function similarityBadge(score) {
 function keyBadge(label) {
     if (!label) return "";
     return ` <span class="badge" title="API key used">${escapeHtml(label)}</span>`;
-}
- 
-/* --- lightweight word-level diff (LCS-based), for the last column --- */
- 
-function wordDiff(a, b) {
-    const aw = a.split(/(\s+)/);
-    const bw = b.split(/(\s+)/);
-    const m = aw.length, n = bw.length;
-    const dp = Array.from({ length: m + 1 }, () => new Array(n + 1).fill(0));
-    for (let i = m - 1; i >= 0; i--) {
-        for (let j = n - 1; j >= 0; j--) {
-            dp[i][j] = aw[i] === bw[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1]);
-        }
-    }
-    let i = 0, j = 0;
-    const parts = [];
-    while (i < m && j < n) {
-        if (aw[i] === bw[j]) { parts.push({ t: aw[i], type: "same" }); i++; j++; }
-        else if (dp[i + 1][j] >= dp[i][j + 1]) { parts.push({ t: aw[i], type: "removed" }); i++; }
-        else { parts.push({ t: bw[j], type: "added" }); j++; }
-    }
-    while (i < m) { parts.push({ t: aw[i], type: "removed" }); i++; }
-    while (j < n) { parts.push({ t: bw[j], type: "added" }); j++; }
-    return parts;
-}
- 
-function diffHtml(a, b) {
-    if (a.trim() === b.trim()) return `<span class="text-muted">identical</span>`;
-    return wordDiff(a, b)
-        .map((p) => {
-            if (p.type === "same") return escapeHtml(p.t);
-            const cls = p.type === "removed" ? "diff-removed" : "diff-added";
-            return `<span class="${cls}">${escapeHtml(p.t)}</span>`;
-        })
-        .join("");
 }
  
 function escapeHtml(text) {

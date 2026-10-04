@@ -36,8 +36,9 @@ export const api = {
         import: (path, projectName) =>
             request("/projects/import", { method: "POST", body: JSON.stringify({ path, projectName }) }),
         // add chapters: scan -> user picks/renames in a dialog -> import exactly that selection
-        previewChapters: (projectId, path) =>
-            request(`/projects/${projectId}/chapters/preview`, { method: "POST", body: JSON.stringify({ path }) }),
+        previewChapters: (projectId, path, orderMode = "auto") =>
+            request(`/projects/${projectId}/chapters/preview`, { method: "POST", body: JSON.stringify({ path, order_mode: orderMode }) }),
+        rescan: (projectId) => request(`/projects/${projectId}/rescan`, { method: "POST" }),
         importChapterSelection: (projectId, payload) =>
             request(`/projects/${projectId}/chapters/import`, { method: "POST", body: JSON.stringify(payload) }),
         deleteChapter: (chapterId) => request(`/projects/chapters/${chapterId}`, { method: "DELETE" }),
@@ -52,6 +53,9 @@ export const api = {
         resetToDefault: () => request("/settings/reset-to-default", { method: "POST" }),
         updateMemory: (payload) => request("/settings/memory", { method: "POST", body: JSON.stringify(payload) }),
         updateIgnorePatterns: (payload) => request("/settings/ignore-patterns", { method: "POST", body: JSON.stringify(payload) }),
+        updateTranslation: (payload) => request("/settings/translation", { method: "POST", body: JSON.stringify(payload) }),
+        testTranslation: () => request("/settings/test-translation", { method: "POST" }),
+        updateOcrOptions: (payload) => request("/settings/ocr-options", { method: "POST", body: JSON.stringify(payload) }),
     },
  
     pages: {
@@ -60,9 +64,17 @@ export const api = {
         get: (pageId) => request(`/pages/${pageId}`),
         imageUrl: (pageId) => `${API_BASE}/pages/${pageId}/image`,
         process: (pageId) => request(`/pages/${pageId}/process`, { method: "POST" }),
-        processAsync: (pageId) => request(`/pages/${pageId}/process-async`, { method: "POST" }),
+        // translate=false: prefetch OCR + inpainting only; the page is translated when opened (fresh memory/glossary)
+        processAsync: (pageId, translate = true) => request(`/pages/${pageId}/process-async?translate=${translate}`, { method: "POST" }),
+        reocr: (pageId) => request(`/pages/${pageId}/reocr`, { method: "POST" }),
+        reinpaint: (pageId) => request(`/pages/${pageId}/reinpaint`, { method: "POST" }),
+        patchBubble: (pageId, bubbleId, payload) =>
+            request(`/pages/${pageId}/bubbles/${bubbleId}`, { method: "PATCH", body: JSON.stringify(payload) }),
+        retranslateBubble: (pageId, bubbleId) =>
+            request(`/pages/${pageId}/bubbles/${bubbleId}/retranslate`, { method: "POST" }),
         status: (pageId) => request(`/pages/${pageId}/status`),
-        retranslate: (pageId) => request(`/pages/${pageId}/retranslate`, { method: "POST" }),
+        retranslate: (pageId, overwriteEdited = false) =>
+            request(`/pages/${pageId}/retranslate?overwrite_edited=${overwriteEdited}`, { method: "POST" }),
         deleteBubble: (pageId, bubbleId) =>
             request(`/pages/${pageId}/bubbles/${bubbleId}`, { method: "DELETE" }),
         exclude: (pageId) => request(`/pages/${pageId}/exclude`, { method: "POST" }),

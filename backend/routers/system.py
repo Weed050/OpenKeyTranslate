@@ -60,7 +60,17 @@ async def open_path(payload: OpenPathRequest):
 async def health():
     """Config/connectivity self-check (see core/startup_checks.py) - the frontend shows a banner for error/warn."""
     from core.startup_checks import run_checks
-    return {"issues": run_checks(check_network=True)}
+    from services.reconcile import LAST_REPORT
+    issues = run_checks(check_network=True)
+    from services.memory_service import EMBEDDER_STATE
+    if EMBEDDER_STATE["state"] == "error":
+        issues.append({"level": "warn", "code": "embedder_failed",
+                       "message": f"Correction memory model failed to load ({EMBEDDER_STATE['error']}). Translation still works, "
+                                  f"but memory hints and saving corrections will fail until it loads (needs internet once to download)."})
+    # things the startup reconcile found but only wrote to the log (missing page files, chapters kept without raw/ ...)
+    for i, line in enumerate(LAST_REPORT.get("warnings", [])[:5]):
+        issues.append({"level": "warn", "code": f"reconcile_{i}", "message": f"Disk vs DB: {line} (page list -> Rescan folders)"})
+    return {"issues": issues}
 
 
 @router.get("/tail-log")

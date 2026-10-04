@@ -14,10 +14,7 @@ level: "error" = translation will not work, "warn" = works but suspicious, "info
 import re
 import socket
 
-from core.config import (
-    ACTIVE_PROVIDER, MEMORY_SIMILARITY_THRESHOLD, MEMORY_TOP_K, OCR_IGNORE_PATTERNS,
-    PROVIDERS, SETTINGS_FILE, TRANSLATION_ON,
-)
+from core.config import SETTINGS_FILE, get_setting
 
 _PROVIDER_HOSTS = {
     "gemini": "generativelanguage.googleapis.com",
@@ -39,6 +36,13 @@ def _dns_ok(host: str, timeout: float = 3.0) -> tuple[bool, str]:
 
 def run_checks(check_network: bool = True) -> list[dict]:
     issues: list[dict] = []
+    # LIVE values: /system/health is polled by the UI, so it must reflect the Settings page immediately.
+    ACTIVE_PROVIDER = get_setting("active_provider", "groq")
+    PROVIDERS = get_setting("providers", {}) or {}
+    TRANSLATION_ON = get_setting("translation_on", True)
+    MEMORY_SIMILARITY_THRESHOLD = get_setting("memory_similarity_threshold", 0.80)
+    MEMORY_TOP_K = get_setting("memory_top_k", 3)
+    OCR_IGNORE_PATTERNS = get_setting("ocr_ignore_patterns", []) or []
 
     def add(level: str, code: str, message: str):
         issues.append({"level": level, "code": code, "message": message})

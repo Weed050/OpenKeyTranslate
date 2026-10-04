@@ -116,6 +116,14 @@ DEFAULT_SETTINGS = {
         r"\b[\w-]+\.(?:com|net|org|gg|io)\b",
     ],
 
+    # Post-OCR bubble handling (see utils/ocr_textfix.py). Both are applied live (no restart).
+    # ocr_textfix: join line-wrap hyphenation ("SQUAD- RON") and fix L/U confusions (LNIT); raw text is kept in text_raw.
+    "ocr_textfix": True,
+    # Bubbles with only digits ("11", "9:55") / only symbols ("?!", "...") are listed in the editor but NOT translated
+    # and NOT inpainted (the original pixels stay on the page).
+    "ocr_skip_numeric": True,
+    "ocr_skip_symbols": True,
+
     # Debug Flags
     "ocr_debug": True,
     "ocr_marker_debug": True,
@@ -163,6 +171,41 @@ def _deep_fill(current: dict, defaults: dict) -> bool:
     return changed
 
 
+_LIVE = {"stamp": None, "data": None}
+
+
+def _invalidate_live_cache() -> None:
+    _LIVE["stamp"] = None
+
+
+def get_setting(key: str, default=None):
+    """
+    LIVE read of one setting (re-reads settings.json when it changed on disk).
+
+    The module-level constants below are frozen at import time, so every tuning option needed an app restart
+    (and the UI said "restart the application" with no way to do it). Code that should react to the Settings
+    page immediately (memory threshold, translation provider/keys, ignore patterns, post-OCR options) reads
+    through this function instead.
+    """
+    try:
+        st = os.stat(SETTINGS_FILE)
+        stamp = (st.st_mtime_ns, st.st_size)
+    except OSError:
+        return settings.get(key, default)
+    if _LIVE["stamp"] != stamp:
+        try:
+            _LIVE["data"] = _read_json(SETTINGS_FILE)
+            _LIVE["stamp"] = stamp
+        except (json.JSONDecodeError, OSError):
+            return (_LIVE["data"] or settings).get(key, default)   # keep last good copy while the file is mid-write
+    return _LIVE["data"].get(key, default)
+
+
+def get_active_model_name() -> str:
+    provider = get_setting("active_provider", "groq")
+    return (get_setting("providers", {}) or {}).get(provider, {}).get("model", provider)
+
+
 def save_settings(data: dict) -> None:
     """
     Atomic write: temp file -> fsync -> os.replace, after copying the previous file to settings.json.bak.
@@ -176,6 +219,7 @@ def save_settings(data: dict) -> None:
     if os.path.exists(SETTINGS_FILE):
         shutil.copy2(SETTINGS_FILE, SETTINGS_FILE + ".bak")
     os.replace(tmp_path, SETTINGS_FILE)
+    _invalidate_live_cache()
 
 
 def _read_json(path: str) -> dict:

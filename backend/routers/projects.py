@@ -149,6 +149,20 @@ def reconcile_projects_from_disk(db: Session):
     if not os.path.isdir(WORKSPACE_DIR):
         return
 
+    # 0. Heal moved workspaces: the DB keeps ABSOLUTE paths. If a project's folder is gone but
+    #    <WORKSPACE_DIR>/<name> exists (workspace moved/copied by hand, drive letter changed), repoint the row
+    #    instead of treating the folder as a NEW project (UNIQUE name -> IntegrityError -> app fails to start)
+    #    and deleting the "missing" one below together with its corrections and glossary.
+    for p in db.query(Project).all():
+        candidate = os.path.join(WORKSPACE_DIR, p.name)
+        if not os.path.isdir(p.workspace_path) and os.path.isdir(candidate):
+            print(f"[RECONCILE] project '{p.name}': path {p.workspace_path} -> {candidate}")
+            for ch in p.chapters:
+                ch.raw_path = os.path.join(candidate, "raw", ch.number)
+                ch.processed_path = os.path.join(candidate, "processed", ch.number)
+            p.workspace_path = candidate
+    db.flush()
+
     known_paths = {p.workspace_path for p in db.query(Project).all()}
 
     for entry in sorted(os.listdir(WORKSPACE_DIR)):
@@ -183,12 +197,34 @@ def reconcile_projects_from_disk(db: Session):
                 status = "processed" if os.path.exists(json_path) else "pending"
                 db.add(Page(chapter_id=chapter.id, file_name=page_file, order=indx + 1, status=status))
 
-    for p in db.query(Project).all():
-        if not os.path.isdir(p.workspace_path):
+    all_projects = db.query(Project).all()
+    missing = [p for p in all_projects if not os.path.isdir(p.workspace_path)]
+    if all_projects and len(missing) == len(all_projects):
+        # EVERY project folder is gone: offline drive / wrong workspace path, not "the user deleted everything".
+        # Deleting here would cascade-delete all corrections + glossary (the thesis data). Keep the rows, warn.
+        print(f"[RECONCILE] WARNING: none of the {len(all_projects)} project folders exist (drive offline / wrong "
+              f"workspace path?). DB rows kept.")
+    else:
+        for p in missing:
             print(f"[RECONCILE] Removing DB entry for missing folder: {p.name}")
             db.delete(p)
 
     db.commit()
+
+
+@router.post("/{project_id}/rescan")
+def rescan_project(project_id: int, db: Session = Depends(get_db)):
+    """
+    "Rescan folders" button: compare raw/ + processed/ on disk with the DB right now (new page files, vanished
+    files, wrong statuses, new/removed chapter folders) and return exactly what changed or looks wrong.
+    """
+    from services.reconcile import reconcile_chapters
+    project = db.query(Project).filter(Project.id == project_id).first()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    report = reconcile_chapters(db, project_id)
+    changed = sum(len(report[k]) for k in ("added", "removed", "fixed"))
+    return {"message": f"Rescan done: {changed} change(s), {len(report['warnings'])} warning(s).", **report}
 
 
 @router.delete("/chapters/{chapter_id}")

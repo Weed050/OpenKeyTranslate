@@ -45,12 +45,15 @@ import numpy as np
 from sqlalchemy.orm import Session
 
 from models.models import Correction, TranslationLog
-from core.config import (
-    MEMORY_SIMILARITY_THRESHOLD, MEMORY_EMBEDDING_MODEL, MEMORY_MIN_WORDS,
-    MEMORY_SHORT_PHRASE_MAX_WORDS,
-)
+from core.config import MEMORY_EMBEDDING_MODEL, get_setting   # tuning knobs are read LIVE via get_setting (no restart)
+
+import threading
 
 _embedder = None
+_embedder_lock = threading.Lock()
+
+# Observable by GET /system/health: "idle" | "loading" | "ready" | "error"
+EMBEDDER_STATE: dict = {"state": "idle", "error": None, "seconds": None}
 
 
 def _get_embedder():
@@ -63,9 +66,37 @@ def _get_embedder():
     """
     global _embedder
     if _embedder is None:
-        from sentence_transformers import SentenceTransformer
-        _embedder = SentenceTransformer(MEMORY_EMBEDDING_MODEL)
+        with _embedder_lock:                 # a request arriving mid warm-up waits for it instead of loading a 2nd copy
+            if _embedder is None:
+                import time
+                started = time.monotonic()
+                EMBEDDER_STATE.update(state="loading", error=None)
+                try:
+                    from sentence_transformers import SentenceTransformer
+                    _embedder = SentenceTransformer(MEMORY_EMBEDDING_MODEL)
+                except Exception as e:
+                    EMBEDDER_STATE.update(state="error", error=f"{type(e).__name__}: {e}")
+                    raise
+                EMBEDDER_STATE.update(state="ready", seconds=round(time.monotonic() - started, 1))
     return _embedder
+
+
+def warm_up_embedder_async() -> threading.Thread:
+    """
+    Load the embedding model in a background thread (called from main.py's lifespan). The app starts serving at once;
+    the ~5-30 s model load (torch import + huggingface cache check) no longer delays startup, and users who open
+    the app only to browse pages never pay for it. If a translation or a correction-save needs the model before
+    the thread is done, it simply waits on the same lock. A failed load is recorded in EMBEDDER_STATE (health banner).
+    """
+    def _run():
+        try:
+            _get_embedder()
+            print(f"[MEMORY] embedder ready in {EMBEDDER_STATE['seconds']}s (background warm-up).")
+        except Exception as e:
+            print(f"[MEMORY] WARNING embedder failed to load: {type(e).__name__}: {e}")
+    t = threading.Thread(target=_run, name="embedder-warmup", daemon=True)
+    t.start()
+    return t
 
 
 def warm_up_embedder():
@@ -110,7 +141,7 @@ def is_short_phrase(text: str) -> bool:
     to 0 turns the lane off (only empty text counts as "short" then, and
     empty text is never translated or stored).
     """
-    return len((text or "").split()) <= MEMORY_SHORT_PHRASE_MAX_WORDS
+    return len((text or "").split()) <= get_setting("memory_short_phrase_max_words", 2)
 
 
 def _find_exact_phrase_match(source_text: str, corrections: list[Correction]) -> list[tuple[Correction, float]]:
@@ -133,8 +164,8 @@ def find_top_matches(
         source_text: str,
         project_id: int,
         db: Session,
-        threshold: float = MEMORY_SIMILARITY_THRESHOLD,
-        top_k: int = 3,
+        threshold: float | None = None,
+        top_k: int | None = None,
 ) -> list[tuple[Correction, float]]:
     """
     Find this project's past corrections relevant to `source_text`.
@@ -153,6 +184,11 @@ def find_top_matches(
     :param top_k: Maximum number of matches (embedding lane only).
     :return: List of (Correction, score), best first. Empty if nothing matches.
     """
+    if threshold is None:
+        threshold = get_setting("memory_similarity_threshold", 0.80)
+    if top_k is None:
+        top_k = get_setting("memory_top_k", 3)
+
     corrections = db.query(Correction).filter(Correction.project_id == project_id).all()
     if not corrections:
         return []
@@ -192,7 +228,7 @@ def find_best_match(
         source_text: str,
         project_id: int,
         db: Session,
-        threshold: float = MEMORY_SIMILARITY_THRESHOLD,
+        threshold: float | None = None,
 ) -> tuple[Correction, float] | None:
     """Single-match convenience wrapper around find_top_matches() (top_k=1)."""
     matches = find_top_matches(source_text, project_id, db, threshold=threshold, top_k=1)
@@ -244,7 +280,9 @@ def save_correction(
     if short_lane:
         if not phrase_key:
             return None
-    elif len(final_clean.split()) < MEMORY_MIN_WORDS:
+    elif not final_clean:
+        return None   # a cleared textbox must never become a stored (empty) "exact" hint
+    elif len(final_clean.split()) < get_setting("memory_min_words", 3):
         return None
 
     # Duplicate gate: skip if the most recent stored correction for this

@@ -55,6 +55,39 @@
             </div>
  
             <div class="card">
+                <h2>Translation (BYOK)</h2>
+                <p class="text-muted">Your own API keys. Saved and applied immediately - no restart. Keys are never shown again in full.</p>
+                <div class="row">
+                    <label style="display:flex; align-items:center; gap:6px; margin:0;">
+                        <input type="checkbox" id="translationOnCheckbox"> Translate pages (off = OCR only)
+                    </label>
+                    <button id="testTranslationBtn" title="Sends one tiny request through the active provider and key pool">Test connection</button>
+                </div>
+                <div class="row">
+                    <div class="text-muted">Active provider</div>
+                    <select id="providerSelect" style="max-width:200px;">
+                        <option value="groq">Groq</option>
+                        <option value="gemini">Gemini</option>
+                    </select>
+                </div>
+                <div class="row">
+                    <div class="text-muted">Model for this provider</div>
+                    <input type="text" id="providerModelInput" style="max-width:320px;" spellcheck="false">
+                </div>
+                <div>
+                    <div class="text-muted" style="margin:8px 0 4px;">API keys for this provider (several keys = automatic rotation on rate limits)</div>
+                    <div id="keyList"></div>
+                    <button id="addKeyBtn" style="margin-top:6px;">+ Add key</button>
+                </div>
+                <div class="row">
+                    <div class="text-muted">Temperature (0 = most repeatable; use 0 for the zero-shot vs memory experiment)</div>
+                    <input type="text" id="temperatureInput" style="max-width:80px;" inputmode="decimal">
+                </div>
+                <button id="saveTranslationBtn" class="primary">Save</button>
+                <p class="text-muted" id="translationStatus" style="margin-top:10px; white-space:pre-wrap;"></p>
+            </div>
+
+            <div class="card">
                 <h2>Correction memory</h2>
                 <div class="row">
                     <div class="text-muted">Similarity threshold for memory hints (0.0-1.0, lower = more matches)</div>
@@ -77,8 +110,30 @@
             </div>
 
             <div class="card">
+                <h2>OCR: bubble handling</h2>
+                <div class="row">
+                    <label style="display:flex; align-items:center; gap:6px; margin:0;" title="Joins line-wrap hyphenation (SQUAD- RON) and fixes L/U confusions (LNIT). Stutters like TH-THEN are never touched. The raw OCR text is kept per bubble.">
+                        <input type="checkbox" id="ocrTextfixCheckbox"> Clean OCR text (join wrapped words, fix LNIT-style mistakes)
+                    </label>
+                </div>
+                <div class="row">
+                    <label style="display:flex; align-items:center; gap:6px; margin:0;">
+                        <input type="checkbox" id="ocrSkipNumericCheckbox"> Don't translate bubbles with only numbers (page numbers, "9:55")
+                    </label>
+                </div>
+                <div class="row">
+                    <label style="display:flex; align-items:center; gap:6px; margin:0;">
+                        <input type="checkbox" id="ocrSkipSymbolsCheckbox"> Don't translate bubbles with only symbols ("?!", "...")
+                    </label>
+                </div>
+                <p class="text-muted">Skipped bubbles stay in the editor list (you can still force-translate one) but are not sent to the LLM and their original pixels are NOT erased. Applies to pages processed from now on; use <b>Re-OCR</b> in the editor for existing pages.</p>
+                <button id="saveOcrOptionsBtn" class="primary">Save</button>
+                <p class="text-muted" id="ocrOptionsStatus" style="margin-top:10px;"></p>
+            </div>
+
+            <div class="card">
                 <h2>OCR: ignored text</h2>
-                <p class="text-muted">Bubbles whose text matches any of these regular expressions (one per line, case-insensitive, "contains" match) are dropped before translation - watermarks, site URLs, credits. Applies to pages processed after a restart; use scripts/purge_ignored_bubbles.py for pages already processed. Example: ^\W*\d+\W*$ also drops number-only bubbles.</p>
+                <p class="text-muted">Bubbles whose text matches any of these regular expressions (one per line, case-insensitive, "contains" match) are dropped before translation - watermarks, site URLs, credits. Applies to pages processed from now on (no restart); use Re-OCR in the editor for pages already processed. Example: ^\W*\d+\W*$ also drops number-only bubbles.</p>
                 <textarea id="ignorePatternsInput" class="text-mono" rows="5" spellcheck="false"></textarea>
                 <button id="saveIgnorePatternsBtn" class="primary" style="margin-top:8px;">Save</button>
                 <p class="text-muted" id="ignorePatternsStatus" style="margin-top:10px;"></p>

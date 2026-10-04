@@ -30,7 +30,7 @@ sit away from speech bubbles and are grouped on their own.
 
 import re
 
-from core.config import OCR_IGNORE_PATTERNS
+from core.config import get_setting
 
 
 def compile_patterns(patterns) -> list[re.Pattern]:
@@ -44,12 +44,21 @@ def compile_patterns(patterns) -> list[re.Pattern]:
     return compiled
 
 
-_COMPILED = compile_patterns(OCR_IGNORE_PATTERNS)
+_cache: dict = {"patterns": None, "compiled": []}
+
+
+def current_patterns() -> list[re.Pattern]:
+    """Compiled LIVE patterns from settings (recompiled only when the list changed) - no restart needed."""
+    patterns = tuple(get_setting("ocr_ignore_patterns", []) or [])
+    if _cache["patterns"] != patterns:
+        _cache["patterns"] = patterns
+        _cache["compiled"] = compile_patterns(patterns)
+    return _cache["compiled"]
 
 
 def is_ignored_text(text: str, compiled: list[re.Pattern] | None = None) -> bool:
     """True if `text` matches any ignore pattern (the configured ones unless `compiled` is given)."""
-    active = _COMPILED if compiled is None else compiled
+    active = current_patterns() if compiled is None else compiled
     return any(rx.search(text or "") for rx in active)
 
 

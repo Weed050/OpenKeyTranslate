@@ -1,0 +1,27 @@
+/* frontend/css/dialogs.css
+   Modal <dialog>s created by editor-side JS: "Import new chapters" preview (import-dialog.js) and the
+   "Rescan folders" report (pagepicker.js). */
+
+/* ---------- add-chapters preview dialog ---------- */
+
+.import-dialog{
+  width: min(860px, 94vw);
+  max-height: 86vh;
+  padding: var(--space-md);
+  color: var(--text-primary);
+  background: var(--bg-panel);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+}
+.import-dialog::backdrop{ background: rgba(0, 0, 0, 0.6); }
+.import-dialog[open]{ display: flex; flex-direction: column; gap: var(--space-sm); }
+.import-tools{ display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.import-scroll{ overflow: auto; max-height: 52vh; border: 1px solid var(--border); border-radius: var(--radius-sm); }
+.import-table{ width: 100%; border-collapse: collapse; font-size: 12px; }
+.import-table th{ text-align: left; color: var(--text-muted); font-weight: 500; padding: 6px 8px; position: sticky; top: 0; background: var(--bg-panel); }
+.import-table td{ padding: 4px 8px; border-top: 1px solid var(--border); vertical-align: middle; }
+.import-table input[type="text"]{ padding: 4px 8px; }
+.import-error{ color: var(--danger); font-size: 12px; white-space: pre-wrap; margin: 0; }
+.import-footer{ display: flex; justify-content: flex-end; gap: 8px; }
+
+.rescan-report{ white-space: pre-wrap; font-size: 12px; max-height: 50vh; overflow: auto; }

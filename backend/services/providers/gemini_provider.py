@@ -84,11 +84,11 @@ class GeminiProvider(TranslationProvider):
 
         available = [
             k for k in self._keys
-            if k.get("api_key") and k.get("label", "default") not in self._exhausted_labels
+            if k.get("api_key") and not self._is_cooling(k.get("label", "default"))
         ]
         if not available:
             raise RuntimeError(
-                "No Gemini keys available — all configured keys are rate-limited or unset."
+                f"No Gemini keys available — all keys are rate-limited (retry in ~{self._seconds_until_any_key()}s) or unset."
             )
 
         for key_entry in available:
@@ -103,7 +103,7 @@ class GeminiProvider(TranslationProvider):
                 except genai_errors.ClientError as e:
                     if getattr(e, "code", None) == 429:
                         print(f"[GEMINI] key '{label}' rate-limited (429/RESOURCE_EXHAUSTED) — trying next key...")
-                        self._exhausted_labels.add(label)
+                        self._cool_down(label)
                         break
                     raise  # non-quota client error - don't retry or rotate
 
