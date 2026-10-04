@@ -1,0 +1,39 @@
+# cpu only version
+
+
+# in backend/services/ocr_pipeline.py change: device='gpu' -> device='cpu'
+
+# uncomment in ocr_pipeline.py: 
+# import os
+# os.environ['OMP_NUM_THREADS'] = '3'   # 3 - is mine, choose what suits your case
+# os.environ['FLAGS_allocator_strategy'] = 'naive_best_fit'
+# os.environ['FLAGS_fraction_of_gpu_memory_to_use'] = '0'
+# os.environ['KMP_DUPLICATE_LIB_OK'] = 'TRUE'
+
+# execute commands in ./backend
+
+pip uninstall paddlepaddle-gpu torch -y
+pip install torch==2.14.0 --index-url https://download.pytorch.org/whl/cpu
+pip install -r requirements_cpu_only.txt
+
+
+
+
+# cpu and gpu version
+
+# comment in ocr_pipeline.py: 
+# import os
+# os.environ['OMP_NUM_THREADS'] = '3'
+# os.environ['FLAGS_allocator_strategy'] = 'naive_best_fit'
+# os.environ['FLAGS_fraction_of_gpu_memory_to_use'] = '0'
+# os.environ['KMP_DUPLICATE_LIB_OK'] = 'TRUE'
+
+# in backend/services/ocr_pipeline.py change: device='cpu' -> device='gpu'
+
+
+# execute commands in ./backend
+
+pip uninstall paddlepaddle torch -y
+pip install -r requirements_cpu_n_gpu.txt
+
+
