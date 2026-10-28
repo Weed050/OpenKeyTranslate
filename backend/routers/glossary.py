@@ -14,6 +14,7 @@ from core.database import get_db
 from models.models import Project, GlossaryTerm
 from datetime import datetime, timezone
 from services.glossary_service import suggest_glossary_terms, get_term_usage
+from services.terminology import extract_terms_llm
 
 router = APIRouter(prefix="/glossary", tags=["Glossary"])
 
@@ -87,6 +88,23 @@ async def get_suggestions(project_id: int, min_occurrences: int = 2, db: Session
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
     return suggest_glossary_terms(project_id, db, min_occurrences)
+
+@router.post("/suggestions/{project_id}/llm")
+def get_llm_suggestions(project_id: int, db: Session = Depends(get_db)):
+    """
+    LLM bilingual term extraction over the latest corrections (ONE provider request - services/terminology.py).
+    Finds what the cheap heuristic cannot: translated (not transliterated) terms such as DRAGOONS -> JEZDZCY WYWERN.
+    Suggestions only - nothing is saved until the user accepts one.
+    """
+    project = db.query(Project).filter(Project.id == project_id).first()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    from services.providers import get_provider
+    try:
+        return extract_terms_llm(project_id, db, get_provider())
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Term extraction failed: {type(e).__name__}: {e}")
+
 
 @router.get("/{term_id}/usage")
 async def term_usage(term_id: int, db: Session = Depends(get_db)):

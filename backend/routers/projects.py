@@ -8,7 +8,6 @@ Handles fetching project lists, native directory selection via Tkinter,
 batch importing images, and synchronizing the database with the filesystem.
 """
 
-import re
 from tkinter import filedialog
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
@@ -16,10 +15,11 @@ from typing import List
 import os
 import shutil
 import tkinter
-from models.models import Project, Chapter, Page
+from models.models import Project, Chapter
 from models.schemas import ProjectSchema
 from core.database import get_db
 from core.config import WORKSPACE_DIR
+from utils.chapter_labels import sanitize_label
 from services.chapter_import import auto_selections, import_selected
 
 # Initialize the router for project-related endpoints
@@ -59,7 +59,7 @@ async def import_folder(data: dict, db: Session = Depends(get_db)):
     """
 
     actual_source_path = data.get("path")
-    project_name = (data.get("projectName") or "").strip()
+    project_name = sanitize_label((data.get("projectName") or "").strip(), default="Project") if (data.get("projectName") or "").strip() else ""
 
     if not actual_source_path or not project_name:
         raise HTTPException(status_code=400, detail="Missing path or project name")
@@ -82,13 +82,14 @@ async def import_folder(data: dict, db: Session = Depends(get_db)):
         os.makedirs(processed_dir, exist_ok=True)
         created_project_dir = True  # from here on it is OUR folder and safe to clean up
 
-        new_project = Project(name=project_name, workspace_path=target_project_path)
+        new_project = Project(name=project_name)
         db.add(new_project)
         db.commit()
         db.refresh(new_project)
 
         result = import_selected(db, new_project, auto_selections(actual_source_path), allow_duplicates=True)
-        return {"message": "Import successful", "id": new_project.id, **result}
+        return {"message": "Import successful" + (f" (project folder name: {project_name})" if project_name != (data.get("projectName") or "").strip() else ""),
+                "id": new_project.id, "name": project_name, **result}
 
     except Exception as e:
         db.rollback()
@@ -101,115 +102,40 @@ async def import_folder(data: dict, db: Session = Depends(get_db)):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post("/cleanup")
-async def cleanup_database(db: Session = Depends(get_db)):
-    """
-    Synchronize the database with the filesystem.
-    Removes database entries for projects whose physical workspace directories no longer exist.
-    """
-
-    projects = db.query(Project).all()
-    removed_count = 0
-
-    for proj in projects:
-        if not os.path.exists(proj.workspace_path):
-            db.delete(proj)
-            removed_count += 1
-
-    db.commit()
-    return {"message": f"Database cleared. Deleted {removed_count} not existing projects."}
-
 @router.delete("/{project_id}")
 async def delete_project(project_id: int, db: Session = Depends(get_db)):
     project = db.query(Project).filter(Project.id == project_id).first()
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
 
-    shutil.rmtree(project.workspace_path, ignore_errors=True)
+    folder = os.path.abspath(project.workspace_path)
+    root = os.path.abspath(WORKSPACE_DIR)
+    # never rmtree anything outside the workspace root, whatever the name in the DB says
+    if os.path.commonpath([folder, root]) == root and folder != root:
+        shutil.rmtree(folder, ignore_errors=True)
     db.delete(project)
     db.commit()
     return {"message": "Project deleted"}
 
-def natural_sort_key(s):
+@router.post("/{project_id}/export-pages")
+def export_pages(project_id: int, payload: dict, db: Session = Depends(get_db)):
     """
-        Sorting key that correctly handles numbers embedded in strings.
-        Ensures that '2_image.jpg' comes before '10_image.jpg' rather than after it.
-        """
-    return [int(text) if text.isdigit() else text.lower() for text in re.split(r'(\d+)', s)]
-
-
-
-def reconcile_projects_from_disk(db: Session):
+    Export the translated pages as PNG files: {"path": destination folder, "chapter_ids": [..] (omit = all chapters),
+    "include_untranslated": false}. Runs as a background job - poll GET /system/jobs/{job_id}.
     """
-    Startup safety net: project folders on disk with no matching DB row
-    (DB deleted/replaced but files survived) get re-registered so they
-    reappear in the sidebar. Doesn't touch projects already in the DB.
-    """
-
-    if not os.path.isdir(WORKSPACE_DIR):
-        return
-
-    # 0. Heal moved workspaces: the DB keeps ABSOLUTE paths. If a project's folder is gone but
-    #    <WORKSPACE_DIR>/<name> exists (workspace moved/copied by hand, drive letter changed), repoint the row
-    #    instead of treating the folder as a NEW project (UNIQUE name -> IntegrityError -> app fails to start)
-    #    and deleting the "missing" one below together with its corrections and glossary.
-    for p in db.query(Project).all():
-        candidate = os.path.join(WORKSPACE_DIR, p.name)
-        if not os.path.isdir(p.workspace_path) and os.path.isdir(candidate):
-            print(f"[RECONCILE] project '{p.name}': path {p.workspace_path} -> {candidate}")
-            for ch in p.chapters:
-                ch.raw_path = os.path.join(candidate, "raw", ch.number)
-                ch.processed_path = os.path.join(candidate, "processed", ch.number)
-            p.workspace_path = candidate
-    db.flush()
-
-    known_paths = {p.workspace_path for p in db.query(Project).all()}
-
-    for entry in sorted(os.listdir(WORKSPACE_DIR)):
-        project_path = os.path.join(WORKSPACE_DIR, entry)
-        raw_dir = os.path.join(project_path, "raw")
-        if not os.path.isdir(raw_dir) or project_path in known_paths:
-            continue
-
-        print(f"[RECONCILE] Re-registering orphaned project folder: {entry}")
-        project = Project(name=entry, workspace_path=project_path)
-        db.add(project)
-        db.flush()
-
-        img_extensions = ('.jpg', '.jpeg', '.png', '.webp', '.jfif')
-        for chapter_label in sorted(os.listdir(raw_dir)):
-            chapter_raw_dir = os.path.join(raw_dir, chapter_label)
-            if not os.path.isdir(chapter_raw_dir):
-                continue
-
-            chapter = Chapter(
-                project_id=project.id, number=chapter_label, title=chapter_label,
-                raw_path=chapter_raw_dir,
-                processed_path=os.path.join(project_path, "processed", chapter_label),
-            )
-            db.add(chapter)
-            db.flush()
-
-            pages = sorted(f for f in os.listdir(chapter_raw_dir) if f.lower().endswith(img_extensions))
-            for indx, page_file in enumerate(pages):
-                file_base = os.path.splitext(page_file)[0]
-                json_path = os.path.join(project_path, "processed", chapter_label, f"{file_base}_ocr.json")
-                status = "processed" if os.path.exists(json_path) else "pending"
-                db.add(Page(chapter_id=chapter.id, file_name=page_file, order=indx + 1, status=status))
-
-    all_projects = db.query(Project).all()
-    missing = [p for p in all_projects if not os.path.isdir(p.workspace_path)]
-    if all_projects and len(missing) == len(all_projects):
-        # EVERY project folder is gone: offline drive / wrong workspace path, not "the user deleted everything".
-        # Deleting here would cascade-delete all corrections + glossary (the thesis data). Keep the rows, warn.
-        print(f"[RECONCILE] WARNING: none of the {len(all_projects)} project folders exist (drive offline / wrong "
-              f"workspace path?). DB rows kept.")
-    else:
-        for p in missing:
-            print(f"[RECONCILE] Removing DB entry for missing folder: {p.name}")
-            db.delete(p)
-
-    db.commit()
+    from services import backup_service as bs
+    from services.render_service import export_chapters
+    if not db.query(Project).filter(Project.id == project_id).first():
+        raise HTTPException(status_code=404, detail="Project not found")
+    dest = (payload.get("path") or "").strip()
+    if not dest:
+        raise HTTPException(status_code=400, detail="path (destination folder) is required")
+    try:
+        job_id = bs.start_job("export_pages", export_chapters, project_id, payload.get("chapter_ids") or None, dest,
+                              bool(payload.get("include_untranslated", False)))
+    except bs.BackupError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    return {"job_id": job_id}
 
 
 @router.post("/{project_id}/rescan")

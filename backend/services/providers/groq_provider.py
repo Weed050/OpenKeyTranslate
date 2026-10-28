@@ -24,9 +24,9 @@ below (contrast with GeminiProvider, which enforces a real schema).
 import json
 import time
 from groq import Groq, RateLimitError, InternalServerError, APIConnectionError
+from pydantic import BaseModel
 
-from .base import TranslationProvider
-from .prompts import SYSTEM_PROMPT
+from .base import TranslationProvider, TranslationBatch
 
 _SERVER_ERROR_RETRIES = 2
 _SERVER_ERROR_BACKOFF_SECONDS = 2
@@ -45,13 +45,13 @@ class GroqProvider(TranslationProvider):
         self._max_tokens = max_tokens
         self._exhausted_labels: set[str] = set()
 
-    def _call_key(self, api_key: str, user_message: str):
-        """One request attempt with a single key. Raises on any failure."""
+    def _call_key(self, api_key: str, system_prompt: str, user_message: str, schema: type[BaseModel]) -> BaseModel:
+        """One request attempt with a single key. Raises on any failure (incl. a reply that doesn't fit `schema`)."""
         client = Groq(api_key=api_key)
         response = client.chat.completions.create(
             model=self._model,
             messages=[
-                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_message},
             ],
             response_format={"type": "json_object"},
@@ -59,12 +59,15 @@ class GroqProvider(TranslationProvider):
             max_tokens=self._max_tokens,
         )
         raw = response.choices[0].message.content.strip()
-        parsed_data = json.loads(raw)
-        translations_list = parsed_data.get("translations", [])
-        return {t.get("id"): t.get("translation", "") for t in translations_list if "id" in t}
+        data = json.loads(raw)
+        if schema is TranslationBatch:
+            # json_object mode does not enforce the shape: keep only well-formed items instead of failing the page
+            items = [t for t in data.get("translations", []) if isinstance(t, dict) and "id" in t]
+            data = {"translations": [{"id": str(t["id"]), "translation": str(t.get("translation", ""))} for t in items]}
+        return schema.model_validate(data)
 
-    def translate(self, texts_payload: list[dict]) -> dict[str, str]:
-        user_message = json.dumps(texts_payload, ensure_ascii=False)
+    def request_json(self, system_prompt: str, payload, schema: type[BaseModel]) -> BaseModel:
+        user_message = payload if isinstance(payload, str) else json.dumps(payload, ensure_ascii=False)
 
         available = [
             k for k in self._keys
@@ -80,7 +83,7 @@ class GroqProvider(TranslationProvider):
 
             for attempt in range(_SERVER_ERROR_RETRIES + 1):
                 try:
-                    result = self._call_key(key_entry["api_key"], user_message)
+                    result = self._call_key(key_entry["api_key"], system_prompt, user_message, schema)
                     self.current_key_label = label
                     return result
 
@@ -119,3 +122,7 @@ class GroqProvider(TranslationProvider):
             f"All available Groq keys are rate-limited or failing (tried: "
             f"{[k.get('label', 'default') for k in available]})."
         )
+
+    def translate(self, texts_payload: list[dict], system_prompt: str | None = None) -> dict[str, str]:
+        batch = self.request_json(system_prompt or self.default_system_prompt, texts_payload, TranslationBatch)
+        return {item.id: item.translation for item in batch.translations}

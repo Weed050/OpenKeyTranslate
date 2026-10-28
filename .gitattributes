@@ -1,2 +1,5 @@
 docs/** linguist-documentation
 *.md linguist-documentation
+# Git hooks run in bash - CRLF would break them on Windows
+.githooks/* text eol=lf
+*.sh text eol=lf

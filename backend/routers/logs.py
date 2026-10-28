@@ -58,6 +58,9 @@ async def list_translation_logs(project_id: int, db: Session = Depends(get_db)):
             "similarity_score": log.similarity_score,
             "threshold_used": log.threshold_used,
             "glossary_terms_used": log.glossary_terms_used,   # was missing: glossary effect could not be analysed
+            "hints_json": log.hints_json,
+            "memory_lane": log.memory_lane,
+            "injection_json": log.injection_json,
             "model_used": log.model_used,
             "key_label": log.key_label,
             "created_at": log.created_at.isoformat() if log.created_at else None,
@@ -113,7 +116,8 @@ async def export_logs(project_id: int, db: Session = Depends(get_db)):
                 "variant": log.variant, "source_text": log.source_text, "output_text": log.output_text,
                 "matched_correction_id": log.matched_correction_id, "similarity_score": log.similarity_score,
                 "threshold_used": log.threshold_used, "model_used": log.model_used,
-                "glossary_terms_used": log.glossary_terms_used,
+                "glossary_terms_used": log.glossary_terms_used, "hints_json": log.hints_json,
+                "memory_lane": log.memory_lane, "injection_json": log.injection_json,
                 "key_label": log.key_label, "created_at": log.created_at.isoformat() if log.created_at else None,
             }
             for log in logs

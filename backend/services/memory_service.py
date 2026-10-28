@@ -6,40 +6,50 @@ Correction Memory Service
 __________________________
 
 Implements the project's core engineering-thesis contribution: a lightweight,
-local retrieval mechanism over previously confirmed user corrections.
+local retrieval mechanism over the user's confirmed translations - a per-project
+translation memory (TM), used for adaptive MT by in-context learning
+(Moslem 2024, "Language Modelling Approaches to Adaptive Machine Translation", ch. 4:
+fuzzy matches from a TM injected into the prompt as source -> target pairs).
 
 Each time a bubble is about to be translated, its English source text is
-embedded and compared (cosine similarity) against every past correction
-stored for the same project. A close-enough match is surfaced as a "hint"
-that gets injected into the LLM prompt (see translation_service.py), pushing
-the model toward phrasing the user has already approved for similar text.
+embedded and compared (cosine similarity) against every TM entry stored for the
+same project. Close-enough matches are injected into the LLM prompt as
+EN -> PL example pairs (see translation_service.py / providers/prompts.py),
+pushing the model toward phrasing the user has already approved for similar text.
+
+Two kinds of entries (Correction.kind):
+    - "corrected": the user changed the AI proposal - the strongest signal. The rejected AI version is kept
+      (ai_translation) and shown to the model as "rejected", so it also learns what NOT to write.
+    - "approved":  the user accepted the AI proposal unchanged (memory_store_approved). A plain TM entry: it
+      keeps character voice / recurring lines consistent and makes the memory fire far more often.
+    Corrected entries win ties at retrieval.
 
 Design notes:
     - Embeddings are computed locally (sentence-transformers), matching the
-      project's privacy-first / local-processing design pillar - only plain
-      text ever needs to leave the machine for translation, and that is
-      still true here since embedding happens before any API call.
+      project's privacy-first / local-processing design pillar.
     - Matching is deliberately scoped per-project: reusing a phrase's
       translation across unrelated manga titles risks bleeding one series'
-      voice into another. See README "Known limitations" for the open
-      question of whether this should ever be relaxed.
+      voice into another.
     - At the data scale of a thesis project (hundreds to a few thousand
-      corrections), a brute-force cosine scan over embeddings loaded into
-      memory is simpler to reason about and fast enough - no dedicated
-      vector DB needed.
+      entries), a brute-force cosine scan over embeddings loaded into
+      memory is simpler to reason about and fast enough - no vector DB needed.
+    - Source text is normalized before embedding / exact matching (utils/ocr_textfix: "SQUAD- RON" ->
+      "SQUADRON"), so entries saved before the OCR cleanup existed still match cleaned text. Entries embedded
+      from un-normalized text can be refreshed with reembed_project() (POST /corrections/reembed/{project}).
     - Two retrieval lanes, chosen by the length of the text being translated
       (see is_short_phrase):
-        * Longer text  -> embedding similarity: up to top_k matches that clear
-          the similarity threshold (find_top_matches).
+        * Longer text  -> "fuzzy" lane: up to top_k entries that clear BOTH the cosine threshold and a
+          lexical gate (content-word overlap, memory_lexical_min) - unless the cosine alone is
+          very high (memory_strong_similarity). all-MiniLM-L6-v2 scores "same topic, different line" around
+          0.7; such matches are noise as examples (Moslem 2024: low-similarity fuzzy matches add little).
         * Short text (<= MEMORY_SHORT_PHRASE_MAX_WORDS words: interjections,
-          sound effects) -> EXACT match on normalized text. Embeddings of one
-          or two words are noisy - unrelated short lines can look "similar" -
-          while repeated short lines ("SFX: WHIRRRR", "WAIT!") match exactly.
-          Short entries are therefore never embedding-searched, and short
-          text is never embedding-matched against long entries either.
+          sound effects) -> "exact" lane: EXACT match on normalized text.
+          Short entries are never embedding-searched, and short text is never
+          embedding-matched against long entries either.
 """
 
 import re
+from functools import lru_cache
 
 import numpy as np
 from sqlalchemy.orm import Session
@@ -54,6 +64,9 @@ _embedder_lock = threading.Lock()
 
 # Observable by GET /system/health: "idle" | "loading" | "ready" | "error"
 EMBEDDER_STATE: dict = {"state": "idle", "error": None, "seconds": None}
+
+# Ranking bonus for a user edit over a plain approval at (almost) the same similarity.
+_CORRECTED_BONUS = 0.02
 
 
 def _get_embedder():
@@ -104,8 +117,24 @@ def warm_up_embedder():
     _get_embedder()
 
 
+@lru_cache(maxsize=8192)
+def memory_text(text: str) -> str:
+    """
+    The form of a source line used for embedding and exact matching: OCR artefacts fixed ("SQUAD- RON" ->
+    "SQUADRON", LNIT -> UNIT) and whitespace collapsed. Never stored - the Correction keeps what the user saw.
+    """
+    text = " ".join((text or "").split())
+    if not text:
+        return ""
+    try:
+        from utils.ocr_textfix import fix_ocr_text
+        return fix_ocr_text(text)
+    except Exception:
+        return text   # wordfreq missing / unexpected input: matching on the raw text is still fine
+
+
 def embed_text(text: str) -> np.ndarray:
-    """Compute a single L2-normalized embedding vector for a piece of text."""
+    """Compute a single L2-normalized embedding vector for a piece of (already normalized) text."""
     vector = _get_embedder().encode(text, normalize_embeddings=True)
     return np.asarray(vector, dtype=np.float32)
 
@@ -144,20 +173,61 @@ def is_short_phrase(text: str) -> bool:
     return len((text or "").split()) <= get_setting("memory_short_phrase_max_words", 2)
 
 
+def entry_kind(correction: Correction) -> str:
+    """Rows from before Correction.kind existed are user edits (the old code stored nothing else)."""
+    return correction.kind or "corrected"
+
+
+def _latest_per_source(corrections: list[Correction]) -> list[Correction]:
+    """
+    One entry per normalized source line: the most recent one (the user's latest decision). Keeps a stale
+    first translation of a line from competing with the newer one as a second "example" of the same sentence.
+    """
+    latest: dict[str, Correction] = {}
+    for c in corrections:
+        key = normalize_phrase(memory_text(c.source_text)) or c.source_text
+        if key not in latest or c.id > latest[key].id:
+            latest[key] = c
+    return list(latest.values())
+
+
 def _find_exact_phrase_match(source_text: str, corrections: list[Correction]) -> list[tuple[Correction, float]]:
     """
     Exact-match lane: the user's most recent translation of this exact line
     (compared via normalize_phrase). Returns at most one (Correction, 1.0) -
-    if the user changed their mind over time, the latest edit wins.
+    if the user changed their mind over time, the latest decision wins.
     """
-    key = normalize_phrase(source_text)
+    key = normalize_phrase(memory_text(source_text))
     if not key:
         return []
-    candidates = [c for c in corrections if normalize_phrase(c.source_text) == key]
+    candidates = [c for c in corrections if normalize_phrase(memory_text(c.source_text)) == key]
     if not candidates:
         return []
     latest = max(candidates, key=lambda c: c.id)
     return [(latest, 1.0)]
+
+
+_STOPWORDS = frozenset(
+    "a an the of to is are was were be been it its this that these those i you he she we they me him her us them "
+    "my your his our their in on at for and or but so s m re ll ve d t what who".split()
+)
+
+
+def _content_words(text: str) -> set[str]:
+    return {w for w in normalize_phrase(text).split() if w not in _STOPWORDS and len(w) > 1}
+
+
+def lexical_overlap(a: str, b: str) -> float:
+    """
+    0-100: Jaccard overlap of CONTENT words (stopwords dropped). Measured on the project's own logs it separates
+    useful fuzzy matches ("FLAG OF QUA-TOYNE PRINCIPALITY" ~ "QUA-TOYNE PRINCIPALITY": 67) from same-topic noise
+    ("PLEASE USE THE WYVERNS WE PROVIDED..." ~ "ONLY WYVERNS CAN TAKE DOWN WYVERNS...": 8) far better than
+    rapidfuzz's token_set_ratio, which scored both around 45-100.
+    """
+    wa, wb = _content_words(a), _content_words(b)
+    if not wa or not wb:
+        return 0.0
+    return 100.0 * len(wa & wb) / len(wa | wb)
 
 
 def find_top_matches(
@@ -166,61 +236,73 @@ def find_top_matches(
         db: Session,
         threshold: float | None = None,
         top_k: int | None = None,
+        corrections: list[Correction] | None = None,
 ) -> list[tuple[Correction, float]]:
     """
-    Find this project's past corrections relevant to `source_text`.
+    Find this project's TM entries relevant to `source_text`.
 
     Short text (see is_short_phrase) -> exact-match lane: at most one entry,
-    score 1.0. Longer text -> embedding lane: up to `top_k` corrections whose
-    cosine similarity clears `threshold`, best first, skipping candidates
-    whose final translation duplicates one already picked. Short-phrase
-    entries are excluded from the embedding lane (they only match exactly).
+    score 1.0. Longer text -> fuzzy lane: up to `top_k` entries whose cosine
+    similarity clears `threshold` AND whose word overlap clears memory_lexical_min (or whose cosine alone clears
+    memory_strong_similarity), best first; corrected entries win near-ties; one entry per source line and no two
+    examples with the same final translation.
 
     :param source_text: The English OCR text about to be translated.
-    :param project_id: Restricts the search to corrections from the same
-        project, avoiding cross-series contamination (see module docstring).
+    :param project_id: Restricts the search to entries from the same project.
     :param db: Active SQLAlchemy session.
-    :param threshold: Minimum cosine similarity (embedding lane only).
-    :param top_k: Maximum number of matches (embedding lane only).
-    :return: List of (Correction, score), best first. Empty if nothing matches.
+    :param threshold: Minimum cosine similarity (fuzzy lane only).
+    :param top_k: Maximum number of matches (fuzzy lane only).
+    :param corrections: Pre-loaded entries of this project (translate_bubbles loads them once per page).
+    :return: List of (Correction, cosine score), best first. Empty if nothing matches.
     """
     if threshold is None:
         threshold = get_setting("memory_similarity_threshold", 0.80)
     if top_k is None:
         top_k = get_setting("memory_top_k", 3)
+    lexical_min = get_setting("memory_lexical_min", 25) or 0
+    strong = get_setting("memory_strong_similarity", 0.90)
 
-    corrections = db.query(Correction).filter(Correction.project_id == project_id).all()
+    if corrections is None:
+        corrections = db.query(Correction).filter(Correction.project_id == project_id).all()
     if not corrections:
         return []
 
     if is_short_phrase(source_text):
         return _find_exact_phrase_match(source_text, corrections)
 
-    candidates = [c for c in corrections if not is_short_phrase(c.source_text)]
+    candidates = [c for c in _latest_per_source(corrections) if not is_short_phrase(c.source_text)]
     if not candidates:
         return []
 
-    query_vector = embed_text(source_text)
+    query = memory_text(source_text)
+    query_vector = embed_text(query)
     stored_vectors = np.stack([decode_embedding(c.embedding) for c in candidates])
 
     # Vectors are pre-normalized at encode time, so the dot product IS the cosine similarity.
     similarities = stored_vectors @ query_vector
-    order = np.argsort(similarities)[::-1]
+
+    scored = []
+    for idx, sim in enumerate(similarities):
+        sim = float(sim)
+        if sim < threshold:
+            continue
+        c = candidates[idx]
+        if sim < strong and lexical_min and lexical_overlap(query, memory_text(c.source_text)) < lexical_min:
+            continue
+        rank = sim + (_CORRECTED_BONUS if entry_kind(c) == "corrected" else 0.0)
+        scored.append((rank, sim, c))
+    scored.sort(key=lambda t: t[0], reverse=True)
 
     results: list[tuple[Correction, float]] = []
     seen_finals: set[str] = set()
-    for idx in order:
+    for _, sim, correction in scored:
         if len(results) >= top_k:
             break
-        score = float(similarities[idx])
-        if score < threshold:
-            break
-        correction = candidates[idx]
         final_key = correction.final_translation.strip().lower()
         if final_key in seen_finals:
             continue
         seen_finals.add(final_key)
-        results.append((correction, score))
+        results.append((correction, sim))
     return results
 
 
@@ -243,27 +325,22 @@ def save_correction(
         final_translation: str,
 ) -> Correction | None:
     """
-    Persist a confirmed user correction and its embedding - subject to a few
+    Persist a confirmed translation and its embedding as a TM entry - subject to a few
     quality gates, so the memory only grows from signal, not noise:
 
-    - Delta gate: skip silent acceptances. A save is only worth storing when
-      the user's final text actually differs from what the AI proposed -
-      if they just clicked through, the AI's phrasing was already fine and
-      re-storing it as a "correction" teaches the retrieval step nothing.
+    - Kind: final != AI proposal -> "corrected". final == AI proposal (the user accepted it unchanged) ->
+      "approved", or nothing at all when memory_store_approved is off.
     - Junk gate (longer sources only): skip fragments whose final translation
       is shorter than MEMORY_MIN_WORDS.
     - Short-phrase lane: sources of <= MEMORY_SHORT_PHRASE_MAX_WORDS words
       (interjections, sound effects) are exempt from the junk gate, because
       they are retrieved by EXACT match (see find_top_matches), not by
-      embeddings - the noise the junk gate guarded against doesn't apply.
-      Punctuation-only sources ("?!", "...") have nothing to match on and
-      are skipped.
-    - Duplicate gate: skip re-saving what the latest stored correction for
-      the same source already says.
+      embeddings. Punctuation-only sources ("?!", "...") have nothing to match on and are skipped.
+    - Duplicate gate: skip re-saving what the latest stored entry for the same source already says
+      (an approval of a line that already has that translation adds nothing).
 
-    Every bubble is still stored as a new row when it passes (corrections
-    are never overwritten in place), so the memory grows across the project
-    rather than collapsing similar-but-distinct lines into one entry.
+    Every bubble is still stored as a new row when it passes (entries are never overwritten in place); retrieval
+    uses the latest entry per source line.
 
     :return: The created Correction, or None if a gate skipped the save.
         Callers should treat None as "acknowledged, not stored" - not an error.
@@ -271,41 +348,33 @@ def save_correction(
     final_clean = final_translation.strip()
     ai_clean = (ai_translation or "").strip()
 
+    kind = "corrected"
     if final_clean.lower() == ai_clean.lower():
-        return None
+        if not get_setting("memory_store_approved", True):
+            return None
+        kind = "approved"
 
     short_lane = is_short_phrase(source_text)
-    phrase_key = normalize_phrase(source_text)
+    phrase_key = normalize_phrase(memory_text(source_text))
 
+    if not final_clean:
+        return None   # a cleared textbox must never become a stored (empty) hint
     if short_lane:
         if not phrase_key:
             return None
-    elif not final_clean:
-        return None   # a cleared textbox must never become a stored (empty) "exact" hint
     elif len(final_clean.split()) < get_setting("memory_min_words", 3):
         return None
 
-    # Duplicate gate: skip if the most recent stored correction for this
-    # source already has this exact final_translation (case-insensitive -
-    # the provider sometimes returns lowercase, sometimes UPPERCASE, for
-    # otherwise identical text). Short phrases compare by normalized text,
-    # so "WAIT!" and "WAIT..." count as the same source. Repeated "Next"
-    # clicks / accidental double-submits shouldn't clone rows.
-    if short_lane:
-        history = (
-            db.query(Correction)
-            .filter(Correction.project_id == project_id)
-            .order_by(Correction.id.desc())
-            .all()
-        )
-        last = next((c for c in history if normalize_phrase(c.source_text) == phrase_key), None)
-    else:
-        last = (
-            db.query(Correction)
-            .filter(Correction.project_id == project_id, Correction.source_text == source_text)
-            .order_by(Correction.created_at.desc())
-            .first()
-        )
+    # Duplicate gate: the most recent stored entry for this source (normalized - "WAIT!" == "WAIT...",
+    # "SQUAD- RON" == "SQUADRON") already has this exact final_translation (case-insensitive - the provider
+    # sometimes returns lowercase, sometimes UPPERCASE). Repeated "Next" clicks / double-submits don't clone rows.
+    history = (
+        db.query(Correction)
+        .filter(Correction.project_id == project_id)
+        .order_by(Correction.id.desc())
+        .all()
+    )
+    last = next((c for c in history if normalize_phrase(memory_text(c.source_text)) == phrase_key), None)
     if last is not None and last.final_translation.strip().lower() == final_clean.lower():
         return None
 
@@ -313,13 +382,26 @@ def save_correction(
         project_id=project_id,
         source_text=source_text,
         ai_translation=ai_translation,
-        final_translation=final_translation,
-        embedding=encode_embedding(embed_text(source_text)),
+        final_translation=final_clean,
+        kind=kind,
+        embedding=encode_embedding(embed_text(memory_text(source_text))),
     )
     db.add(correction)
     db.commit()
     db.refresh(correction)
     return correction
+
+
+def reembed_project(db: Session, project_id: int) -> int:
+    """
+    Recompute every entry's embedding from the normalized source (memory_text). Needed once for entries saved
+    before the OCR cleanup / normalization existed, or after changing memory_embedding_model. Returns the count.
+    """
+    rows = db.query(Correction).filter(Correction.project_id == project_id).all()
+    for c in rows:
+        c.embedding = encode_embedding(embed_text(memory_text(c.source_text)))
+    db.commit()
+    return len(rows)
 
 
 def delete_correction(db: Session, correction_id: int) -> bool:
@@ -346,10 +428,12 @@ def get_correction_usage(correction_id: int, db: Session) -> list[dict]:
     "it fired" but "did it help, and did the user still have to fix it
     afterward" (see memory.js renderUsage).
 
-    Note: TranslationLog stores only the best (top-1) match per bubble, so
-    a correction that was sent as hint #2 or #3 still gets reuse_count
-    bumped but does not appear in this trail.
+    Note: TranslationLog.matched_correction_id stores only the best (top-1) match per bubble; examples #2/#3 are in
+    injection_json, but this trail lists top-1 hits only.
     """
+    owner = db.query(Correction).filter(Correction.id == correction_id).first()
+    if owner is None:
+        return []
     injected_logs = (
         db.query(TranslationLog)
         .filter(TranslationLog.matched_correction_id == correction_id,
@@ -371,7 +455,7 @@ def get_correction_usage(correction_id: int, db: Session) -> list[dict]:
     source_texts = {log.source_text for log in injected_logs}
     corrections = (
         db.query(Correction)
-        .filter(Correction.source_text.in_(source_texts))
+        .filter(Correction.project_id == owner.project_id, Correction.source_text.in_(source_texts))
         .order_by(Correction.created_at.desc())
         .all()
     )

@@ -15,7 +15,10 @@ from sqlalchemy.orm import Session
 from core.database import get_db
 from models.models import Page, Project, Correction
 from models.schemas import CorrectionSchema
-from services.memory_service import save_correction, delete_correction, encode_embedding, embed_text, get_correction_usage
+from core.config import get_setting
+from services.memory_service import (save_correction, delete_correction, encode_embedding, embed_text,
+                                       get_correction_usage, memory_text, reembed_project)
+from services.glossary_service import suggestions_for_correction
 from services.page_export import page_paths, update_bubble_translation
 
 router = APIRouter(prefix="/corrections", tags=["Corrections"])
@@ -31,14 +34,15 @@ async def confirm_bubble_correction(
     """
     Persist a user-confirmed translation for a single bubble.
 
-    Two things happen, independently:
+    Three things happen, independently:
     1. The page's own saved JSON is updated so `translation` reflects what
        the user just typed (see services/page_export.update_bubble_translation) -
        this always happens, so reopening the editor shows the edit.
     2. save_correction() decides separately whether this is *also* worth
-       adding to correction memory (see services/memory_service.py's delta
-       and junk gates) - an unedited acceptance or a too-short fragment
-       still updates (1) but is skipped for (2), returning correction_id: null.
+       adding to the translation memory: an edit becomes kind="corrected", an unchanged acceptance kind="approved"
+       (memory_store_approved); a too-short fragment or a duplicate is skipped, returning correction_id: null.
+    3. For a "corrected" entry: glossary suggestions this correction takes part in (a term fixed in >= 2
+       corrections) are returned so the editor can offer them right away (glossary_suggest_on_save).
     """
     page = db.query(Page).filter(Page.id == page_id).first()
     if not page:
@@ -57,8 +61,17 @@ async def confirm_bubble_correction(
     )
 
     if correction is None:
-        return {"message": "Saved (not added to memory: unchanged, duplicate, or too short)", "correction_id": None}
-    return {"message": "Correction saved", "correction_id": correction.id}
+        return {"message": "Saved (not added to memory: duplicate, too short, or approvals are off)",
+                "correction_id": None, "kind": None, "glossary_suggestions": []}
+
+    suggestions = []
+    if correction.kind == "corrected" and get_setting("glossary_suggest_on_save", True):
+        try:
+            suggestions = suggestions_for_correction(correction, db)
+        except Exception as e:   # a suggestion problem must never turn a successful save into an error
+            print(f"[GLOSSARY] on-save suggestions failed: {type(e).__name__}: {e}")
+    return {"message": "Correction saved" if correction.kind == "corrected" else "Approved translation saved to memory",
+            "correction_id": correction.id, "kind": correction.kind, "glossary_suggestions": suggestions}
 
 
 @router.get("/by-project/{project_id}")
@@ -82,6 +95,7 @@ async def list_corrections(project_id: int, db: Session = Depends(get_db)):
             "ai_translation": c.ai_translation,
             "final_translation": c.final_translation,
             "reuse_count": c.reuse_count,
+            "kind": c.kind or "corrected",
             "created_at": c.created_at.isoformat() if c.created_at else None,
         }
         for c in corrections
@@ -123,6 +137,7 @@ async def export_corrections(project_id: int, db: Session = Depends(get_db)):
                 "ai_translation": c.ai_translation,
                 "final_translation": c.final_translation,
                 "reuse_count": c.reuse_count,
+                "kind": c.kind or "corrected",
                 "created_at": c.created_at.isoformat() if c.created_at else None,
             }
             for c in corrections
@@ -162,7 +177,8 @@ async def import_corrections(project_id: int, payload: dict, db: Session = Depen
             ai_translation=row.get("ai_translation"),
             final_translation=final_translation,
             reuse_count=row.get("reuse_count", 0),
-            embedding=encode_embedding(embed_text(source_text)),
+            kind=row.get("kind") or "corrected",
+            embedding=encode_embedding(embed_text(memory_text(source_text))),
         )
         db.add(correction)
         existing.add(key)
@@ -170,3 +186,16 @@ async def import_corrections(project_id: int, payload: dict, db: Session = Depen
 
     db.commit()
     return {"message": f"Imported {added} correction(s).", "added": added}
+
+
+@router.post("/reembed/{project_id}")
+def reembed_corrections(project_id: int, db: Session = Depends(get_db)):
+    """
+    Recompute the embeddings of every memory entry from the normalized source text (OCR cleanup applied).
+    Run once for entries saved before the cleanup existed ("SQUAD- RON") or after changing the embedding model.
+    """
+    project = db.query(Project).filter(Project.id == project_id).first()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    count = reembed_project(db, project_id)
+    return {"message": f"Re-embedded {count} memory entr{'y' if count == 1 else 'ies'}.", "count": count}

@@ -1,9 +1,32 @@
-# Klucze API i sekrety 
+# Klucze API i sekrety (blokuje je też .githooks/pre-commit - patrz CLAUDE.md)
 .env
+.env.*
+!.env.example
 keys.json
 config_private.json
 settings.json
 settings.json.bak
+settings.json.tmp
+api_key*.txt
+*.pem
+*.key
+
+# Dane użytkownika: baza, logi, kopie zapasowe (tłumaczenia, ścieżki, w kopiach także ustawienia)
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+backend/data/
+*.log
+logs/
+program_data_backup/
+pre_import_backup_*/
+*_backup_*/
+
+# Lokalne instrukcje dla Claude (ścieżki komputera, notatki robocze) - działają lokalnie, nie trafiają do repo
+CLAUDE.md
+CLAUDE.local.md
+.claude/
 
 # Pliki systemowe i tymczasowe
 __pycache__/
@@ -14,23 +37,18 @@ dist/
 build/
 .idea/
 
-# Lokalne modele LLM 
+# Lokalne modele LLM
 models/*.bin
 models/*.gguf
 
 # Python
 backend/.venv/
-backend/__pychache__/
-backend/*.pyc
+.venv/
 
 # IDE
 backend/.idea/
 frontend/.idea/
 
-# Frontent/Node/React
-
+# Frontend/Node/React
 frontend/node_modules/
-frontent/dist/
-frontent/.env
- 
- 
+frontend/dist/

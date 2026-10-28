@@ -5,6 +5,7 @@ import os
 import json
 import copy
 import shutil
+import tempfile
 
 """
 Configuration module for OpenKeyTranslate.
@@ -17,6 +18,10 @@ system paths, and pipeline constants.
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 ROOT_DIR = os.path.dirname(BASE_DIR)
 SETTINGS_FILE = os.path.join(os.path.dirname(ROOT_DIR), "settings.json")
+
+# Set by scripts/build_docs.py. pdoc prints the VALUE of every module-level variable into the HTML, and the docs are
+# public (GitHub Pages) - a docs build once published a Groq key this way. In this mode settings.json is never read.
+_DOCS_BUILD = bool(os.environ.get("OKT_DOCS_BUILD"))
 
 # Bump manually on release. Stamped into every log file header (see
 # core/app_logging.py) so a bug report's log always says which version produced it.
@@ -107,6 +112,32 @@ DEFAULT_SETTINGS = {
     # hint (hint-free "counterfactual"), purely for A/B logging. Turn off
     # once the experiment is done to save on API calls.
     "memory_ab_test_logging": True,
+    # Share of translation runs (pages) that get the hint-free counterfactual pass when A/B logging is on.
+    # 1.0 = every run (doubles requests for pages with a memory match), 0.3 = ~every third page - saves free-tier quota.
+    "memory_ab_sample_rate": 1.0,
+    # Store translations the user ACCEPTED unchanged as kind="approved" translation-memory entries (corrections stay
+    # kind="corrected" and are ranked first). More material to retrieve from = memory fires far more often.
+    "memory_store_approved": True,
+    # Second, lexical gate for the embedding lane (content-word Jaccard overlap, 0-100): a candidate must clear BOTH
+    # the cosine threshold and this - unless its cosine is >= memory_strong_similarity. Rejects "same topic,
+    # different line" matches that MiniLM scores ~0.7 (measured: useful matches 30-75, noise 0-20). 0 = off.
+    "memory_lexical_min": 25,
+    "memory_strong_similarity": 0.90,
+
+    # Terminology (glossary) - see services/terminology.py
+    # After translation, check every glossary term was actually used (inflection-tolerant). Bubbles missing a term
+    # get ONE extra post-editing call that inserts the term and changes nothing else (Moslem 2024: terminology-
+    # constrained automatic post-editing nearly doubled term usage).
+    "glossary_postedit": True,
+    # Right after a correction is saved, look for recurring term-level fixes and offer them in the editor.
+    "glossary_suggest_on_save": True,
+
+    # Copy the source's casing: an ALL-CAPS source line gets an ALL-CAPS translation (deterministic, not left to the
+    # model - ~30% of caps lines came back in mixed case).
+    "translation_match_case": True,
+    # Gemini 2.5 "thinking" tokens count against max_output_tokens and can truncate the JSON of a dense page.
+    # 0 = thinking off (2.5 Flash), -1 = model default. Pro models cannot turn it off (minimum 128 is used).
+    "gemini_thinking_budget": 0,
 
     # OCR post-filter: bubbles whose text matches any of these regexes
     # (case-insensitive, re.search) are dropped before translation - scanlation
@@ -124,7 +155,10 @@ DEFAULT_SETTINGS = {
     "models_dir": "",              # "" = library default caches; a folder = HuggingFace + PaddleX caches live inside it
 
     # Bubble geometry (utils/bubble_interior.py - one flood-fill detector for inpainting, typesetting and refine)
+    "inpaint_mode": "glyph",       # "glyph" = erase whole letters + flat-fill white bubbles; "box" = the old rectangle + TELEA
     "inpaint_use_interior": True,  # also erase dark pixels OCR boxes missed, but only inside a verified WHITE bubble
+    "ocr_scan_missed_bubbles": False,  # EXPERIMENTAL: look for white bubbles with text the page pass did not find at all
+    "bubble_order": "ttb",         # order of bubbles sent to the LLM / listed in the editor: ttb | rtl | ltr (see services/bubble_edit.py)
     "ocr_refine": True,            # merge bubbles OCR cut in pieces; re-read bubbles that are only half detected
 
     # Post-OCR bubble handling (see utils/ocr_textfix.py). Both are applied live (no restart).
@@ -141,6 +175,8 @@ DEFAULT_SETTINGS = {
 
     # Typesetting
     "typesetting_padding_ratio": 0.08,
+    "typesetting_font": "",          # path to a .ttf/.otf with Polish letters; "" = Arial / DejaVu / Liberation if found
+    "typesetting_uppercase": True,
 }
 
 
@@ -198,6 +234,8 @@ def get_setting(key: str, default=None):
     page immediately (memory threshold, translation provider/keys, ignore patterns, post-OCR options) reads
     through this function instead.
     """
+    if _DOCS_BUILD:
+        return settings.get(key, default)
     try:
         st = os.stat(SETTINGS_FILE)
         stamp = (st.st_mtime_ns, st.st_size)
@@ -248,7 +286,13 @@ def load_settings():
       previous file is kept as settings.json.bak whenever that rewrites it.
     - Unreadable / corrupt file: falls back to settings.json.bak, otherwise stops with a clear error
       (it does NOT silently replace your keys with an empty template).
+    - Docs build (OKT_DOCS_BUILD): defaults only, data folder in a throwaway temp directory, nothing read or written.
     """
+    if _DOCS_BUILD:
+        docs_settings = copy.deepcopy(DEFAULT_SETTINGS)
+        docs_settings["app_root_dir"] = os.path.join(tempfile.gettempdir(), "okt_docs_build")
+        return docs_settings
+
     if not os.path.exists(SETTINGS_FILE):
         save_settings(copy.deepcopy(DEFAULT_SETTINGS))
         return copy.deepcopy(DEFAULT_SETTINGS)
@@ -276,6 +320,7 @@ def load_settings():
 
 # Initialize settings and ensure environment directories exist
 settings = load_settings()
+"""@private The whole settings.json incl. API keys - hidden from pdoc, which would print its value into docs/."""
 
 # Main system variables
 APP_ROOT_DIR = settings.get("app_root_dir")
@@ -317,6 +362,7 @@ MARKER_COLOR = (0, 0, 0)  # Black RGB
 TRANSLATION_ON = settings.get("translation_on")
 ACTIVE_PROVIDER = settings.get("active_provider", "groq")
 PROVIDERS = settings.get("providers", {})
+"""@private Provider configs incl. API keys - hidden from pdoc (see `settings`)."""
 ACTIVE_MODEL_NAME = PROVIDERS.get(ACTIVE_PROVIDER, {}).get("model", ACTIVE_PROVIDER)
 TRANSLATION_TEMPERATURE = settings.get("translation_temperature", 0.4)
 TRANSLATION_MAX_TOKENS = settings.get("translation_max_tokens", 4096)

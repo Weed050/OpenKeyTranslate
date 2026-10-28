@@ -21,6 +21,9 @@ shape in the prompt. Unlike GroqProvider's "json_object" mode - which only
 guarantees *some* valid JSON comes back - response_schema constrains
 generation to that exact structure, so response.parsed can be trusted
 directly instead of defensively parsing a raw string.
+
+Thinking: Gemini 2.5 models "think" by default and those tokens count against max_output_tokens - a dense page
+could end in a truncated, unparseable JSON. gemini_thinking_budget (settings) caps it; 0 = off on Flash.
 """
 
 import json
@@ -31,20 +34,11 @@ from google import genai
 from google.genai import types
 from google.genai import errors as genai_errors
 
-from .base import TranslationProvider
-from .prompts import SYSTEM_PROMPT
+from core.config import get_setting
+from .base import TranslationProvider, TranslationBatch
 
 _SERVER_ERROR_RETRIES = 2
 _SERVER_ERROR_BACKOFF_SECONDS = 2
-
-
-class _BubbleTranslation(BaseModel):
-    id: str
-    translation: str
-
-
-class _TranslationBatch(BaseModel):
-    translations: list[_BubbleTranslation]
 
 
 class GeminiProvider(TranslationProvider):
@@ -60,27 +54,45 @@ class GeminiProvider(TranslationProvider):
         self._max_tokens = max_tokens
         self._exhausted_labels: set[str] = set()
 
-    def _call_key(self, api_key: str, user_message: str):
+    def _thinking_config(self):
+        """None = leave the model default. Only Gemini 2.5 takes a token budget (3.x uses thinking_level)."""
+        budget = get_setting("gemini_thinking_budget", 0)
+        if budget is None or budget < 0 or "2.5" not in self._model:
+            return None
+        if "pro" in self._model and budget < 128:
+            budget = 128                     # 2.5 Pro cannot switch thinking off
+        return types.ThinkingConfig(thinking_budget=int(budget))
+
+    def _call_key(self, api_key: str, system_prompt: str, user_message: str, schema: type[BaseModel]) -> BaseModel:
         """One request attempt with a single key. Raises on any failure."""
         client = genai.Client(api_key=api_key)
+        config = dict(
+            system_instruction=system_prompt,
+            response_mime_type="application/json",
+            response_schema=schema,
+            temperature=self._temperature,
+            max_output_tokens=self._max_tokens,
+        )
+        thinking = self._thinking_config()
+        if thinking is not None:
+            config["thinking_config"] = thinking
         response = client.models.generate_content(
             model=self._model,
             contents=user_message,
-            config=types.GenerateContentConfig(
-                system_instruction=SYSTEM_PROMPT,
-                response_mime_type="application/json",
-                response_schema=_TranslationBatch,
-                temperature=self._temperature,
-                max_output_tokens=self._max_tokens,
-            ),
+            config=types.GenerateContentConfig(**config),
         )
-        batch: _TranslationBatch | None = response.parsed
-        if batch is None:
-            raise RuntimeError(f"Gemini returned no parseable structured output. Raw: {response.text!r}")
-        return {item.id: item.translation for item in batch.translations}
+        parsed = response.parsed
+        if parsed is None:
+            finish = ""
+            try:
+                finish = f" finish_reason={response.candidates[0].finish_reason}"
+            except (AttributeError, IndexError, TypeError):
+                pass
+            raise RuntimeError(f"Gemini returned no parseable structured output{finish}. Raw: {response.text!r}")
+        return parsed
 
-    def translate(self, texts_payload: list[dict]) -> dict[str, str]:
-        user_message = json.dumps(texts_payload, ensure_ascii=False)
+    def request_json(self, system_prompt: str, payload, schema: type[BaseModel]) -> BaseModel:
+        user_message = payload if isinstance(payload, str) else json.dumps(payload, ensure_ascii=False)
 
         available = [
             k for k in self._keys
@@ -96,7 +108,7 @@ class GeminiProvider(TranslationProvider):
 
             for attempt in range(_SERVER_ERROR_RETRIES + 1):
                 try:
-                    result = self._call_key(key_entry["api_key"], user_message)
+                    result = self._call_key(key_entry["api_key"], system_prompt, user_message, schema)
                     self.current_key_label = label
                     return result
 
@@ -135,3 +147,7 @@ class GeminiProvider(TranslationProvider):
             f"All available Gemini keys are rate-limited or failing (tried: "
             f"{[k.get('label', 'default') for k in available]})."
         )
+
+    def translate(self, texts_payload: list[dict], system_prompt: str | None = None) -> dict[str, str]:
+        batch = self.request_json(system_prompt or self.default_system_prompt, texts_payload, TranslationBatch)
+        return {item.id: item.translation for item in batch.translations}

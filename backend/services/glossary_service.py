@@ -28,16 +28,40 @@ def load_glossary(project_id: int, db: Session) -> list[GlossaryTerm]:
     return db.query(GlossaryTerm).filter(GlossaryTerm.project_id == project_id).all()
 
 
+def _term_regex(source_term: str) -> re.Pattern:
+    """
+    Whole-word, case-insensitive pattern for a glossary source term. Hyphens / spaces inside the term are
+    flexible, so OCR line-wrap leftovers still match ("QUA- TOYNE", "QUA TOYNE" for "QUA-TOYNE"). English
+    plural / possessive endings count as the same word (WYVERN matches WYVERNS, WYVERN'S, WYVERNES).
+    """
+    parts = [p for p in re.split(r"[\s\-]+", source_term.strip()) if p]
+    # a term saved in the plural ("DRAGOONS") must still match the singular / possessive ("DRAGOON'S HONOR")
+    if len(parts[-1]) > 3 and parts[-1][-1] in "sS" and parts[-1][-2] not in "sS":
+        parts[-1] = parts[-1][:-1]
+    body = r"(?:\s*-\s*|\s+)".join(re.escape(p) for p in parts)
+    return re.compile(rf"(?<!\w){body}(?:['’]?s|es)?(?!\w)", re.IGNORECASE)
+
+
 def match_glossary(source_text: str, terms: list[GlossaryTerm]) -> list[dict]:
     """
-    Return every term whose source_term appears (whole-word, case-insensitive) in the text.
-    English plural / possessive endings still count as the same word (WYVERN matches
-    WYVERNS, WYVERN'S, WYVERNES) - the LLM is told to inflect the Polish target itself.
+    Every term whose source_term appears in the text - the LLM is told to inflect the Polish target itself.
+    Longest terms first, and a shorter term that overlaps a longer one already matched is dropped
+    ("WYVERN KNIGHTS" wins over "WYVERN" inside it - two conflicting constraints for the same words confuse the
+    model; Moslem 2024 recommends exactly this for overlapping glossary entries).
     """
+    if not source_text or not terms:
+        return []
+    taken: list[tuple[int, int]] = []
     matches = []
-    for t in terms:
-        if re.search(rf"\b{re.escape(t.source_term)}(?:['\u2019]?s|es)?\b", source_text, re.IGNORECASE):
-            matches.append({"source_term": t.source_term, "target_term": t.target_term})
+    for t in sorted(terms, key=lambda t: len(t.source_term or ""), reverse=True):
+        if not (t.source_term or "").strip():
+            continue
+        spans = [m.span() for m in _term_regex(t.source_term).finditer(source_text)]
+        free = [sp for sp in spans if not any(sp[0] < e and b < sp[1] for b, e in taken)]
+        if not free:
+            continue
+        taken.extend(free)
+        matches.append({"source_term": t.source_term, "target_term": t.target_term})
     return matches
 
 
@@ -188,7 +212,7 @@ def get_term_usage(term: "GlossaryTerm", project_id: int, db: Session) -> list[d
     }
     corrections = (
         db.query(Correction)
-        .filter(Correction.source_text.in_(source_texts))
+        .filter(Correction.project_id == project_id, Correction.source_text.in_(source_texts))
         .order_by(Correction.created_at.desc())
         .all()
     )
@@ -208,3 +232,16 @@ def get_term_usage(term: "GlossaryTerm", project_id: int, db: Session) -> list[d
             "final_correction": final_by_source.get(base.source_text),
         })
     return sorted(result, key=lambda r: r["created_at"] or "", reverse=True)
+
+
+def suggestions_for_correction(correction: Correction, db: Session) -> list[dict]:
+    """
+    Glossary suggestions that the correction just saved takes part in (its source contains the term) and that
+    have now been seen in >= 2 corrections - offered right in the editor after Save instead of waiting for the
+    user to open Memory -> Glossary -> Scan (which is why auto-glossary seemed to "rarely trigger").
+    """
+    if correction is None or not correction.ai_translation:
+        return []
+    source_upper = (correction.source_text or "").upper()
+    return [s for s in suggest_glossary_terms(correction.project_id, db, min_occurrences=2)
+            if s["source_term"].upper() in source_upper]

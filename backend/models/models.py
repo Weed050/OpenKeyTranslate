@@ -167,6 +167,12 @@ class Correction(Base):
     reuse_count = Column(Integer, default=0)
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
+    # "corrected": the user changed the AI proposal (strongest signal, ranked first at retrieval).
+    # "approved":  the user accepted the AI proposal unchanged - still a confirmed EN->PL pair, i.e. a regular
+    #              translation-memory entry (Moslem 2024 retrieves from the whole TM, not only from edits).
+    # NULL = rows from before this column existed = "corrected" (the old code stored edits only).
+    kind = Column(String, nullable=True, default="corrected")
+
     # Relationships
     project = relationship("Project", back_populates="corrections")
 
@@ -202,10 +208,19 @@ class TranslationLog(Base):
     key_label = Column(String, nullable=True)  # which key from the provider's pool served this call
     glossary_terms_used = Column(Text,
                                  nullable=True)  # JSON list of {"source_term":..., "target_term":...} that fired for this bubble
-    # The EXACT memory material sent with this bubble: {"hints": [...]} (embedding lane, best first) or {"exact": "..."}.
+    # The EXACT memory material sent with this bubble: {"examples": [{en, pl, similarity, kind, rejected?}, ...]}
+    # (fuzzy lane, best first) or {"exact": "..."}. Logs written before the EN->PL pairs hold {"hints": [pl, ...]}.
     # matched_correction_id only points at the top-1 correction, which may later be deleted or superseded - this keeps
     # the experiment reproducible.
     hints_json = Column(Text, nullable=True)
+    # Which memory lane produced the injected material: "exact" (short phrase, verbatim reuse) | "fuzzy" (embedding
+    # examples) | NULL (no memory). Lets the analysis separate trivial exact hits ("YES" -> "TAK") from fuzzy matches.
+    memory_lane = Column(String, nullable=True)
+    # EVERYTHING sent with / done to this bubble, as one JSON object (see translation_service._injection_record):
+    # memory examples (en/pl/rejected/similarity/kind/correction_id), glossary terms, context bubbles, the terminology
+    # check + post-edit (draft before the fix, which terms were missing), case normalization. For the experiment
+    # write-up: "what exactly did the model see, and what happened afterwards".
+    injection_json = Column(Text, nullable=True)
     run_id = Column(String, nullable=False)  # groups the zero_shot / memory_injected pair from one translation pass
 
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))

@@ -22,7 +22,8 @@ from typing import List
 from PIL import Image, ImageDraw, ImageFont
 import cv2
 import numpy as np
-from core.config import TYPESETTING_PADDING_RATIO
+import os
+from core.config import TYPESETTING_PADDING_RATIO, get_setting
 from utils.bubble_interior import detect_bubble_interior   # one shared flood-fill implementation (also used by inpainting)
 import pyphen
 
@@ -132,6 +133,27 @@ def _split_word_to_fit(
     return final_chunks
 
 
+_FONT_CANDIDATES = ("arial.ttf", "Arial.ttf", "DejaVuSans.ttf", "LiberationSans-Regular.ttf", "Helvetica.ttc")
+
+
+def resolve_font_path() -> str:
+    """
+    Font file for the translated text: setting typesetting_font (a .ttf/.otf path, e.g. a comic font that has the Polish
+    letters) when it exists, else the first common system font that Pillow can open. Before: "arial.ttf" hard-coded, so
+    machines without Arial silently fell back to Pillow's bitmap font - which has no Polish diacritics.
+    """
+    configured = (get_setting("typesetting_font", "") or "").strip()
+    if configured and os.path.isfile(configured):
+        return configured
+    for name in _FONT_CANDIDATES:
+        try:
+            ImageFont.truetype(name, 12)
+            return name
+        except OSError:
+            continue
+    return "arial.ttf"        # unchanged last resort: the loader below falls back to the default font
+
+
 def draw_translated_text_on_clean_image(
         image_clean: np.ndarray,
         image_original: np.ndarray,
@@ -150,11 +172,12 @@ def draw_translated_text_on_clean_image(
     pil_img = Image.fromarray(img_rgb)
     draw = ImageDraw.Draw(pil_img)
 
-    # Font path (best to provide a path to a downloaded .ttf comic font)(TODO in future)
-    font_path = "arial.ttf"
+    font_path = resolve_font_path()
 
     for b in bubbles:
-        text = (b.get("translation") or b["text"]).strip().upper()
+        text = (b.get("translation") or b["text"]).strip()
+        if get_setting("typesetting_uppercase", True):
+            text = text.upper()          # manga lettering is upper case; switch off for sentence-case lettering
         orig_box = to_original_coords(b["box_coords"])
         xs = [p[0] for p in orig_box]
         ys = [p[1] for p in orig_box]

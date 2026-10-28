@@ -72,13 +72,27 @@ def _reading_region(image, bubble: dict) -> tuple:
     ih, iw = image.shape[:2]
     bbox = bbox_of(bubble["box"])
     it = find_interior(image, center(bbox), bbox)
-    return expand(it.bbox if it else bbox, 0.02 if it else 0.2, iw, ih)
+    return expand(it.bbox if it else bbox, 0.02 if it else 0.3, iw, ih)
 
 
-def reocr_bubble(ocr_data: dict, bubble_id: str, image, ocr_region_fn, protected=()) -> dict:
-    """Read the bubble's whole region again as one crop and replace its text + lines. The old text goes to text_raw."""
+def reocr_bubble(ocr_data: dict, bubble_id: str, image, ocr_region_fn, protected=(), box=None) -> dict:
+    """
+    Read the bubble's whole region again as one crop and replace its text + lines. The old text goes to text_raw.
+    `box` = [x1, y1, x2, y2] drawn by the user: that exact area is read (for a bubble whose detected box misses a line,
+    e.g. text below the box); without it the region is the bubble interior (flood fill) or the bubble box + margin.
+    """
     bubble = _find(ocr_data, bubble_id)
-    reading = read_region(image, _reading_region(image, bubble), ocr_region_fn)
+    if box is not None:
+        ih, iw = image.shape[:2]
+        x1, y1, x2, y2 = (float(v) for v in box)
+        x1, x2 = sorted((max(0.0, x1), min(float(iw), x2)))
+        y1, y2 = sorted((max(0.0, y1), min(float(ih), y2)))
+        if x2 - x1 < 12 or y2 - y1 < 12:
+            raise BubbleEditError("The selected area is too small.", 400)
+        region = (int(x1), int(y1), int(x2), int(y2))
+    else:
+        region = _reading_region(image, bubble)
+    reading = read_region(image, region, ocr_region_fn)
     if reading is None:
         raise BubbleEditError("No text was found in this bubble's area.", 422)
 
@@ -157,3 +171,57 @@ def merge_bubbles(ocr_data: dict, bubble_id: str, other_id: str, image=None) -> 
     if image is not None:
         _refresh_info(image, ocr_data, a)
     return {"bubble": a, "removed": other_id}
+
+
+# ------------------------------------------------------------------ reading order
+
+def _center_of(b: dict):
+    return center(bbox_of(b["box"] if "box" in b else b["box_coords"]))
+
+
+def auto_order(bubbles: list[dict], mode: str = "ttb") -> list[dict]:
+    """
+    Order bubbles for the translator / the LLM.
+      ttb  top to bottom (then left to right) - what the OCR produces
+      rtl  rows top to bottom, inside a row RIGHT to LEFT   (Japanese manga)
+      ltr  rows top to bottom, inside a row left to right   (western comics, webtoon columns)
+    A "row" is a group of bubbles whose centres are within ~0.8 of a bubble height of each other.
+    LIMITATION: there is no panel detection. On a page whose panels are not in clean rows (a tall panel next to two
+    stacked ones) the heuristic can be wrong - use "Move up / down" in the editor to fix single bubbles.
+    """
+    if mode not in ("ttb", "rtl", "ltr") or len(bubbles) < 2:
+        return list(bubbles)
+    if mode == "ttb":
+        return sorted(bubbles, key=lambda b: (_center_of(b)[1], _center_of(b)[0]))
+
+    heights = sorted(bbox_of(b.get("box") or b["box_coords"])[3] - bbox_of(b.get("box") or b["box_coords"])[1] for b in bubbles)
+    tolerance = 0.8 * heights[len(heights) // 2]
+    ordered = sorted(bubbles, key=lambda b: _center_of(b)[1])
+    rows, current = [], [ordered[0]]
+    for b in ordered[1:]:
+        if abs(_center_of(b)[1] - sum(_center_of(x)[1] for x in current) / len(current)) <= tolerance:
+            current.append(b)
+        else:
+            rows.append(current)
+            current = [b]
+    rows.append(current)
+    out = []
+    for row in rows:
+        out.extend(sorted(row, key=lambda b: _center_of(b)[0], reverse=(mode == "rtl")))
+    return out
+
+
+def reorder_bubbles(ocr_data: dict, order: list[str] | None = None, auto: str | None = None) -> list[str]:
+    """Reorder ocr_data['bubbles'] by an explicit id list, or automatically (see auto_order). Returns the new id order."""
+    bubbles = ocr_data.get("bubbles", [])
+    by_id = {b["bubble_id"]: b for b in bubbles}
+    if auto:
+        if auto not in ("ttb", "rtl", "ltr"):
+            raise BubbleEditError("auto must be ttb, rtl or ltr", 400)
+        new = auto_order(bubbles, auto)
+    else:
+        if not order or sorted(order) != sorted(by_id):
+            raise BubbleEditError("order must list every bubble of the page exactly once", 400)
+        new = [by_id[i] for i in order]
+    ocr_data["bubbles"] = new
+    return [b["bubble_id"] for b in new]

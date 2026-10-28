@@ -4,10 +4,9 @@
 from fastapi import APIRouter, HTTPException
 import os
 import re
-import json
 import shutil
 from models.schemas import SettingsSchema
-from core.config import APP_ROOT_DIR, load_settings, save_settings, get_default_app_root, APP_VERSION, DATABASE_PATH, get_setting
+from core.config import APP_ROOT_DIR, load_settings, save_settings, get_default_app_root, APP_VERSION, DATABASE_PATH
 
 """
 API Router - right now used for managing application settings and data migration.
@@ -30,31 +29,6 @@ def _same_path(a: str, b: str) -> bool:
 def _is_inside(child: str, parent: str) -> bool:
     c, p = _norm(child), _norm(parent)
     return c == p or c.startswith(p.rstrip(os.sep) + os.sep)
-
-
-def _rebase_db_paths(db_file: str, old_root: str, new_root: str) -> int:
-    """
-    The DB stores ABSOLUTE paths (projects.workspace_path, chapters.raw_path/processed_path). After moving the
-    workspace they still point to the old root -> at next start reconcile_projects_from_disk would treat the
-    moved projects as new ones (UNIQUE name error = app does not start) or delete them. Rewrite the prefix.
-    """
-    import sqlite3
-    if not os.path.exists(db_file):
-        return 0
-    con = sqlite3.connect(db_file)
-    try:
-        changed = 0
-        for table, cols in (("projects", ("workspace_path",)), ("chapters", ("raw_path", "processed_path"))):
-            for col in cols:
-                for row_id, value in con.execute(f"SELECT id, {col} FROM {table}").fetchall():
-                    if value and _is_inside(value, old_root):
-                        rel = os.path.relpath(os.path.abspath(value), os.path.abspath(old_root))
-                        con.execute(f"UPDATE {table} SET {col} = ? WHERE id = ?", (os.path.join(new_root, rel), row_id))
-                        changed += 1
-        con.commit()
-        return changed
-    finally:
-        con.close()
 
 
 def get_dir_size_mb(path):
@@ -122,8 +96,7 @@ async def update_settings(new_settings: SettingsSchema):
         try:
             print(f"Migration started: {old_path} -> {new_path}")
             shutil.copytree(old_path, new_path, dirs_exist_ok=True)
-            rebased = _rebase_db_paths(os.path.join(new_path, os.path.basename(DATABASE_PATH)), old_path, new_path)
-            print(f"Migration: rewrote {rebased} absolute path(s) in the copied database.")
+            # No database rewrite needed: project / chapter paths are derived from the workspace root at runtime.
 
             # Attempt to clean up the legacy directory
             try:
@@ -180,6 +153,14 @@ async def update_memory_settings(payload: dict):
         current_settings["memory_top_k"] = max(1, int(payload["memory_top_k"]))
     if "memory_short_phrase_max_words" in payload:
         current_settings["memory_short_phrase_max_words"] = max(0, int(payload["memory_short_phrase_max_words"]))
+    if "memory_lexical_min" in payload:
+        current_settings["memory_lexical_min"] = min(100, max(0, int(payload["memory_lexical_min"])))
+    if "memory_ab_sample_rate" in payload:
+        current_settings["memory_ab_sample_rate"] = min(1.0, max(0.0, float(payload["memory_ab_sample_rate"])))
+    for flag in ("memory_ab_test_logging", "memory_store_approved", "glossary_postedit",
+                 "glossary_suggest_on_save", "translation_match_case"):
+        if flag in payload:
+            current_settings[flag] = bool(payload[flag])
 
     save_settings(current_settings)
 
@@ -242,6 +223,8 @@ async def update_translation_settings(payload: dict):
         if not 0.0 <= t <= 2.0:
             raise HTTPException(status_code=400, detail="Temperature must be 0.0-2.0")
         current["translation_temperature"] = t
+    if "gemini_thinking_budget" in payload:
+        current["gemini_thinking_budget"] = max(-1, int(payload["gemini_thinking_budget"]))
 
     for name, cfg in (payload.get("providers") or {}).items():
         if name not in ("groq", "gemini"):
@@ -288,8 +271,21 @@ def test_translation():
 async def update_ocr_options(payload: dict):
     """Post-OCR options (utils/bubble_post.py). Apply to pages processed from now on - no restart."""
     current = load_settings()
-    for key in ("ocr_textfix", "ocr_skip_numeric", "ocr_skip_symbols"):
+    for key in ("ocr_textfix", "ocr_skip_numeric", "ocr_skip_symbols", "inpaint_use_interior", "ocr_refine", "ocr_scan_missed_bubbles"):
         if key in payload:
             current[key] = bool(payload[key])
+    if "typesetting_uppercase" in payload:
+        current["typesetting_uppercase"] = bool(payload["typesetting_uppercase"])
+    if "typesetting_font" in payload:
+        font = str(payload["typesetting_font"] or "").strip()
+        if font and not os.path.isfile(font):
+            raise HTTPException(status_code=400, detail=f"Font file not found: {font}")
+        current["typesetting_font"] = font
+    choices = {"inpaint_mode": ("glyph", "box"), "bubble_order": ("ttb", "rtl", "ltr")}
+    for key, allowed in choices.items():
+        if key in payload:
+            if payload[key] not in allowed:
+                raise HTTPException(status_code=400, detail=f"{key} must be one of {', '.join(allowed)}")
+            current[key] = payload[key]
     save_settings(current)
     return {"message": "Saved. Applies to pages processed from now on (use Re-OCR for already processed pages)."}

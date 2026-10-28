@@ -77,7 +77,7 @@ def reinpaint_from_json(paths: dict, ocr_data: dict) -> bool:
         return False
     boxes, bubbles = targets
     image = load_image_bgr(paths["raw"])
-    mask, info = build_erase_mask(image, boxes, bubbles, use_interior=get_setting("inpaint_use_interior", True))
+    mask, info, flats = build_erase_mask(image, boxes, bubbles, use_interior=get_setting("inpaint_use_interior", True))
     apply_info(ocr_data.get("bubbles", []), info)
-    write_image(paths["image"], inpaint(image, mask))
+    write_image(paths["image"], inpaint(image, mask, flats))
     return True

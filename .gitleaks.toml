@@ -1,0 +1,11 @@
+# .gitleaks.toml - used by .github/workflows/secret-scan.yml (and by a local `gitleaks git .` if installed).
+# Default gitleaks rules + an explicit Groq rule (the key that leaked through docs/ was a Groq key).
+
+[extend]
+useDefault = true
+
+[[rules]]
+id = "groq-api-key"
+description = "Groq API key"
+regex = '''gsk_[A-Za-z0-9]{20,}'''
+keywords = ["gsk_"]

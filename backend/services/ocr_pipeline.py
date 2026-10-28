@@ -346,12 +346,19 @@ def process_image(image_bgr: np.ndarray, protected_terms=()) -> dict:
     if get_setting("ocr_refine", True):
         partial = {"items": items, "lines": grouped_lines, "bubbles": bubbles}
         try:
-            stats = refine_bubbles(image_scaled, partial, ocr_region)
+            stats = refine_bubbles(image_scaled, partial, ocr_region, scan=get_setting("ocr_scan_missed_bubbles", False))
             items, grouped_lines, bubbles = partial["items"], partial["lines"], partial["bubbles"]
-            if stats["merged"] or stats["refined"]:
-                print(f"[REFINE] merged {stats['merged']} bubble piece(s), re-read {stats['refined']} half-detected bubble(s).")
+            if any(stats.values()):
+                print(f"[REFINE] numbers split {stats['numbers']}, split {stats['split']}, merged {stats['merged']}, found {stats['found']} missed bubble(s), "
+                      f"re-read {stats['refined']} half-detected bubble(s).")
         except Exception as e:
             print(f"[REFINE] skipped after an error: {type(e).__name__}: {e}")
+
+    # Order of the bubbles for the translator / the LLM (setting bubble_order; ids are NOT renamed). After refine on
+    # purpose: split / merge renumber bubbles by vertical position and would undo a right-to-left order.
+    if get_setting("bubble_order", "ttb") != "ttb":
+        from services.bubble_edit import auto_order
+        bubbles = auto_order(bubbles, get_setting("bubble_order", "ttb"))
 
     result = {
         "items": items,

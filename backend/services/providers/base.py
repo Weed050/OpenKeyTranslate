@@ -4,18 +4,36 @@
 """
 Abstract interface all translation backends must implement.
 
-Keeping this interface minimal (one method, one input/output shape) is what
-lets translation_service.py stay provider-agnostic: it only ever calls
-provider.translate(texts_payload), regardless of which LLM sits behind it.
-Adding a new backend means writing one new class here that implements
-this method - nothing upstream changes.
+Two entry points:
+- translate(texts_payload, system_prompt=None) -> {id: translation}: the page batch (and, with a different system
+  prompt, the terminology post-edit pass - same output shape).
+- request_json(system_prompt, payload, schema) -> schema instance: any other structured call (glossary term
+  extraction). Key rotation / retry lives here in each provider, so both paths share it.
+
+translation_service.py only ever talks to this interface, regardless of which LLM sits behind it.
+Adding a new backend means writing one new class that implements request_json - nothing upstream changes.
 """
 
 import time
 from abc import ABC, abstractmethod
 
+from pydantic import BaseModel
+
+from .prompts import SYSTEM_PROMPT
+
+
+class BubbleTranslation(BaseModel):
+    id: str
+    translation: str
+
+
+class TranslationBatch(BaseModel):
+    translations: list[BubbleTranslation]
+
 
 class TranslationProvider(ABC):
+    default_system_prompt = SYSTEM_PROMPT
+
     def __init__(self):
         # Set by translate() to the label of whichever key from the pool
         # actually served the last request - read by translation_service.py
@@ -36,13 +54,21 @@ class TranslationProvider(ABC):
         return int(min(waits)) + 1 if waits else 0
 
     @abstractmethod
-    def translate(self, texts_payload: list[dict]) -> dict[str, str]:
+    def request_json(self, system_prompt: str, payload, schema: type[BaseModel]) -> BaseModel:
+        """
+        One structured call with key rotation / retry. `payload` is JSON-serialised (or sent as-is when a str).
+        Raises when every configured key is unavailable (rate-limited or unset) - the caller reports it.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    def translate(self, texts_payload: list[dict], system_prompt: str | None = None) -> dict[str, str]:
         """
         Translate a batch of speech-bubble texts.
 
-        :param texts_payload: List of {"id": str, "text": str, "hint": str (optional)}.
-        :param texts_payload: "hint", when present, is a translation the user
-            already approved for similar text - see services/memory_service.py.
+        :param texts_payload: List of {"id", "text", optional "examples" / "exact" / "glossary" / "context_only"}
+            - see prompts.SYSTEM_PROMPT for what each field means to the model.
+        :param system_prompt: None = the translation prompt; the terminology post-edit pass passes its own.
         :return: Mapping of {id: translation}. A missing id is treated by the
             caller as an empty-string translation, so failures should simply
             omit the id rather than raise - except when every configured key
