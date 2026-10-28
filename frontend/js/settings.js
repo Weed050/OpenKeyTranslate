@@ -12,8 +12,18 @@ let appSettings = {};
  
 window.addEventListener("DOMContentLoaded", () => {
     renderSidebar(null);
+    initThemeSelect();
     loadSettings();
 });
+
+/** Appearance card: browser-local preference (js/theme.js), not part of settings.json - applies instantly. */
+function initThemeSelect() {
+    const select = document.getElementById("themeSelect");
+    if (!select || !window.oktTheme) return;
+    select.value = window.oktTheme.get();
+    select.addEventListener("change", () => window.oktTheme.set(select.value));
+    window.oktTheme.onChange((pref) => { select.value = pref; });   // sidebar toggle / other tab
+}
  
 async function loadSettings() {
     try {
@@ -23,6 +33,13 @@ async function loadSettings() {
         document.getElementById("memorySimilarityInput").value = appSettings.memory_similarity_threshold ?? 0.80;
         document.getElementById("memoryTopKInput").value = appSettings.memory_top_k ?? 3;
         document.getElementById("memoryShortPhraseInput").value = appSettings.memory_short_phrase_max_words ?? 2;
+        document.getElementById("memoryLexicalInput").value = appSettings.memory_lexical_min ?? 25;
+        document.getElementById("memoryAbRateInput").value = appSettings.memory_ab_sample_rate ?? 1.0;
+        document.getElementById("memoryStoreApprovedCheckbox").checked = appSettings.memory_store_approved !== false;
+        document.getElementById("memoryAbCheckbox").checked = appSettings.memory_ab_test_logging !== false;
+        document.getElementById("glossaryPosteditCheckbox").checked = appSettings.glossary_postedit !== false;
+        document.getElementById("glossarySuggestCheckbox").checked = appSettings.glossary_suggest_on_save !== false;
+        document.getElementById("matchCaseCheckbox").checked = appSettings.translation_match_case !== false;
         document.getElementById("ignorePatternsInput").value = (appSettings.ocr_ignore_patterns || []).join("\n");
         document.getElementById("appVersionLabel").textContent = appSettings.app_version || "unknown";
         fillTranslationForm();
@@ -31,6 +48,11 @@ async function loadSettings() {
         document.getElementById("ocrSkipSymbolsCheckbox").checked = appSettings.ocr_skip_symbols !== false;
         document.getElementById("inpaintInteriorCheckbox").checked = appSettings.inpaint_use_interior !== false;
         document.getElementById("ocrRefineCheckbox").checked = appSettings.ocr_refine !== false;
+        document.getElementById("ocrScanCheckbox").checked = appSettings.ocr_scan_missed_bubbles === true;
+        document.getElementById("typesettingFontInput").value = appSettings.typesetting_font || "";
+        document.getElementById("typesettingUpperCheckbox").checked = appSettings.typesetting_uppercase !== false;
+        document.getElementById("inpaintModeSelect").value = appSettings.inpaint_mode || "glyph";
+        document.getElementById("bubbleOrderSelect").value = appSettings.bubble_order || "ttb";
     } catch (e) {
         document.getElementById("currentWorkspacePath").textContent = `Error: ${e.message}`;
     }
@@ -87,12 +109,23 @@ document.getElementById("saveMemorySettingsBtn").addEventListener("click", async
     if (!Number.isFinite(threshold) || threshold < 0 || threshold > 1) { status.textContent = "Threshold must be 0.0-1.0."; return; }
     if (!Number.isFinite(topK) || topK < 1) { status.textContent = "Top-K must be >= 1."; return; }
     if (!Number.isFinite(shortMax) || shortMax < 0) { status.textContent = "Short phrase limit must be >= 0."; return; }
+    const lexical = parseInt(document.getElementById("memoryLexicalInput").value, 10);
+    const abRate = parseFloat(document.getElementById("memoryAbRateInput").value);
+    if (!Number.isFinite(lexical) || lexical < 0 || lexical > 100) { status.textContent = "Word overlap must be 0-100."; return; }
+    if (!Number.isFinite(abRate) || abRate < 0 || abRate > 1) { status.textContent = "A/B sample rate must be 0.0-1.0."; return; }
     try {
         const result = await api.settings.updateMemory({
             memory_min_words: words,
             memory_similarity_threshold: threshold,
             memory_top_k: topK,
             memory_short_phrase_max_words: shortMax,
+            memory_lexical_min: lexical,
+            memory_ab_sample_rate: abRate,
+            memory_store_approved: document.getElementById("memoryStoreApprovedCheckbox").checked,
+            memory_ab_test_logging: document.getElementById("memoryAbCheckbox").checked,
+            glossary_postedit: document.getElementById("glossaryPosteditCheckbox").checked,
+            glossary_suggest_on_save: document.getElementById("glossarySuggestCheckbox").checked,
+            translation_match_case: document.getElementById("matchCaseCheckbox").checked,
         });
         status.textContent = result.message;
     } catch (e) {
@@ -172,6 +205,7 @@ function fillTranslationForm() {
     document.getElementById("translationOnCheckbox").checked = appSettings.translation_on !== false;
     document.getElementById("providerSelect").value = appSettings.active_provider || "groq";
     document.getElementById("temperatureInput").value = appSettings.translation_temperature ?? 0.4;
+    document.getElementById("geminiThinkingInput").value = appSettings.gemini_thinking_budget ?? 0;
     renderProviderForm();
 }
 
@@ -219,6 +253,8 @@ document.getElementById("saveTranslationBtn")?.addEventListener("click", async (
     const status = document.getElementById("translationStatus");
     const temperature = parseFloat(document.getElementById("temperatureInput").value);
     if (!Number.isFinite(temperature) || temperature < 0 || temperature > 2) { status.textContent = "Temperature must be 0.0-2.0."; return; }
+    const thinking = parseInt(document.getElementById("geminiThinkingInput").value, 10);
+    if (!Number.isFinite(thinking) || thinking < -1) { status.textContent = "Thinking budget must be -1 or more."; return; }
     const name = currentProviderName();
     const cfg = formProviders[name];
     if (cfg && cfg.keys.some((k) => !k.api_key.trim())) {
@@ -230,6 +266,7 @@ document.getElementById("saveTranslationBtn")?.addEventListener("click", async (
             translation_on: document.getElementById("translationOnCheckbox").checked,
             active_provider: name,
             translation_temperature: temperature,
+            gemini_thinking_budget: thinking,
             providers: { [name]: { model: cfg.model, keys: cfg.keys } },
         });
         status.textContent = result.message;
@@ -266,6 +303,9 @@ document.getElementById("saveOcrOptionsBtn")?.addEventListener("click", async ()
             ocr_skip_symbols: document.getElementById("ocrSkipSymbolsCheckbox").checked,
             inpaint_use_interior: document.getElementById("inpaintInteriorCheckbox").checked,
             ocr_refine: document.getElementById("ocrRefineCheckbox").checked,
+            ocr_scan_missed_bubbles: document.getElementById("ocrScanCheckbox").checked,
+            inpaint_mode: document.getElementById("inpaintModeSelect").value,
+            bubble_order: document.getElementById("bubbleOrderSelect").value,
         });
         status.textContent = result.message;
     } catch (e) {
@@ -349,5 +389,19 @@ document.getElementById("importAllBtn")?.addEventListener("click", async () => {
         backupStatus().textContent = `\u2717 ${e.message}`;
     } finally {
         setBackupButtons(false);
+    }
+});
+
+
+document.getElementById("saveTypesettingBtn")?.addEventListener("click", async () => {
+    const status = document.getElementById("typesettingStatus");
+    try {
+        await api.settings.updateOcrOptions({
+            typesetting_font: document.getElementById("typesettingFontInput").value.trim(),
+            typesetting_uppercase: document.getElementById("typesettingUpperCheckbox").checked,
+        });
+        status.textContent = "Saved. The next preview / export uses it.";
+    } catch (e) {
+        status.textContent = `Failed: ${e.message}`;
     }
 });

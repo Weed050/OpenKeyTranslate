@@ -152,6 +152,7 @@ function bindToolbar(byChapter) {
     document.getElementById("goToNextUnprocessedBtn").onclick = goToNextUnprocessed;
     document.getElementById("addChaptersBtn").onclick = () => openImportDialog(showPagePicker);
     document.getElementById("rescanBtn").onclick = rescanFolders;
+    document.getElementById("exportPagesBtn").onclick = exportTranslatedPages;
     document.getElementById("chapterViewBtn").onclick = () =>
         applyView(el.pagePickerBody.classList.contains("as-list") ? "grid" : "list");
     setupBulkDelete(byChapter);
@@ -227,6 +228,45 @@ function setupBulkDelete(byChapter) {
             alert(`Delete failed: ${err.message}`);
         }
     };
+}
+
+/* --------------------------- export translated pages --------------------------- */
+
+async function exportTranslatedPages() {
+    const btn = document.getElementById("exportPagesBtn");
+    const chapterIds = [...el.pagePickerBody.querySelectorAll("input.chapter-select:checked")].map((b) => parseInt(b.dataset.chapterId, 10));
+    let dest;
+    try {
+        dest = (await api.projects.selectFolder()).path;
+    } catch (e) {
+        alert(`Couldn't open the folder dialog: ${e.message}`);
+        return;
+    }
+    if (!dest) return;
+    const label = chapterIds.length ? `${chapterIds.length} selected chapter(s)` : "all chapters";
+    if (!confirm(`Export the translated pages of ${label} as PNG files into:\n${dest}\n\nPages with no translation are skipped.`)) return;
+
+    const original = btn.textContent;
+    btn.disabled = true;
+    try {
+        const { job_id } = await api.projects.exportPages(state.projectId, { path: dest, chapter_ids: chapterIds });
+        for (;;) {
+            const job = await api.system.job(job_id);
+            if (job.state === "running") {
+                btn.textContent = `Exporting ${job.done_bytes}/${job.total_bytes || "?"}`;
+                await new Promise((r) => setTimeout(r, 600));
+                continue;
+            }
+            if (job.state === "done") showToast(job.message, 6000);
+            else alert(`Export failed: ${job.message}`);
+            break;
+        }
+    } catch (e) {
+        alert(`Export failed: ${e.message}`);
+    } finally {
+        btn.disabled = false;
+        btn.textContent = original;
+    }
 }
 
 /* ------------------------------- rescan folders ------------------------------- */

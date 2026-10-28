@@ -1,9 +1,12 @@
 /* frontend/css/tokens.css
-   Design tokens for the dark theme. Every other CSS file reads colors,
-   spacing and radii from these custom properties - nothing else in the
-   project should hardcode a hex color or a raw px gap. */
- 
+   Design tokens. Dark theme is the default (:root); the light theme overrides the same custom properties under
+   :root[data-theme="light"]. data-theme is set by js/theme.js before first paint (user choice: system / light /
+   dark, kept in localStorage). Every other CSS file reads colors, spacing and radii from these custom properties -
+   nothing else in the project should hardcode a hex color or a raw px gap. */
+
 :root {
+  color-scheme: dark;              /* native controls, scrollbars, <select> popups follow the theme */
+
   /* surfaces, darkest to lightest */
   --bg-page: #0e0f12;
   --bg-panel: #1b1c21;
@@ -11,40 +14,101 @@
   --bg-hover: #26272f;
   --bg-selected: #262a3a;
   --bg-input: #1f2028;
- 
+  --bg-sunken: #121318;            /* page-picker toolbar + chapter cards */
+  --bg-well: #08090c;              /* page tiles area inside an open chapter */
+
   /* accent + status */
   --accent: #6d8cff;
   --accent-text: #0e0f12;
   --danger: #e0575c;
   --success: #4caf7d;
   --warn: #d9a441;
- 
+
+  /* translucent tints of the status colors (badges, hover, draw rectangle, chapter progress) */
+  --accent-soft: rgba(109, 140, 255, 0.14);
+  --danger-soft: rgba(224, 87, 92, 0.12);
+  --success-soft: rgba(76, 175, 125, 0.16);
+  --tint-rest: rgba(255, 255, 255, 0.02);
+  --hover-filter: brightness(1.25);
+
   /* text */
   --text-primary: #e7e7ea;
   --text-secondary: #a4a5ad;
   --text-muted: #6b6c74;
- 
+
   /* borders */
   --border: #2a2b31;
   --border-strong: #3a3b44;
- 
+
+  /* overlays, shadows, floating button */
+  --backdrop: rgba(0, 0, 0, 0.6);
+  --shadow: rgba(0, 0, 0, 0.2);
+  --fab-bg: #333;
+  --fab-hover: #555;
+  --fab-text: #fff;
+
+  /* drawn ON the manga image itself - same in both themes (the page is the background, not the UI) */
+  --overlay-outline: rgba(0, 0, 0, 0.55);
+  --overlay-halo: rgba(255, 255, 255, 0.6);
+  --overlay-chip-bg: rgba(30, 30, 40, 0.85);
+  --overlay-chip-text: #fff;
+
   /* shape */
   --radius: 8px;
   --radius-sm: 6px;
- 
+
   /* spacing scale */
   --space-xs: 4px;
   --space-sm: 8px;
   --space-md: 16px;
   --space-lg: 24px;
   --space-xl: 32px;
- 
+
   /* type */
   --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
- 
+
   /* fixed layout sizes, referenced by layout.css and editor.css */
   --sidebar-w: 200px;
   --panel-w: 320px;
 }
- 
+
+/* Light theme: also used for printing (js/theme.js switches to it on beforeprint). Status colors are darker than in
+   the dark theme so text in them keeps >= 4.5:1 contrast on white. */
+:root[data-theme="light"] {
+  color-scheme: light;
+
+  --bg-page: #f4f5f7;
+  --bg-panel: #ffffff;
+  --bg-panel-2: #f0f1f4;
+  --bg-hover: #e9eaef;
+  --bg-selected: #dfe6ff;
+  --bg-input: #ffffff;
+  --bg-sunken: #f8f9fa;
+  --bg-well: #eceef2;
+
+  --accent: #3552d4;
+  --accent-text: #ffffff;
+  --danger: #c4343a;
+  --success: #1f7a4a;
+  --warn: #9a6400;
+
+  --accent-soft: rgba(53, 82, 212, 0.10);
+  --danger-soft: rgba(196, 52, 58, 0.10);
+  --success-soft: rgba(31, 122, 74, 0.14);
+  --tint-rest: rgba(0, 0, 0, 0.015);
+  --hover-filter: brightness(0.96);
+
+  --text-primary: #1b1c21;
+  --text-secondary: #4a4c56;
+  --text-muted: #6e707a;
+
+  --border: #d9dbe1;
+  --border-strong: #b9bcc5;
+
+  --backdrop: rgba(20, 22, 30, 0.35);
+  --shadow: rgba(0, 0, 0, 0.15);
+  --fab-bg: #4a4c56;
+  --fab-hover: #2c2d33;
+  --fab-text: #fff;
+}

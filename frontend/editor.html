@@ -7,6 +7,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>OpenKeyTranslate - Editor</title>
     <link rel="stylesheet" href="css/tokens.css">
+    <script src="js/theme.js"></script>
     <link rel="stylesheet" href="css/base.css">
     <link rel="stylesheet" href="css/layout.css">
     <link rel="stylesheet" href="css/editor.css">
@@ -48,7 +49,14 @@
                         <span style="margin-left:auto"></span>
                         <button id="retranslateBtn" class="icon-btn" title="Re-run translation only. Bubbles you edited are kept (Shift+click overwrites them too)">Retranslate</button>
                         <button id="reocrBtn" class="icon-btn" title="Run OCR + inpainting again on this page. Translations of bubbles whose text did not change are kept">Re-OCR</button>
+                        <button id="previewBtn" class="icon-btn" title="Show the page with the translation typeset into the bubbles (the clean page is shown otherwise). Download from the page list: Export translated pages.">Preview text</button>
                         <button id="addBubbleBtn" class="icon-btn" title="Draw a rectangle over text the OCR missed - it is read and added as a new bubble (Esc cancels)">Add bubble</button>
+                        <select id="orderSelect" class="toolbar-select" title="Reading order of the bubbles: top to bottom, right to left (Japanese manga) or left to right. There is no panel detection - fix single bubbles with Move up / down.">
+                            <option value="ttb">Order: top to bottom</option>
+                            <option value="rtl">Order: right to left</option>
+                            <option value="ltr">Order: left to right</option>
+                        </select>
+                        <button id="applyOrderBtn" class="icon-btn" title="Sort the bubbles of this page in the chosen order (the numbers on the page show the result)">Sort</button>
                         <button id="reinpaintBtn" class="icon-btn" title="Rebuild the clean image from the original (after deleting / skipping bubbles) - no OCR, no translation">Rebuild image</button>
                         <span class="toolbar-sep"></span>
                         <button id="zoomOutBtn" class="icon-btn" title="Zoom out (Ctrl + scroll down)">&minus;</button>
@@ -110,6 +118,7 @@
 
                         <div class="controls-right">
                             <button id="addChaptersBtn" class="primary">Import new chapters...</button>
+                            <button id="exportPagesBtn" title="Write the translated pages as PNG files (selected chapters, or all when none is ticked)">Export translated pages...</button>
                             <button id="rescanBtn" title="Compare the project folders on disk with the database right now (new / missing page files, wrong statuses)">Rescan folders</button>
                             <button id="deleteSelectedChaptersBtn" class="danger" disabled>Delete selected</button>
                             <label class="checkbox-label">

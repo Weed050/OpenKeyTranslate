@@ -53,7 +53,7 @@ button.danger {
   color: var(--danger);
   border-color: var(--danger);
 }
-button.danger:hover { background: rgba(224, 87, 92, 0.12); }
+button.danger:hover { background: var(--danger-soft); }
  
 button.icon-btn {
   padding: 6px 8px;
@@ -90,11 +90,11 @@ label { display: block; font-size: 12px; color: var(--text-secondary); margin-bo
   padding: 2px 8px;
 }
  
-.badge[data-status="processed"]  { color: var(--success); background: rgba(76,175,125,0.12); }
+.badge[data-status="processed"]  { color: var(--success); background: var(--success-soft); }
 .badge[data-status="pending"]    { color: var(--text-muted); }
-.badge[data-status="failed"]     { color: var(--danger); background: rgba(224,87,92,0.12); }
-.badge[data-status="queued"]     { color: var(--accent); background: rgba(109,140,255,0.12); }
-.badge[data-status="processing"] { color: var(--accent); background: rgba(109,140,255,0.12); }
+.badge[data-status="failed"]     { color: var(--danger); background: var(--danger-soft); }
+.badge[data-status="queued"]     { color: var(--accent); background: var(--accent-soft); }
+.badge[data-status="processing"] { color: var(--accent); background: var(--accent-soft); }
 .badge[data-status="excluded"]   { color: var(--text-muted); opacity: 0.7; text-decoration: line-through; }
  
 /* Tooltip: title attribute styling is left to the browser default on

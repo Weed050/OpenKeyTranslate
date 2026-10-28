@@ -39,6 +39,8 @@ export const api = {
         previewChapters: (projectId, path, orderMode = "auto") =>
             request(`/projects/${projectId}/chapters/preview`, { method: "POST", body: JSON.stringify({ path, order_mode: orderMode }) }),
         rescan: (projectId) => request(`/projects/${projectId}/rescan`, { method: "POST" }),
+        exportPages: (projectId, payload) =>
+            request(`/projects/${projectId}/export-pages`, { method: "POST", body: JSON.stringify(payload) }),
         importChapterSelection: (projectId, payload) =>
             request(`/projects/${projectId}/chapters/import`, { method: "POST", body: JSON.stringify(payload) }),
         deleteChapter: (chapterId) => request(`/projects/chapters/${chapterId}`, { method: "DELETE" }),
@@ -63,6 +65,8 @@ export const api = {
             request(`/pages/by-project/${projectId}${includeExcluded ? "?include_excluded=true" : ""}`),
         get: (pageId) => request(`/pages/${pageId}`),
         imageUrl: (pageId) => `${API_BASE}/pages/${pageId}/image`,
+        // the page with the translation typeset into the bubbles (rendered on every request)
+        renderUrl: (pageId, download = false) => `${API_BASE}/pages/${pageId}/render${download ? "?download=true" : ""}`,
         process: (pageId) => request(`/pages/${pageId}/process`, { method: "POST" }),
         // translate=false: prefetch OCR + inpainting only; the page is translated when opened (fresh memory/glossary)
         processAsync: (pageId, translate = true) => request(`/pages/${pageId}/process-async?translate=${translate}`, { method: "POST" }),
@@ -70,7 +74,11 @@ export const api = {
         reinpaint: (pageId) => request(`/pages/${pageId}/reinpaint`, { method: "POST" }),
         patchBubble: (pageId, bubbleId, payload) =>
             request(`/pages/${pageId}/bubbles/${bubbleId}`, { method: "PATCH", body: JSON.stringify(payload) }),
-        reocrBubble: (pageId, bubbleId) => request(`/pages/${pageId}/bubbles/${bubbleId}/reocr`, { method: "POST" }),
+        // box (optional) = [x1, y1, x2, y2] the user drew: that exact area is read instead of the detected bubble
+        reocrBubble: (pageId, bubbleId, box = null) =>
+            request(`/pages/${pageId}/bubbles/${bubbleId}/reocr`, { method: "POST", body: box ? JSON.stringify({ box }) : undefined }),
+        reorderBubbles: (pageId, payload) =>
+            request(`/pages/${pageId}/bubbles/reorder`, { method: "POST", body: JSON.stringify(payload) }),
         addBubble: (pageId, box) => request(`/pages/${pageId}/bubbles`, { method: "POST", body: JSON.stringify({ box }) }),
         mergeBubble: (pageId, bubbleId, otherId) =>
             request(`/pages/${pageId}/bubbles/${bubbleId}/merge`, { method: "POST", body: JSON.stringify({ with: otherId }) }),
@@ -110,6 +118,7 @@ export const api = {
         export: (projectId) => request(`/corrections/export/${projectId}`),
         import: (projectId, payload) => request(`/corrections/import/${projectId}`, { method: "POST", body: JSON.stringify(payload) }),
         usage: (correctionId) => request(`/corrections/${correctionId}/usage`),
+        reembed: (projectId) => request(`/corrections/reembed/${projectId}`, { method: "POST" }),
     },
  
     glossary: {
@@ -117,6 +126,7 @@ export const api = {
     add: (projectId, payload) => request(`/glossary/by-project/${projectId}`, { method: "POST", body: JSON.stringify(payload) }),
     delete: (termId) => request(`/glossary/${termId}`, { method: "DELETE" }),
     suggestions: (projectId, minOccurrences = 2) => request(`/glossary/suggestions/${projectId}?min_occurrences=${minOccurrences}`),
+    suggestionsLlm: (projectId) => request(`/glossary/suggestions/${projectId}/llm`, { method: "POST" }),
     usage: (termId) => request(`/glossary/${termId}/usage`),
     export: (projectId) => request(`/glossary/export/${projectId}`),
     import: (projectId, payload) => request(`/glossary/import/${projectId}`, { method: "POST", body: JSON.stringify(payload) }),

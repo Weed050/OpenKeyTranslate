@@ -31,7 +31,7 @@
   gap: 12px;
   margin-bottom: 20px;
   padding: 10px 14px;
-  background: #121318;
+  background: var(--bg-sunken);
   border: 1px solid var(--border);
   border-radius: var(--radius);
 }
@@ -51,7 +51,7 @@
   min-width: 0;
   padding: 0 12px;
   font-size: 13px;
-  background: #0a0b0e;
+  background: var(--bg-input);
 }
 .page-picker-controls button {
   height: 36px;
@@ -95,7 +95,7 @@
 .page-picker-chapter {
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  background: #121318;
+  background: var(--bg-sunken);
   overflow: hidden;
   scroll-margin-top: 16px;              /* scrollIntoView({block:"start"}) stops 16px below the top edge */
 }
@@ -113,11 +113,11 @@
   cursor: pointer;
   list-style: none;
   user-select: none;
-  background: linear-gradient(90deg, rgba(76, 175, 125, 0.16) var(--done), rgba(255, 255, 255, 0.02) var(--done));
+  background: linear-gradient(90deg, var(--success-soft) var(--done), var(--tint-rest) var(--done));
   transition: filter 0.15s ease;
 }
 .page-picker-chapter summary::-webkit-details-marker { display: none; }
-.page-picker-chapter summary:hover { filter: brightness(1.25); }
+.page-picker-chapter summary:hover { filter: var(--hover-filter); }
 
 /* chevron: a rotated corner, so it turns smoothly instead of swapping glyphs */
 .page-picker-chapter summary::before {
@@ -156,7 +156,7 @@
   grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
   gap: 10px;
   padding: 14px;
-  background: #08090c;
+  background: var(--bg-well);
   border-top: 1px solid var(--border);
 }
 .page-picker-row {
@@ -200,11 +200,11 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  color: #fff;
-  background-color: #333;
+  color: var(--fab-text);
+  background-color: var(--fab-bg);
   border: none;
   border-radius: 50%;
-  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.2);
+  box-shadow: 0 4px 10px var(--shadow);
   cursor: pointer;
   opacity: 0;
   pointer-events: none;
@@ -213,4 +213,4 @@
 }
 #scrollToTopBtn svg { width: 24px; height: 24px; }
 #scrollToTopBtn.visible { opacity: 1; pointer-events: auto; transform: translateY(0); }
-#scrollToTopBtn.visible:hover { background-color: #555; transform: translateY(-3px) scale(1.05); }
+#scrollToTopBtn.visible:hover { background-color: var(--fab-hover); transform: translateY(-3px) scale(1.05); }

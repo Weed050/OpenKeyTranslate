@@ -56,8 +56,8 @@
  
 .bubble-outline{
   position: absolute;
-  border: 1.5px solid rgba(0, 0, 0, 0.55);
-  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.6);
+  border: 1.5px solid var(--overlay-outline);
+  box-shadow: 0 0 0 1px var(--overlay-halo);
   border-radius: 3px;
   cursor: pointer;
   transition: border-color 0.1s;
@@ -65,7 +65,7 @@
 .bubble-outline:hover{ border-color: var(--accent); }
 .bubble-outline.selected{
   border: 2px solid var(--accent);
-  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.6);
+  box-shadow: 0 0 0 1px var(--overlay-halo);
 }
  
 .image-state{
@@ -226,7 +226,7 @@
 .empty-warning{
   font-size: 12px;
   color: var(--text-primary);
-  background: rgba(224, 87, 92, 0.12);
+  background: var(--danger-soft);
   border: 1px solid var(--danger);
   border-radius: var(--radius-sm);
   padding: 8px 10px;
@@ -322,7 +322,52 @@
 .draw-rect {
   position: absolute;
   border: 2px dashed var(--accent);
-  background: rgba(109, 140, 255, 0.15);
+  background: var(--accent-soft);
   pointer-events: none;
   z-index: 5;
 }
+
+/* ---------- bubble numbers on the page (= reading order) + toolbar select ---------- */
+.bubble-index {
+  position: absolute;
+  top: -1px;
+  left: -1px;
+  min-width: 16px;
+  padding: 0 4px;
+  font-size: 11px;
+  line-height: 16px;
+  text-align: center;
+  color: var(--overlay-chip-text);
+  background: var(--overlay-chip-bg);
+  border-radius: 3px 0 3px 0;
+  pointer-events: none;
+}
+.bubble-outline.selected .bubble-index { background: var(--accent); color: var(--accent-text); }
+.toolbar-select { width: auto; height: 28px; padding: 0 6px; font-size: 12px; }
+
+/* ---------- glossary suggestion after a saved correction (js/editor.js offerGlossarySuggestions) ---------- */
+.glossary-suggest{
+  position: fixed;
+  right: 18px;
+  bottom: 18px;
+  z-index: 900;
+  max-width: 460px;
+  padding: 10px 12px;
+  font-size: 12px;
+  color: var(--text-primary);
+  background: var(--bg-panel);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius);
+  box-shadow: 0 4px 14px var(--shadow);
+}
+.glossary-suggest-title{ margin-bottom: 6px; font-weight: 600; }
+.glossary-suggest-row{
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 4px 0;
+  border-top: 1px solid var(--border);
+}
+.glossary-suggest-actions{ display: flex; gap: 6px; flex-shrink: 0; }
+.glossary-suggest-actions button{ padding: 2px 8px; font-size: 12px; }

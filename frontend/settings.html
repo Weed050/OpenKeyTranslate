@@ -7,6 +7,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>OpenKeyTranslate - Settings</title>
     <link rel="stylesheet" href="css/tokens.css">
+    <script src="js/theme.js"></script>
     <link rel="stylesheet" href="css/base.css">
     <link rel="stylesheet" href="css/layout.css">
 </head>
@@ -53,6 +54,18 @@
                 </div>
                 <p class="text-muted" id="settingsStatus" style="margin-top:10px;"></p>
             </div>
+
+            <div class="card">
+                <h2>Appearance</h2>
+                <div class="row">
+                    <div class="text-muted">Color theme (System follows your OS light/dark setting; printing always uses Light)</div>
+                    <select id="themeSelect" style="max-width:200px;">
+                        <option value="system">System</option>
+                        <option value="light">Light</option>
+                        <option value="dark">Dark</option>
+                    </select>
+                </div>
+            </div>
  
             <div class="card">
                 <h2>Translation (BYOK)</h2>
@@ -83,6 +96,10 @@
                     <div class="text-muted">Temperature (0 = most repeatable; use 0 for the zero-shot vs memory experiment)</div>
                     <input type="text" id="temperatureInput" style="max-width:80px;" inputmode="decimal">
                 </div>
+                <div class="row">
+                    <div class="text-muted" title="Gemini 2.5 thinking tokens count against the output limit and can cut off the JSON of a dense page. 0 = off (Flash), -1 = model default. Pro models use at least 128.">Gemini thinking budget (tokens; 0 = off, -1 = model default)</div>
+                    <input type="text" id="geminiThinkingInput" style="max-width:80px;" inputmode="numeric">
+                </div>
                 <button id="saveTranslationBtn" class="primary">Save</button>
                 <p class="text-muted" id="translationStatus" style="margin-top:10px; white-space:pre-wrap;"></p>
             </div>
@@ -105,6 +122,30 @@
                     <div class="text-muted">Short phrase limit: sources with this many words or fewer are matched by exact text, not embeddings (0 = off)</div>
                     <input type="text" id="memoryShortPhraseInput" style="max-width:80px;" inputmode="numeric">
                 </div>
+                <div class="row">
+                    <div class="text-muted" title="Share of content words (stopwords ignored) a fuzzy match must ALSO have in common with the line, unless its similarity is 0.90 or more. Filters 'same topic, different line' matches. 25 recommended.">Minimum content-word overlap for fuzzy matches (%, 0 = off)</div>
+                    <input type="text" id="memoryLexicalInput" style="max-width:80px;" inputmode="numeric">
+                </div>
+                <label style="display:flex; align-items:center; gap:6px; margin:6px 0;" title="A translation you accept without changes is stored as an 'approved' memory entry. Edits are stored as 'corrected' and always rank first.">
+                    <input type="checkbox" id="memoryStoreApprovedCheckbox"> Also remember translations I accept unchanged (approved)
+                </label>
+                <label style="display:flex; align-items:center; gap:6px; margin:6px 0;" title="For bubbles with a memory match the same payload is translated a second time WITHOUT the memory (same glossary and context) - the zero-shot vs memory comparison in Logs.">
+                    <input type="checkbox" id="memoryAbCheckbox"> A/B experiment: also translate matched bubbles without memory (for Logs)
+                </label>
+                <div class="row">
+                    <div class="text-muted">A/B sample rate: share of pages that get the extra call (0.0-1.0; lower saves API quota)</div>
+                    <input type="text" id="memoryAbRateInput" style="max-width:80px;" inputmode="decimal">
+                </div>
+                <h3 style="margin:14px 0 6px; font-size:14px;">Terminology and casing</h3>
+                <label style="display:flex; align-items:center; gap:6px; margin:6px 0;" title="After translation every glossary term is checked (any Polish inflection counts). Bubbles that miss one get ONE extra call that inserts the term and changes nothing else.">
+                    <input type="checkbox" id="glossaryPosteditCheckbox"> Check glossary terms and fix missing ones (post-edit)
+                </label>
+                <label style="display:flex; align-items:center; gap:6px; margin:6px 0;" title="After you save a correction, terms you have fixed the same way at least twice are offered for the glossary right in the editor.">
+                    <input type="checkbox" id="glossarySuggestCheckbox"> Suggest glossary terms right after saving a correction
+                </label>
+                <label style="display:flex; align-items:center; gap:6px; margin:6px 0;" title="An ALL-CAPS English line always gets an ALL-CAPS Polish translation.">
+                    <input type="checkbox" id="matchCaseCheckbox"> Keep the source's ALL-CAPS in the translation
+                </label>
                 <button id="saveMemorySettingsBtn" class="primary">Save</button>
                 <p class="text-muted" id="memorySettingsStatus" style="margin-top:10px;"></p>
             </div>
@@ -136,9 +177,44 @@
                         <input type="checkbox" id="ocrRefineCheckbox"> Fix bubbles the OCR cut up or only half read (merge / re-read)
                     </label>
                 </div>
+                <div class="row">
+                    <div class="text-muted" title="glyph: erases whole letters and paints white bubbles with their own colour (no smearing). box: the old rectangle + blur fill.">Cleaning method</div>
+                    <select id="inpaintModeSelect" style="max-width:260px;">
+                        <option value="glyph">Letters (recommended)</option>
+                        <option value="box">Rectangle (old behaviour)</option>
+                    </select>
+                </div>
+                <div class="row">
+                    <div class="text-muted">Bubble order for new pages (what the translator and the LLM read first)</div>
+                    <select id="bubbleOrderSelect" style="max-width:260px;">
+                        <option value="ttb">Top to bottom</option>
+                        <option value="rtl">Right to left (Japanese manga)</option>
+                        <option value="ltr">Left to right</option>
+                    </select>
+                </div>
+                <div class="row">
+                    <label style="display:flex; align-items:center; gap:6px; margin:0;" title="Experimental: looks for white bubbles with letters that no detected text accounts for and OCRs just that spot.">
+                        <input type="checkbox" id="ocrScanCheckbox"> Look for bubbles the OCR did not find at all (experimental)
+                    </label>
+                </div>
                 <p class="text-muted">Skipped bubbles stay in the editor list (you can still force-translate one) but are not sent to the LLM and their original pixels are NOT erased. Applies to pages processed from now on; use <b>Re-OCR</b> in the editor for existing pages.</p>
                 <button id="saveOcrOptionsBtn" class="primary">Save</button>
                 <p class="text-muted" id="ocrOptionsStatus" style="margin-top:10px;"></p>
+            </div>
+
+            <div class="card">
+                <h2>Text on the page (preview and export)</h2>
+                <div class="row">
+                    <div class="text-muted">Font file (.ttf / .otf) with Polish letters. Empty = Arial / DejaVu / Liberation when found.</div>
+                    <input type="text" id="typesettingFontInput" style="max-width:340px;" spellcheck="false" placeholder="C:\\Windows\\Fonts\\arial.ttf">
+                </div>
+                <div class="row">
+                    <label style="display:flex; align-items:center; gap:6px; margin:0;">
+                        <input type="checkbox" id="typesettingUpperCheckbox"> UPPER CASE lettering (manga style)
+                    </label>
+                </div>
+                <button id="saveTypesettingBtn" class="primary">Save</button>
+                <p class="text-muted" id="typesettingStatus" style="margin-top:10px;"></p>
             </div>
 
             <div class="card">

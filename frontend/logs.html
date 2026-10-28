@@ -7,6 +7,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>OpenKeyTranslate - Translation logs</title>
     <link rel="stylesheet" href="css/tokens.css">
+    <script src="js/theme.js"></script>
     <link rel="stylesheet" href="css/base.css">
     <link rel="stylesheet" href="css/layout.css">
     <style>
@@ -19,6 +20,14 @@
         }
         table.logs-table td { padding: 8px 12px; border-bottom: 1px solid var(--border); vertical-align: top; color: var(--text-secondary); }
         table.logs-table tr:last-child td { border-bottom: none; }
+        .inj summary { cursor: pointer; color: var(--text-secondary); }
+        .inj-body { margin-top: 6px; display: flex; flex-direction: column; gap: 6px; min-width: 260px; }
+        .inj-label { color: var(--text-muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.03em; }
+        .inj-ex { padding: 4px 6px; border-left: 2px solid var(--border-strong); background: var(--bg-panel-2); border-radius: 3px; }
+        .inj-ex.corrected { border-left-color: var(--accent); }
+        .inj-rejected { color: var(--danger); text-decoration: line-through; }
+        .inj-missing { color: var(--warn); }
+        .logs-filter { display: flex; gap: 8px; align-items: center; margin: 10px 0; }
     </style>
 </head>
 <body>
@@ -53,6 +62,18 @@
  
             <div id="noProject" class="hidden text-muted">Open a project from the sidebar first.</div>
             <div class="card hidden" id="logsSummary" style="font-size:12px; display:flex; gap:20px; flex-wrap:wrap;"></div>
+            <div class="logs-filter">
+                <span class="text-muted">Show</span>
+                <select id="logsFilterSelect">
+                    <option value="all">All bubbles</option>
+                    <option value="memory">With memory (any lane)</option>
+                    <option value="fuzzy">Memory: fuzzy examples</option>
+                    <option value="exact">Memory: exact phrase</option>
+                    <option value="ab">With A/B pair</option>
+                    <option value="glossary">With glossary terms</option>
+                    <option value="postedit">Terminology post-edited</option>
+                </select>
+            </div>
  
             <div class="logs-table-wrap">
                 <table class="logs-table">
@@ -62,6 +83,7 @@
                             <th>Zero-shot</th>
                             <th>Memory-injected</th>
                             <th>Diff vs. final correction</th>
+                            <th>Injected / what happened</th>
                         </tr>
                     </thead>
                     <tbody id="logsBody"></tbody>

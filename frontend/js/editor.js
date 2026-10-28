@@ -143,7 +143,9 @@ async function init() {
     document.getElementById("retranslateBtn").addEventListener("click", (e) => runRetranslate(e.shiftKey));
     document.getElementById("reocrBtn").addEventListener("click", runReocr);
     document.getElementById("reinpaintBtn").addEventListener("click", runReinpaint);
-    document.getElementById("addBubbleBtn").addEventListener("click", () => setDrawMode(!state.drawMode));
+    document.getElementById("previewBtn").addEventListener("click", togglePreview);
+    document.getElementById("addBubbleBtn").addEventListener("click", () => setDrawMode(state.drawMode === "add" ? false : "add"));
+    document.getElementById("applyOrderBtn").addEventListener("click", applyAutoOrder);
     el.imageCanvas.addEventListener("mousedown", onDrawStart);
     document.getElementById("prevPageBtn").addEventListener("click", () => goToAdjacentPage(-1));
     document.getElementById("nextPageBtn").addEventListener("click", () => goToAdjacentPage(1));
@@ -436,8 +438,21 @@ async function runReinpaint() {
     }
 }
 
+/** Clean page, or - with "Preview text" on - the page with the translation typeset in (rendered by the server). */
+function pageImageSrc(bust = false) {
+    const base = state.preview ? api.pages.renderUrl(pageId) : api.pages.imageUrl(pageId);
+    return bust ? `${base}${base.includes("?") ? "&" : "?"}t=${Date.now()}` : base;
+}
+
 function refreshPageImage() {
-    el.pageImage.src = `${api.pages.imageUrl(pageId)}?t=${Date.now()}`;
+    el.pageImage.src = pageImageSrc(true);
+}
+
+function togglePreview() {
+    state.preview = !state.preview;
+    document.getElementById("previewBtn").classList.toggle("primary", state.preview);
+    refreshPageImage();
+    showToast(state.preview ? "Preview: translation typeset into the bubbles" : "Showing the clean page", 2500);
 }
 
 /* --------------------------- chapter / page nav ------------------------- */
@@ -524,7 +539,7 @@ function loadImage() {
         `;
         document.getElementById("retryImageBtn").addEventListener("click", loadImage);
     };
-    img.src = api.pages.imageUrl(pageId);
+    img.src = pageImageSrc();
 }
  
 function onWheelZoom(event) {
@@ -580,6 +595,10 @@ function renderBubbleOutlines(scale) {
         box.style.width = `${rect.w}px`;
         box.style.height = `${rect.h}px`;
         box.title = `Bubble ${index + 1}`;
+        const badge = document.createElement("span");
+        badge.className = "bubble-index";
+        badge.textContent = String(index + 1);
+        box.appendChild(badge);
         box.addEventListener("click", () => selectBubble(index, { scroll: false }));
         el.imageCanvas.appendChild(box);
     });
@@ -711,6 +730,9 @@ function renderBubbleDetail() {
             <button id="undoBtn" title="Revert to the value shown when this bubble was opened">Undo</button>
             <button id="retranslateBubbleBtn" title="Translate only this bubble again (neighbours are sent as context; memory + glossary apply)">Retranslate</button>
             <button id="reocrBubbleBtn" title="Read this bubble again as ONE crop of its whole interior - finds lines the page pass missed. The previous text stays available under 'Use raw OCR'.">Re-OCR bubble</button>
+            <button id="reocrAreaBtn" title="Draw the area yourself - for a bubble whose detected box misses a line (e.g. text below the box). That exact area is read.">Set area &amp; re-OCR</button>
+            ${state.selectedIndex > 0 ? '<button id="moveUpBtn" title="Move this bubble one place earlier in the reading order">Move up</button>' : ""}
+            ${state.selectedIndex < state.bubbles.length - 1 ? '<button id="moveDownBtn" title="Move this bubble one place later in the reading order">Move down</button>' : ""}
             ${state.selectedIndex > 0 ? '<button id="mergePrevBtn" title="Join this bubble with the one above it (the OCR cut one speech bubble into pieces)">Merge with &uarr;</button>' : ""}
             ${state.selectedIndex < state.bubbles.length - 1 ? '<button id="mergeNextBtn" title="Join this bubble with the one below it">Merge with &darr;</button>' : ""}
             <button id="skipBtn" title="Do not translate this bubble and put the original pixels back (page numbers, junk)">Skip</button>
@@ -770,6 +792,9 @@ function renderBubbleDetail() {
     });
     document.getElementById("retranslateBubbleBtn").addEventListener("click", () => retranslateCurrentBubble());
     document.getElementById("reocrBubbleBtn").addEventListener("click", reocrCurrentBubble);
+    document.getElementById("reocrAreaBtn").addEventListener("click", () => setDrawMode("reocr", bubble.bubble_id));
+    document.getElementById("moveUpBtn")?.addEventListener("click", () => moveCurrentBubble(-1));
+    document.getElementById("moveDownBtn")?.addEventListener("click", () => moveCurrentBubble(1));
     document.getElementById("mergePrevBtn")?.addEventListener("click", () => mergeCurrentBubble(-1));
     document.getElementById("mergeNextBtn")?.addEventListener("click", () => mergeCurrentBubble(1));
     document.getElementById("skipBtn").addEventListener("click", () => setSkip(true));
@@ -867,17 +892,49 @@ async function mergeCurrentBubble(direction) {
     }
 }
 
+async function moveCurrentBubble(direction) {
+    const index = state.selectedIndex;
+    const target = index + direction;
+    if (target < 0 || target >= state.bubbles.length) return;
+    const order = state.bubbles.map((b) => b.bubble_id);
+    [order[index], order[target]] = [order[target], order[index]];
+    try {
+        await api.pages.reorderBubbles(pageId, { order });
+        await reloadBubbles(state.bubbles[index].bubble_id);
+    } catch (e) {
+        alert(`Reorder failed: ${e.message}`);
+    }
+}
+
+async function applyAutoOrder() {
+    const mode = document.getElementById("orderSelect").value;
+    const names = { ttb: "top to bottom", rtl: "right to left (rows top to bottom)", ltr: "left to right (rows top to bottom)" };
+    if (!confirm(`Sort the bubbles of this page ${names[mode]}?\n\nThere is no panel detection, so check the numbers on the page afterwards and use Move up / Move down where needed. Translations are not changed.`)) return;
+    const keep = state.selectedIndex === null ? null : state.bubbles[state.selectedIndex].bubble_id;
+    try {
+        await api.pages.reorderBubbles(pageId, { auto: mode });
+        await reloadBubbles(keep);
+        showToast("Bubbles sorted");
+    } catch (e) {
+        alert(`Sort failed: ${e.message}`);
+    }
+}
+
 /* ------------------------------ add a bubble by drawing ------------------------------ */
 
-function setDrawMode(on) {
-    state.drawMode = on;
-    el.imageCanvas.classList.toggle("draw-mode", on);
-    document.getElementById("addBubbleBtn").classList.toggle("primary", on);
-    if (on) showToast("Drag a rectangle over the text (Esc cancels)", 3500);
+/** mode: false | "add" (new bubble from the drawn area) | "reocr" (read the drawn area as the selected bubble's text). */
+function setDrawMode(mode, targetId = null) {
+    state.drawMode = mode;
+    state.drawTarget = mode === "reocr" ? targetId : null;
+    el.imageCanvas.classList.toggle("draw-mode", !!mode);
+    document.getElementById("addBubbleBtn").classList.toggle("primary", mode === "add");
+    if (mode) showToast(mode === "reocr" ? "Drag a rectangle around ALL the text of this bubble (Esc cancels)" : "Drag a rectangle over the text (Esc cancels)", 3500);
 }
 
 function onDrawStart(event) {
     if (!state.drawMode || event.button !== 0) return;
+    const mode = state.drawMode;
+    const targetId = state.drawTarget;
     event.preventDefault();
     const canvasRect = el.imageCanvas.getBoundingClientRect();
     const startX = event.clientX - canvasRect.left;
@@ -908,12 +965,20 @@ function onDrawStart(event) {
         try {
             const saved = await saveCurrentBubble();
             if (!saved) return;
+            if (mode === "reocr") {
+                const result = await api.pages.reocrBubble(pageId, targetId, box);
+                await reloadBubbles(targetId);
+                showToast(result.text_changed ? "Area read - text changed" : "Area read - same text");
+                if (result.text_changed && !result.bubble.skip && (result.bubble.translation || "").trim()
+                    && confirm("The source text changed. Retranslate this bubble now?")) await retranslateCurrentBubble(true);
+                return;
+            }
             const result = await api.pages.addBubble(pageId, box);
             await reloadBubbles(result.bubble.bubble_id);
             showToast("Bubble added");
             if (!result.bubble.skip && !state.bubbles[state.selectedIndex]?.translation) await retranslateCurrentBubble(true);
         } catch (err) {
-            showToast(`Add bubble failed: ${err.message}`, 6000);
+            showToast(`${mode === "reocr" ? "Re-OCR of the area" : "Add bubble"} failed: ${err.message}`, 6000);
         }
     };
     window.addEventListener("mousemove", onMove);
@@ -956,12 +1021,18 @@ async function saveCurrentBubble() {
     const textarea = document.getElementById("translationInput");
     if (!textarea) return true; // skipped bubble: nothing to save
     const newValue = textarea.value.trim();
- 
+
     if (newValue === (bubble.translation || "")) {
-        flashInlineStatus("No changes to save");
+        // Unchanged = the user read it and moved on: confirm it once as an "approved" translation-memory entry
+        // (the backend decides whether to store it - memory_store_approved, duplicate / length gates).
+        if (newValue && !state.savedThisSession.has(bubble.bubble_id)) {
+            await approveUnchanged(bubble, newValue);
+        } else {
+            flashInlineStatus("No changes to save");
+        }
         return true;
     }
- 
+
     saveInFlight = true;
     setNavButtonsDisabled(true);
     try {
@@ -974,9 +1045,11 @@ async function saveCurrentBubble() {
         state.savedThisSession.add(bubble.bubble_id);
         renderBubbleList();
         recordLastEdit();
-        const memoryNote = result.correction_id ? "" : " (not added to memory: unchanged/too short)";
+        if (state.preview) refreshPageImage();      // the typeset text follows what was just saved
+        const memoryNote = result.correction_id ? "" : " (not added to memory: duplicate/too short)";
         showToast("Saved" + memoryNote);
         flashInlineStatus("Saved \u2713");
+        offerGlossarySuggestions(result.glossary_suggestions);
         return true;
     } catch (e) {
         console.error("[EDITOR] Save failed:", e);
@@ -989,6 +1062,78 @@ async function saveCurrentBubble() {
     }
 }
  
+/** Silent "approved" confirmation of an unchanged translation. Never blocks navigation on failure. */
+async function approveUnchanged(bubble, value) {
+    try {
+        const result = await api.corrections.save(pageId, bubble.bubble_id, {
+            source_text: bubble.text,
+            ai_translation: bubble.ai_translation,
+            final_translation: value,
+        });
+        state.savedThisSession.add(bubble.bubble_id);
+        if (result.correction_id) flashInlineStatus("Approved ✓");
+    } catch (e) {
+        console.warn("[EDITOR] approval not stored:", e);
+    }
+}
+
+/* ---------- glossary suggestions offered right after a correction (glossary_suggest_on_save) ---------- */
+
+function dismissedTermsKey() { return `okt-glossary-dismissed-${state.projectId}`; }
+
+function dismissedTerms() {
+    try { return new Set(JSON.parse(localStorage.getItem(dismissedTermsKey()) || "[]")); } catch { return new Set(); }
+}
+
+function dismissTerm(sourceTerm) {
+    const set = dismissedTerms();
+    set.add(sourceTerm.toUpperCase());
+    try { localStorage.setItem(dismissedTermsKey(), JSON.stringify([...set])); } catch { /* ignore */ }
+}
+
+function offerGlossarySuggestions(suggestions) {
+    const dismissed = dismissedTerms();
+    const fresh = (suggestions || []).filter((s) => !dismissed.has(s.source_term.toUpperCase()));
+    document.getElementById("glossarySuggestBox")?.remove();
+    if (!fresh.length || !state.projectId) return;
+
+    const box = document.createElement("div");
+    box.id = "glossarySuggestBox";
+    box.className = "glossary-suggest";
+    box.innerHTML = `<div class="glossary-suggest-title">Add to glossary? <span class="text-muted">(you fixed this the same way more than once)</span></div>`;
+    fresh.slice(0, 3).forEach((s) => {
+        const row = document.createElement("div");
+        row.className = "glossary-suggest-row";
+        row.innerHTML = `
+            <span><b>${escapeHtml(s.source_term)}</b> → <b>${escapeHtml(s.new_translation)}</b>
+                <span class="text-muted">(was ${escapeHtml(s.old_translation || "-")}, ${s.occurrences}×)</span></span>
+            <span class="glossary-suggest-actions">
+                <button class="primary" data-act="add">Add</button>
+                <button data-act="no">Not a term</button>
+            </span>`;
+        row.querySelector('[data-act="add"]').addEventListener("click", async () => {
+            try {
+                await api.glossary.add(state.projectId, {
+                    source_term: s.source_term, target_term: s.new_translation,
+                    auto_detected: true, occurrences: s.occurrences,
+                });
+                showToast(`Glossary: ${s.source_term} → ${s.new_translation}`);
+            } catch (e) {
+                showToast(`Glossary: ${e.message}`, 3500);
+            }
+            row.remove();
+            if (!box.querySelector(".glossary-suggest-row")) box.remove();
+        });
+        row.querySelector('[data-act="no"]').addEventListener("click", () => {
+            dismissTerm(s.source_term);
+            row.remove();
+            if (!box.querySelector(".glossary-suggest-row")) box.remove();
+        });
+        box.appendChild(row);
+    });
+    document.body.appendChild(box);
+}
+
 function flashInlineStatus(text, isError = false) {
     const statusEl = document.getElementById("saveInlineStatus");
     if (!statusEl) return;

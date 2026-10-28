@@ -178,4 +178,18 @@
   border-radius: var(--radius-sm);
 }
 .health-row.error { border-left-color: var(--danger); }
-.health-row.warn { border-left-color: #d9a441; }
+.health-row.warn { border-left-color: var(--warn); }
+
+/* theme switch in the sidebar footer (added by js/theme.js): looks like the links above it, not like a button */
+.sidebar-link.theme-toggle {
+  width: 100%;
+  height: auto;
+  margin-top: var(--space-xs);
+  background: none;
+  border: none;
+  border-left: 2px solid transparent;
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}

@@ -7,6 +7,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>OpenKeyTranslate - Memory</title>
     <link rel="stylesheet" href="css/tokens.css">
+    <script src="js/theme.js"></script>
     <link rel="stylesheet" href="css/base.css">
     <link rel="stylesheet" href="css/layout.css">
     <style>
@@ -87,6 +88,11 @@
  
                 <div style="display:flex; gap:8px; margin-bottom:12px; flex-wrap:wrap; align-items:center;">
                     <input type="text" id="memorySearchInput" placeholder="Search source or translation..." style="max-width:280px;">
+                    <select id="memoryKindSelect" title="corrected = you changed the AI text; approved = you accepted it unchanged">
+                        <option value="all">All entries</option>
+                        <option value="corrected">Corrected only</option>
+                        <option value="approved">Approved only</option>
+                    </select>
                     <select id="memorySortSelect">
                         <option value="newest">Newest first</option>
                         <option value="oldest">Oldest first</option>
@@ -97,6 +103,7 @@
                     <button id="exportMemoryBtn">Export JSON</button>
                     <input type="file" id="importMemoryFile" accept="application/json" class="hidden">
                     <button id="importMemoryBtn">Import JSON</button>
+                    <button id="reembedMemoryBtn" title="Recompute the search vectors of all entries from the cleaned-up source text (OCR fixes like SQUAD- RON -> SQUADRON). Run once after updating.">Re-embed memory</button>
                 </div>
  
                 <div id="correctionList"></div>
@@ -111,7 +118,8 @@
                     <input type="text" id="glossaryTargetInput" placeholder="Polish term (e.g. Wywern)">
                     <button id="glossaryAddBtn" class="primary">Add term</button>
                     <span class="badge" id="glossaryCountBadge"></span>
-                    <button id="scanSuggestionsBtn">Scan corrections for suggestions</button>
+                    <button id="scanSuggestionsBtn" title="Fast, local: spelling changes of names / transliterations fixed in at least 2 corrections">Scan corrections for suggestions</button>
+                    <button id="scanSuggestionsLlmBtn" title="One request to the translation provider: the LLM reads your latest corrections and lists the TERM changes in base form (also translated terms like DRAGOONS -> JEZDZCY WYWERN)">Find terms with AI</button>
                     <button id="exportGlossaryBtn">Export JSON</button>
                     <input type="file" id="importGlossaryFile" accept="application/json" class="hidden">
                     <button id="importGlossaryBtn">Import JSON</button>

@@ -156,15 +156,15 @@ document.getElementById("glossaryAddBtn")?.addEventListener("click", async () =>
     }
 });
 
-document.getElementById("scanSuggestionsBtn")?.addEventListener("click", async () => {
+async function runSuggestionScan(fetchSuggestions, busyText, emptyText) {
     const block = document.getElementById("suggestionsBlock");
     const list = document.getElementById("suggestionsList");
     const status = document.getElementById("glossaryStatus");
 
-    status.textContent = "Scanning corrections...";
+    status.textContent = busyText;
     let suggestions;
     try {
-        suggestions = await api.glossary.suggestions(projectId);
+        suggestions = await fetchSuggestions();
     } catch (e) {
         status.textContent = `Scan failed: ${e.message}`;
         return;
@@ -173,30 +173,46 @@ document.getElementById("scanSuggestionsBtn")?.addEventListener("click", async (
 
     if (!suggestions.length) {
         block.classList.add("hidden");
-        alert("No repeat-fix patterns found in the stored corrections yet.");
+        alert(emptyText);
         return;
     }
 
     block.classList.remove("hidden");
     list.innerHTML = "";
     suggestions.forEach((s) => list.appendChild(suggestionRow(s)));
-});
+}
+
+document.getElementById("scanSuggestionsBtn")?.addEventListener("click", () => runSuggestionScan(
+    () => api.glossary.suggestions(projectId),
+    "Scanning corrections...",
+    "No repeat-fix patterns found in the stored corrections yet.",
+));
+
+document.getElementById("scanSuggestionsLlmBtn")?.addEventListener("click", () => runSuggestionScan(
+    () => api.glossary.suggestionsLlm(projectId),
+    "Asking the translation model to extract terms from your corrections...",
+    "The model found no terminology changes in your corrections (only grammar / style edits).",
+));
 
 function suggestionRow(s) {
     const row = document.createElement("div");
     row.className = "suggestion-row";
     row.innerHTML = `
         <span><strong>${escapeHtml(s.source_term)}</strong></span>
-        <span class="suggestion-arrow">${escapeHtml(s.old_translation)} &rarr; ${escapeHtml(s.new_translation)}</span>
+        <span class="suggestion-arrow">${escapeHtml(s.old_translation || "-")} &rarr;</span>
+        <input type="text" data-target value="${escapeHtml(s.new_translation)}" style="max-width:180px;"
+               title="Polish term - use the base (dictionary) form, the model inflects it">
         <span class="badge" title="How many corrections show this pattern">${s.occurrences}×</span>
+        ${s.method === "llm" ? '<span class="badge" title="Extracted by the LLM">AI</span>' : ""}
         <span class="suggestion-example" title="${escapeHtml(s.example_source_text)}">${escapeHtml(s.example_source_text)}</span>
         <button class="primary" data-accept>Accept</button>
         <button class="copy-btn" data-reject>Dismiss</button>
     `;
     row.querySelector("[data-accept]").addEventListener("click", async () => {
         try {
+            const target = row.querySelector("[data-target]").value.trim() || s.new_translation;
             await api.glossary.add(projectId, {
-                source_term: s.source_term, target_term: s.new_translation,
+                source_term: s.source_term, target_term: target,
                 auto_detected: true, occurrences: s.occurrences,
             });
             row.remove();

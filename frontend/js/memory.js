@@ -47,7 +47,9 @@ async function loadCorrections() {
         return;
     }
  
-    document.getElementById("correctionsCountBadge").textContent = `${allCorrections.length} corrections`;
+    const approvedCount = allCorrections.filter((c) => c.kind === "approved").length;
+    document.getElementById("correctionsCountBadge").textContent =
+        `${allCorrections.length - approvedCount} corrected, ${approvedCount} approved`;
  
     if (!allCorrections.length) {
         listEl.innerHTML = `<p class="text-muted">No corrections stored yet for this project.</p>`;
@@ -61,11 +63,13 @@ function renderList() {
     const listEl = document.getElementById("correctionList");
     const query = (document.getElementById("memorySearchInput").value || "").toLowerCase();
     const sortMode = document.getElementById("memorySortSelect").value;
+    const kindFilter = document.getElementById("memoryKindSelect")?.value || "all";
  
     let items = allCorrections.filter((c) =>
+        (kindFilter === "all" || (c.kind || "corrected") === kindFilter) && (
         !query ||
         c.source_text.toLowerCase().includes(query) ||
-        c.final_translation.toLowerCase().includes(query)
+        c.final_translation.toLowerCase().includes(query))
     );
  
     const sorters = {
@@ -90,6 +94,9 @@ function correctionRow(c) {
     details.innerHTML = `
         <summary>
             <span class="item-summary-text">${escapeHtml(c.final_translation)}</span>
+            ${(c.kind || "corrected") === "approved"
+                ? '<span class="badge" title="Accepted unchanged - a plain translation-memory entry">approved</span>'
+                : '<span class="badge" title="You changed the AI text - ranked first, the AI text is shown to the model as rejected">corrected</span>'}
             <span class="badge" title="Times used as a hint">used ${c.reuse_count || 0}×</span>
         </summary>
         <div class="item-body">
@@ -236,4 +243,19 @@ document.getElementById("importMemoryFile")?.addEventListener("change", async (e
         alert(`Import failed: ${err.message}`);
     }
     e.target.value = "";
+});
+
+document.getElementById("memoryKindSelect")?.addEventListener("change", renderList);
+
+document.getElementById("reembedMemoryBtn")?.addEventListener("click", async (event) => {
+    const btn = event.currentTarget;
+    btn.disabled = true;
+    try {
+        const result = await api.corrections.reembed(projectId);
+        alert(result.message);
+    } catch (e) {
+        alert(`Re-embed failed: ${e.message}`);
+    } finally {
+        btn.disabled = false;
+    }
 });
