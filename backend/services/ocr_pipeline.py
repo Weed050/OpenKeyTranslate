@@ -36,7 +36,10 @@ Pipeline Stages:
 import cv2
 import numpy as np
 import logging
-from paddleocr import PaddleOCR
+
+from core.ocr_runtime import apply_env, paddle_kwargs
+apply_env()   # environment flags / cache folders MUST be set before paddle is imported
+from paddleocr import PaddleOCR  # noqa: E402
 
 from core.config import (
 
@@ -66,6 +69,8 @@ from utils.merge_boxes import build_text_lines, group_lines_into_bubbles, \
     filter_noise_lines, filter_noise_bubbles
 from utils.ignore_filter import filter_ignored_bubbles
 from utils.bubble_post import apply_bubble_postprocess
+from services.bubble_refine import refine_bubbles
+from core.config import get_setting
 from utils.marker import (
     inject_marker, resolve_marker_state, detect_rotation,
     correct_boxes_by_angle, remove_marker, pad_crop_right
@@ -77,30 +82,9 @@ logging.getLogger("ppocr").setLevel(logging.ERROR)
 
 
 # ---------------- OCR INITIALIZATION ----------------
-ocr = PaddleOCR(
-    # Specifies the target language model and character dictionary to load (English).
-    lang='en',
-
-    # Forces the core pipeline stages (Detection, Classification, and Recognition) onto the GPU via CUDA.
-    device='gpu',
-
-    # Activates the text orientation classifier (CLS model). It checks whether text boxes are upside
-    # down or rotated sideways (0, 90, 180, 270 degrees) and automatically flips them upright before recognition.
-    use_textline_orientation=True,
-
-    # Disables Intel MKLDNN (oneDNN) acceleration. Since MKLDNN is a mathematics kernel library optimized
-    # strictly for Intel CPUs, it must be False when targeting native GPU processing to avoid conflicts.
-    # enable_mkldnn=True,
-    enable_mkldnn=False,
-
-    # Disables geometric text-unwarping networks. Unwarping attempts to digitally flatten curved or bent pages
-    # from physical book photos; disabling this bypasses an expensive model unneeded for flat digital scans/webtoons.
-    use_doc_unwarping=False,
-
-    # Defines how many cropped text-line bounding boxes are bundled together and evaluated by the GPU
-    # concurrently. Increasing this maximizes GPU core utilization and speeds up processing, but increases VRAM use.
-    # text_recognition_batch_size=64,
-)
+# Device (CPU / GPU), oneDNN, threads and extra Paddle flags come from settings.json - see core/ocr_runtime.py.
+# (Before: edit device='gpu' here and comment/uncomment four os.environ lines to switch builds.)
+ocr = PaddleOCR(**paddle_kwargs())
 
 
 
@@ -293,6 +277,35 @@ def run_ocr_sliced(image: np.ndarray) -> tuple[list[dict], list[tuple[int, int]]
 
 
 
+# ---------------- OCR OF ONE REGION (a single bubble) ----------------
+def ocr_region(image: np.ndarray, region) -> list[dict]:
+    """
+    OCR a rectangle (x1, y1, x2, y2) of `image` and return the items in IMAGE coordinates.
+    The caller must hold OCR_LOCK when not called from inside process_image (which is already under it).
+
+    Used to re-read a bubble as one crop (services/bubble_refine.py, the editor's "Re-OCR bubble" / "Add bubble"):
+    bigger text relative to the crop and a clean background find lines the full-page pass missed.
+    """
+    h, w = image.shape[:2]
+    x1, y1, x2, y2 = max(0, int(region[0])), max(0, int(region[1])), min(w, int(region[2])), min(h, int(region[3]))
+    if x2 - x1 < 8 or y2 - y1 < 8:
+        return []
+    pad = 12                                                     # white margin: detectors like some air around text
+    crop = cv2.copyMakeBorder(image[y1:y2, x1:x2], pad, pad, pad, pad, cv2.BORDER_CONSTANT, value=[255, 255, 255])
+    items = parse_ocr_results(ocr.predict(crop), -1, TEXT_THRESHOLD)
+    ch, cw = crop.shape[:2]
+    shifted = []
+    for it in items:
+        cx = sum(p[0] for p in it["box"]) / len(it["box"])
+        cy = sum(p[1] for p in it["box"]) / len(it["box"])
+        if not (-0.2 * cw <= cx <= 1.2 * cw and -0.2 * ch <= cy <= 1.2 * ch):
+            print("[OCR REGION] box outside the crop (the orientation step rotated the coordinates?) - result discarded.")
+            return []
+        it["box"] = [[float(px) - pad + x1, float(py) - pad + y1] for px, py in it["box"]]
+        shifted.append(it)
+    return shifted
+
+
 # =====================================================================
 # THE BLACK BOX
 # =====================================================================
@@ -327,6 +340,18 @@ def process_image(image_bgr: np.ndarray, protected_terms=()) -> dict:
     bubbles = group_lines_into_bubbles(grouped_lines)
     bubbles = filter_noise_bubbles(bubbles)
     bubbles = filter_ignored_bubbles(bubbles)  # watermarks / URLs from settings.json -> ocr_ignore_patterns
+
+    # Bubble geometry fixes (merge bubbles OCR cut into pieces, re-read half-detected ones). Optional and fail-safe:
+    # whatever goes wrong here must not cost the user the OCR result.
+    if get_setting("ocr_refine", True):
+        partial = {"items": items, "lines": grouped_lines, "bubbles": bubbles}
+        try:
+            stats = refine_bubbles(image_scaled, partial, ocr_region)
+            items, grouped_lines, bubbles = partial["items"], partial["lines"], partial["bubbles"]
+            if stats["merged"] or stats["refined"]:
+                print(f"[REFINE] merged {stats['merged']} bubble piece(s), re-read {stats['refined']} half-detected bubble(s).")
+        except Exception as e:
+            print(f"[REFINE] skipped after an error: {type(e).__name__}: {e}")
 
     result = {
         "items": items,

@@ -27,6 +27,8 @@ Page ids, statuses, translation_logs.page_id, corrections, glossary, OCR JSON co
 
 Default is a DRY RUN. Close the app before --apply. The DB is copied to <db>.pageorder.<timestamp>.bak first.
 
+The project folder is <workspace root>/<project name>, taken from settings.json (override: --workspace-root).
+
 Usage:
     cd backend
     python scripts/fix_page_order.py --project "Nihonkoku Shoukan" --source "D:\\manga_scraped\\Nihonkoku Shoukan"
@@ -44,6 +46,13 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from utils.chapter_labels import list_images, order_names, scan_source, sha1_of_file  # noqa: E402
+
+
+def workspace_root(override: str | None) -> str:
+    if override:
+        return override
+    from core.config import WORKSPACE_DIR
+    return WORKSPACE_DIR
 
 
 def match_source(raw_hashes: dict, sources: list[dict]):
@@ -142,6 +151,7 @@ def main():
     ap.add_argument("--chapter", help="only this chapter label, e.g. Chapter_2 (default: all)")
     ap.add_argument("--mode", choices=["auto", "name", "mtime"], default="auto")
     ap.add_argument("--db", help="database file (default: from core.config)")
+    ap.add_argument("--workspace-root", help="folder that contains the project folders (default: from settings.json)")
     ap.add_argument("--rename", action="store_true", help="also rename files + pages.file_name so names follow the new order")
     ap.add_argument("--apply", action="store_true", help="write changes (default: dry run)")
     args = ap.parse_args()
@@ -157,11 +167,12 @@ def main():
 
     con = sqlite3.connect(db_path)
     cur = con.cursor()
-    cur.execute("SELECT id, workspace_path FROM projects WHERE name = ?", (args.project,))
+    cur.execute("SELECT id FROM projects WHERE name = ?", (args.project,))
     row = cur.fetchone()
     if not row:
         sys.exit(f"Project '{args.project}' not found.")
-    project_id, workspace = row
+    project_id = row[0]
+    workspace = os.path.join(workspace_root(args.workspace_root), args.project)   # dynamic: <workspace root>/<project name>
 
     q = "SELECT id, number FROM chapters WHERE project_id = ?"
     params = [project_id]

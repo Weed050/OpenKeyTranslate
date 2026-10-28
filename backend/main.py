@@ -23,8 +23,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 from routers import projects, corrections, pages, logs, settings, system, glossary, chapters
-from routers.projects import reconcile_projects_from_disk
-from services.reconcile import reconcile_chapters
+from services.reconcile import reconcile_projects, reconcile_chapters
 import uvicorn
 from core.database import init_db, SessionLocal
 from services.memory_service import warm_up_embedder_async
@@ -47,8 +46,10 @@ async def lifespan(app: FastAPI):
 
     db = SessionLocal()
     try:
-        reconcile_projects_from_disk(db)
+        project_report = reconcile_projects(db)
         reconcile_chapters(db)  # chapter folders added/removed on disk by hand -> DB follows (see services/reconcile.py)
+        from services.reconcile import LAST_REPORT
+        LAST_REPORT["warnings"] = project_report["warnings"] + LAST_REPORT.get("warnings", [])   # shown by /system/health
         pages.reset_stale_statuses(db)  # queued/processing left over from a crash -> pending (else the UI is stuck)
     finally:
         db.close()

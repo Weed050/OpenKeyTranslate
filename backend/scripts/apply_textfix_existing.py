@@ -40,13 +40,20 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from utils.ocr_textfix import fix_ocr_text  # noqa: E402
 
 
-def run(db_path: str, project_name: str, apply: bool = False, fix_corrections: bool = False, embed_fn=None, out=print) -> dict:
+def default_workspace_root() -> str:
+    from core.config import WORKSPACE_DIR
+    return WORKSPACE_DIR
+
+
+def run(db_path: str, project_name: str, apply: bool = False, fix_corrections: bool = False, embed_fn=None, out=print,
+        workspace_root: str | None = None) -> dict:
     con = sqlite3.connect(db_path)
     cur = con.cursor()
-    row = cur.execute("SELECT id, workspace_path FROM projects WHERE name = ?", (project_name,)).fetchone()
+    row = cur.execute("SELECT id FROM projects WHERE name = ?", (project_name,)).fetchone()
     if not row:
         raise SystemExit(f"Project '{project_name}' not found.")
-    project_id, workspace = row
+    project_id = row[0]
+    workspace = os.path.join(workspace_root or default_workspace_root(), project_name)   # dynamic, not read from the DB
     protected = [r[0] for r in cur.execute("SELECT source_term FROM glossary_terms WHERE project_id = ?", (project_id,))]
     stats = {"files": 0, "bubbles": 0, "corrections": 0}
 
@@ -104,6 +111,7 @@ def main():
     ap.add_argument("--project", required=True, help="exact project name")
     ap.add_argument("--corrections", action="store_true", help="also fix corrections.source_text (+ re-embed)")
     ap.add_argument("--db", help="database file (default: from core.config)")
+    ap.add_argument("--workspace-root", help="folder that contains the project folders (default: from settings.json)")
     ap.add_argument("--apply", action="store_true", help="write changes (default: dry run)")
     args = ap.parse_args()
     db_path = args.db
@@ -112,7 +120,7 @@ def main():
         db_path = DATABASE_PATH
     if not os.path.exists(db_path):
         sys.exit(f"Database not found: {db_path}")
-    stats = run(db_path, args.project, args.apply, args.corrections)
+    stats = run(db_path, args.project, args.apply, args.corrections, workspace_root=args.workspace_root)
     verb = "Changed" if args.apply else "Would change"
     print(f"\n{verb}: {stats['bubbles']} bubble(s) in {stats['files']} page file(s)"
           + (f", {stats['corrections']} correction(s)" if args.corrections else ""))

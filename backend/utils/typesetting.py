@@ -18,161 +18,16 @@ Core functionalities:
    remains linguistically correct and visually balanced within the bubble's geometry.
 """
 
-from typing import List, Tuple, Optional
+from typing import List
 from PIL import Image, ImageDraw, ImageFont
 import cv2
 import numpy as np
 from core.config import TYPESETTING_PADDING_RATIO
+from utils.bubble_interior import detect_bubble_interior   # one shared flood-fill implementation (also used by inpainting)
 import pyphen
 
 
 _hyphen_dict = pyphen.Pyphen(lang='pl_PL')
-
-def detect_bubble_interior(
-    image_bgr: np.ndarray,
-    seed_point: Tuple[int, int],
-    ocr_bbox: Tuple[int, int, int, int],
-    dark_thresh: int = 180,
-    border_dilate: int = 2,
-    max_growth: float = 2.5
-) -> Tuple[Optional[np.ndarray], Optional[Tuple[int, int, int, int]]]:
-    """
-    Detects the actual speech bubble boundary using the flood-fill algorithm
-    on the ORIGINAL (uncleaned) image.
-
-    Instead of looking for bright areas, this approach treats all dark pixels
-    (text lines, comic frame borders, panel artwork) as "walls" and performs
-    morphological dilation to ensure the boundary walls are thick and leak-proof
-    before starting the flood fill.
-
-    VISUAL EXAMPLE: THE "LEAKY BUBBLE" PROBLEM
-    Manga speech bubbles often have thin, sketchy, or slightly broken borders.
-
-    Without Dilation (Flood Fill Leaks):
-      [ ] [ ] [#] [ ] [ ]      <- A 1-pixel gap in the bubble wall!
-      [ ] [#] [T] [#] [ ]      <- Fill starts at 'T' (Text seed)
-      [ ] [#] [ ] [#] [ ]      <- Fill leaks through the top gap and floods the page!
-
-    With Dilation (Walls are artificially thickened):
-      [ ] [#] [#] [#] [ ]      <- The gap is successfully sealed by dilation!
-      [#] [#] [T] [#] [#]      <- Fill is perfectly contained inside the bubble.
-      [#] [#] [ ] [#] [#]
-
-    TODO: INPAINTING SYNCHRONIZATION
-    Currently, this flood-fill mask is used strictly to calculate the writable
-    bounding box for typesetting. In future iterations, this generated mask
-    should be exported and shared with the inpainting/cleaning module.
-    By confining the inpainting model strictly to this exact bubble interior,
-    we can prevent the AI from accidentally erasing or hallucinating manga
-    lineart that sits just outside the bubble.
-
-    :param image_bgr: The original, uncleaned BGR image.
-    :param seed_point: (x, y) starting coordinate (e.g., centroid of the OCR text).
-    :param ocr_bbox: (x1, y1, x2, y2) bounding box of the OCR text group.
-    :param dark_thresh: Threshold to separate "dark" walls from "light" background.
-    :param border_dilate: How many pixels to expand the dark lines to seal gaps.
-    :param max_growth: Maximum allowed area ratio compared to the initial OCR box.
-    """
-    # Convert BGR image to grayscale
-    gray = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2GRAY)
-    h, w = gray.shape
-
-    # 1. "Walls" definition = anything dark. This includes the bubble outline AND the text
-    # (it makes no difference whether the text was fully detected by OCR or not).
-    dark_mask = (gray < dark_thresh).astype(np.uint8) * 255
-
-    # 2. Thicken the walls — dilating the dark mask makes the contours thicker,
-    # ensuring the flood fill will never accidentally pierce or "eat" through thin lines.
-    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (border_dilate * 2 + 1,) * 2)
-    walls = cv2.dilate(dark_mask, kernel, iterations=1)
-
-    # Relocate seed point to the nearest free pixel outside the thickened walls
-    seed_point = _nearest_free_pixel(walls, *seed_point)
-    if seed_point is None:
-        print(f"[BUBBLE FLOODFILL] Seed point at {seed_point} is on or too close to a wall — no free space nearby.")
-        return None, None
-
-    # 3. Setup floodFill with a blocking mask — according to OpenCV documentation,
-    # non-zero pixels inside the mask parameter act as physical barriers that block the filling process.
-    flood_mask = np.zeros((h + 2, w + 2), np.uint8)
-    flood_mask[1:-1, 1:-1] = (walls > 0).astype(np.uint8)
-
-    # Perform flood fill using the barrier mask
-    filled = np.zeros_like(gray)
-    cv2.floodFill(filled, flood_mask, seed_point, 255)
-
-    # Convert the flooded area into the final binary bubble mask
-    bubble_mask = (filled == 255).astype(np.uint8) * 255
-    contours, _ = cv2.findContours(bubble_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    if not contours:
-        return None, None
-
-    # Select the largest connected filled area to ignore small noise artifacts
-    largest = max(contours, key=cv2.contourArea)
-    x, y, bw, bh = cv2.boundingRect(largest)
-
-    # 4. GUARD RAIL: Ensure the flood fill didn't leak into the background artwork or entire page.
-    ocr_x1, ocr_y1, ocr_x2, ocr_y2 = ocr_bbox
-    ocr_w, ocr_h = max(1, ocr_x2 - ocr_x1), max(1, ocr_y2 - ocr_y1)
-    limit_w, limit_h = ocr_w * max_growth, ocr_h * max_growth
-    min_w, min_h = ocr_w * 0.9, ocr_h * 0.9
-
-    if bw > limit_w or bh > limit_h:
-        print(f"[BUBBLE GUARD] Flood fill escaped bubble boundaries: detected {bw}x{bh}px, "
-              f"limit {limit_w:.0f}x{limit_h:.0f}px (OCR box was {ocr_w}x{ocr_h}px). "
-              f"Falling back to OCR bounding box.")
-        return None, None
-
-    if bw < min_w or bh < min_h:
-        print(f"[BUBBLE GUARD] Flood fill trapped in an excessively small area: detected {bw}x{bh}px, "
-              f"minimum {min_w:.0f}x{min_h:.0f}px (OCR box was {ocr_w}x{ocr_h}px, seed={seed_point}). "
-              f"Falling back to OCR bounding box.")
-        return None, None
-
-    return bubble_mask, (x, y, x + bw, y + bh)
-
-
-def _nearest_free_pixel(
-        walls: np.ndarray,
-        cx: float,
-        cy: float,
-        max_radius: int = 60,
-        step: int = 5
-) -> Optional[Tuple[int, int]]:
-    """
-    Finds the nearest free pixel (0 value on the walls image) close to the specified coordinates.
-
-    This is critical because the centroid of an OCR bounding box often falls
-    directly on a black character stroke (thickened wall), which would otherwise
-    fail to flood-fill the interior of the bubble.
-
-    :param walls: Binary walls mask where thickened barriers are non-zero.
-    :param cx: Target X coordinate (e.g. OCR center).
-    :param cy: Target Y coordinate (e.g. OCR center).
-    :param max_radius: Maximum radial distance (in pixels) to search.
-    :param step: Grid search step resolution.
-    :return: Safest (X, Y) coordinate representing a free pixel, or None if not found.
-    """
-    h, w = walls.shape
-    cx, cy = int(cx), int(cy)
-
-    # Return immediately if the start coordinate is already located in free space
-    if 0 <= cy < h and 0 <= cx < w and walls[cy, cx] == 0:
-        return (cx, cy)
-
-    # Search outwards in concentric square rings
-    for r in range(step, max_radius, step):
-        directions = [
-            (-r, 0), (r, 0), (0, -r), (0, r),
-            (-r, -r), (r, r), (-r, r), (r, r)
-        ]
-        for dx, dy in directions:
-            nx, ny = cx + dx, cy + dy
-            if 0 <= nx < w and 0 <= ny < h and walls[ny, nx] == 0:
-                return (nx, ny)
-
-    return None
-
 
 def _clamp_bbox(x1, y1, x2, y2, img_w, img_h, min_size=15):
     """
@@ -343,8 +198,8 @@ def draw_translated_text_on_clean_image(
 
         if clamped is None:
             print(f"[BUBBLE CLAMP FAIL] bubble_id={b.get('bubble_id')}: "
-                  f"bbox ({raw_x1},{raw_y1},{raw_x2},{raw_y2}) głównie poza canvasem "
-                  f"{img_w}x{img_h} — pomijam dymek całkowicie: {text!r}")
+                  f"bbox ({raw_x1},{raw_y1},{raw_x2},{raw_y2}) is mostly outside the canvas "
+                  f"{img_w}x{img_h} - skipping this bubble entirely: {text!r}")
             continue
 
         x1, y1, x2, y2 = clamped

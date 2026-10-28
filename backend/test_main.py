@@ -58,7 +58,7 @@ def test_ocr_from_db(page_id: int):
         # Fetch target page context from the local database
         page = db.query(Page).filter(Page.id == page_id).first()
         if not page:
-            print("Page with ID {page_id} not found in database.")
+            print(f"Page with ID {page_id} not found in database.")
             return
 
         chapter = page.chapter
@@ -89,7 +89,7 @@ def test_ocr_from_db(page_id: int):
 
         # Translation Execution (Conditional)
         if TRANSLATION_ON:
-            print(f"[AI] Tłumaczenie przy użyciu providera: {ACTIVE_MODEL_NAME}...")
+            print(f"[AI] Translating with provider: {ACTIVE_MODEL_NAME}...")
             # project.id / page.id / db enable correction-memory hints + A/B logging
             # (see services/translation_service.py) - both are DB-backed here.
             ocr_result["bubbles"] = translate_bubbles(

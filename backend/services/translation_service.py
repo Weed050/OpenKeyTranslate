@@ -213,6 +213,7 @@ def translate_bubbles(
                 threshold_used=threshold_used,
                 model_used=ACTIVE_MODEL_NAME, key_label=shown_key_label, run_id=run_id,
                 glossary_terms_used=glossary_json,
+                hints_json=json.dumps(_memory_payload_fields(b, matches), ensure_ascii=False),
             ))
 
             if bubble_id in zero_shot_translations:

@@ -116,6 +116,17 @@ DEFAULT_SETTINGS = {
         r"\b[\w-]+\.(?:com|net|org|gg|io)\b",
     ],
 
+    # OCR runtime (see core/ocr_runtime.py): replaces hand-editing services/ocr_pipeline.py to switch CPU <-> GPU.
+    "ocr_device": "auto",          # auto | cpu | gpu
+    "ocr_cpu_threads": 0,          # 0 = library default
+    "ocr_mkldnn": False,           # oneDNN acceleration (CPU only); off by default - it crashes on some Paddle/CPU combos
+    "ocr_env_flags": {},           # extra env vars applied before paddle is imported, e.g. {"FLAGS_enable_pir_api": "0"}
+    "models_dir": "",              # "" = library default caches; a folder = HuggingFace + PaddleX caches live inside it
+
+    # Bubble geometry (utils/bubble_interior.py - one flood-fill detector for inpainting, typesetting and refine)
+    "inpaint_use_interior": True,  # also erase dark pixels OCR boxes missed, but only inside a verified WHITE bubble
+    "ocr_refine": True,            # merge bubbles OCR cut in pieces; re-read bubbles that are only half detected
+
     # Post-OCR bubble handling (see utils/ocr_textfix.py). Both are applied live (no restart).
     # ocr_textfix: join line-wrap hyphenation ("SQUAD- RON") and fix L/U confusions (LNIT); raw text is kept in text_raw.
     "ocr_textfix": True,

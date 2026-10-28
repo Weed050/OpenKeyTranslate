@@ -57,6 +57,9 @@ def save_ocr_json(out_dir: str, file_base_name: str, ocr_result: dict, pending_t
         }
         if b.get("text_raw"):
             entry["text_raw"] = b["text_raw"]          # raw OCR string when ocr_textfix changed the text
+        for flag in ("interior_box", "missed_text", "refined", "merged_from"):
+            if b.get(flag) is not None and b.get(flag) is not False:
+                entry[flag] = b[flag]
         if b.get("skip"):
             entry["skip"] = True                        # number / symbol-only bubble: listed, never translated/inpainted
             entry["skip_reason"] = b.get("skip_reason")

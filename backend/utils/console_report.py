@@ -1,5 +1,4 @@
 
-
 # backend/utils/console_report.py
 
 """
@@ -84,7 +83,7 @@ def print_merged_lines(grouped_lines):
         text = line.get("text", "")
         score = line.get("score", 0.0)
 
-        # Opcjonalnie: możemy też pokazać ile słów składa się na linię
+        # Optional: also show how many words make up the line
         word_count = len(line.get("word_ids", []))
 
         print(f"{line_id:<10} | {text:<40} | {score:.2f} ({word_count} words)")

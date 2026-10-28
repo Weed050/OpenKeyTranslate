@@ -41,13 +41,14 @@
             <div class="editor-layout hidden" id="editorLayout">
                 <div class="image-pane">
                     <div class="image-toolbar">
-                        <button id="prevPageBtn" class="icon-btn" title="Poprzednia strona">&larr;</button>
+                        <button id="prevPageBtn" class="icon-btn" title="Previous page">&larr;</button>
                         <span id="pageLabel"></span>
-                        <button id="nextPageBtn" class="icon-btn" title="Następna strona">&rarr;</button>
+                        <button id="nextPageBtn" class="icon-btn" title="Next page">&rarr;</button>
                         <span id="pageToolsMenu" style="display:flex; gap:6px;"></span>
                         <span style="margin-left:auto"></span>
                         <button id="retranslateBtn" class="icon-btn" title="Re-run translation only. Bubbles you edited are kept (Shift+click overwrites them too)">Retranslate</button>
                         <button id="reocrBtn" class="icon-btn" title="Run OCR + inpainting again on this page. Translations of bubbles whose text did not change are kept">Re-OCR</button>
+                        <button id="addBubbleBtn" class="icon-btn" title="Draw a rectangle over text the OCR missed - it is read and added as a new bubble (Esc cancels)">Add bubble</button>
                         <button id="reinpaintBtn" class="icon-btn" title="Rebuild the clean image from the original (after deleting / skipping bubbles) - no OCR, no translation">Rebuild image</button>
                         <span class="toolbar-sep"></span>
                         <button id="zoomOutBtn" class="icon-btn" title="Zoom out (Ctrl + scroll down)">&minus;</button>

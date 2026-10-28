@@ -17,10 +17,11 @@ import hashlib
 import os
 import re
 
+# THE single source of truth for "what counts as a page image" (import, rescan, orphan-project registration).
 IMG_EXTENSIONS = ('.jpg', '.jpeg', '.png', '.webp', '.jfif', '.bmp', '.tif', '.tiff')
 _IGNORABLE_EXTENSIONS = {'.db', '.ini', '.txt', '.json', '.nfo', '.url', '.xml', '.md'}
 
-# "chapter_13_5", "Series_Chapter_10", "ch 12.5", "Rozdział 7" -> number token.
+# "chapter_13_5", "Series_Chapter_10", "ch 12.5", "Rozdzial 7" (Polish for "chapter") -> number token.
 # (?<![a-z]) stops "ch" matching inside words such as "March 3".
 _KEYWORD_NUM = re.compile(
     r'(?<![a-z])(?:chapter|chap|ch|episode|ep|rozdzia[łl])[\s._\-]*(\d+(?:[._]\d{1,2})?)(?!\d)',
@@ -36,10 +37,10 @@ def natural_sort_key(s: str):
     return [int(t) if t.isdigit() else t.lower() for t in re.split(r'(\d+)', s)]
 
 
-def sanitize_label(name: str) -> str:
-    """Make a string safe as a Windows/Linux folder name (also the DB label)."""
+def sanitize_label(name: str, default: str = 'Chapter') -> str:
+    """Make a string safe as a Windows/Linux folder name (also the DB label / project name)."""
     cleaned = _BAD_CHARS.sub('_', name or '').strip().rstrip('. ')
-    return cleaned[:80] or 'Chapter'
+    return cleaned[:80] or default
 
 
 def _number_label(raw: str) -> str:

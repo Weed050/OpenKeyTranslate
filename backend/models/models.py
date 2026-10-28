@@ -9,9 +9,14 @@ Text Blocks, and the correction-memory system (Corrections, TranslationLogs)
 used by the OCR/Translation pipeline.
 """
 
+import os
+import re
+
 from sqlalchemy import Column, Integer, String, Float, ForeignKey, DateTime, Text, LargeBinary, Boolean
 from sqlalchemy.orm import relationship, declarative_base
 from datetime import datetime, timezone
+
+from core import config
 
 Base = declarative_base()
 
@@ -22,7 +27,11 @@ class Project(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String, unique=True, nullable=False)
-    workspace_path = Column(String, nullable=False)
+
+    # PORTABILITY: the real folder is ALWAYS <workspace root from settings.json>/<project name> (see the
+    # workspace_path property). The DB column only keeps the folder NAME - an absolute path stored here broke every
+    # move to another PC / drive (startup treated the moved project as new and crashed on UNIQUE(name), or deleted it).
+    _stored_workspace = Column("workspace_path", String, nullable=True)
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
     source_lang = Column(String, default="en")
@@ -32,6 +41,17 @@ class Project(Base):
     # schema placeholder for the sidebar's Active/Archived grouping; every
     # project defaults to "active" until that workflow is built.
     status = Column(String, default="active")
+
+    @property
+    def workspace_path(self) -> str:
+        """Absolute project folder on THIS machine, derived from the current workspace root + project name."""
+        return os.path.join(config.WORKSPACE_DIR, self.name)
+
+    @workspace_path.setter
+    def workspace_path(self, value) -> None:
+        # Accepted so old call sites (Project(name=..., workspace_path=...)) keep working; only the folder name is kept.
+        # split on BOTH separators: a path written by a Windows machine must reduce to its folder name on Linux/macOS too
+        self._stored_workspace = re.split(r"[\\/]", str(value).rstrip("\\/"))[-1] if value else self.name
 
     # Relationships
     chapters = relationship("Chapter", back_populates="project", cascade="all, delete-orphan")
@@ -49,8 +69,25 @@ class Chapter(Base):
     # Kept as String to accommodate non-integer identifiers (e.g., '1.5a', 'Prologue', 'Extra')
     number = Column(String, nullable=False)
     title = Column(String)
-    raw_path = Column(String)
-    processed_path = Column(String)
+    # Stored RELATIVE to the project folder ("raw/Chapter_2"); the properties below build the absolute path.
+    _stored_raw = Column("raw_path", String)
+    _stored_processed = Column("processed_path", String)
+
+    @property
+    def raw_path(self) -> str:
+        return os.path.join(self.project.workspace_path, "raw", self.number)
+
+    @raw_path.setter
+    def raw_path(self, value) -> None:
+        self._stored_raw = f"raw/{self.number}" if self.number else None
+
+    @property
+    def processed_path(self) -> str:
+        return os.path.join(self.project.workspace_path, "processed", self.number)
+
+    @processed_path.setter
+    def processed_path(self, value) -> None:
+        self._stored_processed = f"processed/{self.number}" if self.number else None
 
     # Relationships
     project = relationship("Project", back_populates="chapters")
@@ -165,6 +202,10 @@ class TranslationLog(Base):
     key_label = Column(String, nullable=True)  # which key from the provider's pool served this call
     glossary_terms_used = Column(Text,
                                  nullable=True)  # JSON list of {"source_term":..., "target_term":...} that fired for this bubble
+    # The EXACT memory material sent with this bubble: {"hints": [...]} (embedding lane, best first) or {"exact": "..."}.
+    # matched_correction_id only points at the top-1 correction, which may later be deleted or superseded - this keeps
+    # the experiment reproducible.
+    hints_json = Column(Text, nullable=True)
     run_id = Column(String, nullable=False)  # groups the zero_shot / memory_injected pair from one translation pass
 
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))

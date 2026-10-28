@@ -143,6 +143,8 @@ async function init() {
     document.getElementById("retranslateBtn").addEventListener("click", (e) => runRetranslate(e.shiftKey));
     document.getElementById("reocrBtn").addEventListener("click", runReocr);
     document.getElementById("reinpaintBtn").addEventListener("click", runReinpaint);
+    document.getElementById("addBubbleBtn").addEventListener("click", () => setDrawMode(!state.drawMode));
+    el.imageCanvas.addEventListener("mousedown", onDrawStart);
     document.getElementById("prevPageBtn").addEventListener("click", () => goToAdjacentPage(-1));
     document.getElementById("nextPageBtn").addEventListener("click", () => goToAdjacentPage(1));
     el.imageViewport.addEventListener("wheel", onWheelZoom, { passive: false });
@@ -163,6 +165,16 @@ async function init() {
 /* ---------------------------- page loading ---------------------------- */
  
 async function loadPage() {
+    // Ask for the status FIRST: GET /pages/{id} answers 404 for a page that has no OCR result yet, which is a normal
+    // state (pending / queued / failed) but showed up as a red error in the browser console on every such page.
+    try {
+        const { status } = await api.pages.status(pageId);
+        if (status !== "processed") {
+            await showProcessPrompt(null);
+            return;
+        }
+    } catch { /* status endpoint unavailable - fall through to the normal load */ }
+
     let data;
     try {
         data = await api.pages.get(pageId);
@@ -600,6 +612,8 @@ function renderBubbleList() {
         row.innerHTML = `
             <span class="bubble-num">${index + 1}</span>
             <span class="bubble-preview">${preview}</span>
+            ${bubble.missed_text ? '<span class="bubble-tag warn" title="Dark pixels inside this bubble are not covered by the OCR text - some text may be missing. Try Re-OCR bubble.">check text</span>' : ""}
+            ${bubble.refined ? '<span class="bubble-tag" title="This bubble was read again as a whole because the first pass missed lines">re-read</span>' : ""}
             ${textFixed ? `<span class="bubble-tag" title="Source text was cleaned / edited. Raw OCR: ${escapeHtml(bubble.text_raw)}">text fixed</span>` : ""}
             ${state.savedThisSession.has(bubble.bubble_id) ? '<span class="bubble-saved-dot" title="Saved this session"></span>' : ""}
         `;
@@ -692,10 +706,13 @@ function renderBubbleDetail() {
             <textarea id="translationInput" rows="4" lang="pl" spellcheck="${isSpellcheckEnabled()}">${escapeHtml(bubble.translation || "")}</textarea>
         </div>
  
-        <div class="detail-actions">
+        <div class="detail-tools">
             <button id="resetBtn" title="Revert to the AI's original translation (does not save)">Reset to AI</button>
             <button id="undoBtn" title="Revert to the value shown when this bubble was opened">Undo</button>
             <button id="retranslateBubbleBtn" title="Translate only this bubble again (neighbours are sent as context; memory + glossary apply)">Retranslate</button>
+            <button id="reocrBubbleBtn" title="Read this bubble again as ONE crop of its whole interior - finds lines the page pass missed. The previous text stays available under 'Use raw OCR'.">Re-OCR bubble</button>
+            ${state.selectedIndex > 0 ? '<button id="mergePrevBtn" title="Join this bubble with the one above it (the OCR cut one speech bubble into pieces)">Merge with &uarr;</button>' : ""}
+            ${state.selectedIndex < state.bubbles.length - 1 ? '<button id="mergeNextBtn" title="Join this bubble with the one below it">Merge with &darr;</button>' : ""}
             <button id="skipBtn" title="Do not translate this bubble and put the original pixels back (page numbers, junk)">Skip</button>
             <button id="spellcheckToggleBtn" class="${isSpellcheckEnabled() ? "primary" : ""}" title="Toggle Polish spellcheck">Spellcheck: ${isSpellcheckEnabled() ? "On" : "Off"}</button>
         </div>`}
@@ -752,6 +769,9 @@ function renderBubbleDetail() {
         textarea.value = loadedValue;
     });
     document.getElementById("retranslateBubbleBtn").addEventListener("click", () => retranslateCurrentBubble());
+    document.getElementById("reocrBubbleBtn").addEventListener("click", reocrCurrentBubble);
+    document.getElementById("mergePrevBtn")?.addEventListener("click", () => mergeCurrentBubble(-1));
+    document.getElementById("mergeNextBtn")?.addEventListener("click", () => mergeCurrentBubble(1));
     document.getElementById("skipBtn").addEventListener("click", () => setSkip(true));
     document.getElementById("saveBtn").addEventListener("click", () => saveCurrentBubble());
  
@@ -800,6 +820,104 @@ async function setSkip(skip) {
     } catch (e) {
         alert(`Couldn't change skip: ${e.message}`);
     }
+}
+
+/** After a server-side bubble edit: fetch the bubbles again (ids / order / flags changed) and select `selectId`. */
+async function reloadBubbles(selectId) {
+    const fresh = await api.pages.get(pageId);
+    state.bubbles = fresh.bubbles;
+    state.hasLines = !!fresh.has_lines;
+    const idx = state.bubbles.findIndex((b) => b.bubble_id === selectId);
+    state.selectedIndex = idx === -1 ? null : idx;
+    renderBubbleList();
+    renderBubbleDetail();
+    applyZoom();
+    refreshPageImage();
+}
+
+async function reocrCurrentBubble() {
+    const bubble = state.bubbles[state.selectedIndex];
+    const btn = document.getElementById("reocrBubbleBtn");
+    if (btn) { btn.disabled = true; btn.textContent = "Reading..."; }
+    try {
+        const result = await api.pages.reocrBubble(pageId, bubble.bubble_id);
+        await reloadBubbles(bubble.bubble_id);
+        showToast(result.text_changed ? "Bubble re-read - text changed" : "Bubble re-read - same text");
+        if (result.text_changed && !result.bubble.skip && (result.bubble.translation || "").trim()
+            && confirm("The source text changed. Retranslate this bubble now?")) await retranslateCurrentBubble(true);
+    } catch (e) {
+        alert(`Re-OCR bubble failed: ${e.message}`);
+        renderBubbleDetail();
+    }
+}
+
+async function mergeCurrentBubble(direction) {
+    const index = state.selectedIndex;
+    const other = state.bubbles[index + direction];
+    const bubble = state.bubbles[index];
+    if (!other) return;
+    if (!confirm(`Merge bubble ${index + 1} with bubble ${index + 1 + direction}?\n\nText and translations are joined top to bottom. Use Retranslate afterwards for a clean translation.`)) return;
+    try {
+        const result = await api.pages.mergeBubble(pageId, bubble.bubble_id, other.bubble_id);
+        await reloadBubbles(bubble.bubble_id);
+        showToast("Bubbles merged");
+        if (result.reinpainted === false) showToast("Merged, but this older page can't rebuild the image - run Re-OCR to update it.", 6000);
+    } catch (e) {
+        alert(`Merge failed: ${e.message}`);
+    }
+}
+
+/* ------------------------------ add a bubble by drawing ------------------------------ */
+
+function setDrawMode(on) {
+    state.drawMode = on;
+    el.imageCanvas.classList.toggle("draw-mode", on);
+    document.getElementById("addBubbleBtn").classList.toggle("primary", on);
+    if (on) showToast("Drag a rectangle over the text (Esc cancels)", 3500);
+}
+
+function onDrawStart(event) {
+    if (!state.drawMode || event.button !== 0) return;
+    event.preventDefault();
+    const canvasRect = el.imageCanvas.getBoundingClientRect();
+    const startX = event.clientX - canvasRect.left;
+    const startY = event.clientY - canvasRect.top;
+    const rectEl = document.createElement("div");
+    rectEl.className = "draw-rect";
+    el.imageCanvas.appendChild(rectEl);
+
+    const geometry = (e) => {
+        const x = Math.max(0, Math.min(e.clientX - canvasRect.left, canvasRect.width));
+        const y = Math.max(0, Math.min(e.clientY - canvasRect.top, canvasRect.height));
+        return { left: Math.min(startX, x), top: Math.min(startY, y), width: Math.abs(x - startX), height: Math.abs(y - startY) };
+    };
+    const onMove = (e) => {
+        const g = geometry(e);
+        Object.assign(rectEl.style, { left: `${g.left}px`, top: `${g.top}px`, width: `${g.width}px`, height: `${g.height}px` });
+    };
+    const onUp = async (e) => {
+        window.removeEventListener("mousemove", onMove);
+        window.removeEventListener("mouseup", onUp);
+        const g = geometry(e);
+        rectEl.remove();
+        setDrawMode(false);
+        if (g.width < 8 || g.height < 8) return;               // a click, not a drag
+        const scale = state.baseScale * state.zoomFactor;       // canvas pixels -> image pixels
+        const box = [g.left / scale, g.top / scale, (g.left + g.width) / scale, (g.top + g.height) / scale].map((v) => Math.round(v));
+        showToast("Reading the selected area...", 20000);
+        try {
+            const saved = await saveCurrentBubble();
+            if (!saved) return;
+            const result = await api.pages.addBubble(pageId, box);
+            await reloadBubbles(result.bubble.bubble_id);
+            showToast("Bubble added");
+            if (!result.bubble.skip && !state.bubbles[state.selectedIndex]?.translation) await retranslateCurrentBubble(true);
+        } catch (err) {
+            showToast(`Add bubble failed: ${err.message}`, 6000);
+        }
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
 }
 
 async function retranslateCurrentBubble(silent = false) {
@@ -947,6 +1065,7 @@ async function goToAdjacentPage(direction) {
 }
  
 function onGlobalKeydown(event) {
+    if (event.key === "Escape" && state.drawMode) { setDrawMode(false); return; }
     const tag = document.activeElement?.tagName;
     if (tag === "TEXTAREA" || tag === "INPUT") return; // let arrow keys move the cursor while typing
  

@@ -190,17 +190,31 @@
   padding: 8px 10px;
 }
  
-.detail-actions{
+/* Save row + prev/next: one flex row that wraps when the panel is narrow. */
+.detail-actions {
   display: flex;
   gap: 6px;
   flex-wrap: wrap;
 }
-.detail-actions button{
-  flex: 1;
+.detail-actions button {
+  flex: 1 1 90px;
   min-width: 0;
   white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+}
+
+/* Tool buttons (Reset / Undo / Retranslate / Skip / Spellcheck): tiles that fill the width and wrap onto new rows
+   instead of being squeezed into one row with clipped labels. */
+.detail-tools {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(104px, 1fr));
+  gap: 6px;
+}
+.detail-tools button {
+  min-width: 0;
+  padding: 7px 8px;
+  white-space: normal;       /* a long label wraps instead of being cut off with "..." */
+  line-height: 1.2;
+  text-align: center;
 }
 .detail-nav-actions{ display: flex; gap: 6px; }
 .detail-nav-actions button{ flex: 0 0 auto; padding: 7px 10px; }
@@ -302,3 +316,13 @@
 .source-edit{ display: flex; flex-direction: column; gap: 6px; }
 
 .toolbar-sep{ width: 1px; align-self: stretch; background: var(--border); margin: 0 4px; }
+/* ---------- drawing a new bubble over the page ---------- */
+.image-canvas.draw-mode { cursor: crosshair; }
+.image-canvas.draw-mode .bubble-outline { pointer-events: none; }   /* a drag may start on top of an existing outline */
+.draw-rect {
+  position: absolute;
+  border: 2px dashed var(--accent);
+  background: rgba(109, 140, 255, 0.15);
+  pointer-events: none;
+  z-index: 5;
+}

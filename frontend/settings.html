@@ -126,6 +126,16 @@
                         <input type="checkbox" id="ocrSkipSymbolsCheckbox"> Don't translate bubbles with only symbols ("?!", "...")
                     </label>
                 </div>
+                <div class="row">
+                    <label style="display:flex; align-items:center; gap:6px; margin:0;" title="One shared detector finds the white inside of each bubble. Dark pixels the OCR did not read are erased there too (never on the outline, never outside a white bubble).">
+                        <input type="checkbox" id="inpaintInteriorCheckbox"> Also erase text the OCR missed inside white bubbles
+                    </label>
+                </div>
+                <div class="row">
+                    <label style="display:flex; align-items:center; gap:6px; margin:0;" title="Merges one bubble the OCR cut into pieces; re-reads a bubble as a whole when it is only half detected.">
+                        <input type="checkbox" id="ocrRefineCheckbox"> Fix bubbles the OCR cut up or only half read (merge / re-read)
+                    </label>
+                </div>
                 <p class="text-muted">Skipped bubbles stay in the editor list (you can still force-translate one) but are not sent to the LLM and their original pixels are NOT erased. Applies to pages processed from now on; use <b>Re-OCR</b> in the editor for existing pages.</p>
                 <button id="saveOcrOptionsBtn" class="primary">Save</button>
                 <p class="text-muted" id="ocrOptionsStatus" style="margin-top:10px;"></p>
@@ -139,6 +149,32 @@
                 <p class="text-muted" id="ignorePatternsStatus" style="margin-top:10px;"></p>
             </div>
  
+            <div class="card">
+                <h2>Backup &amp; move to another computer</h2>
+                <p class="text-muted">One zip with everything: database (projects, corrections, glossary, logs), settings (without this PC's folder path), the .env file and all page images + OCR results. On the new computer install the app, open this page and import the zip - everything is put in the right place automatically.</p>
+                <div class="row">
+                    <label style="display:flex; align-items:center; gap:6px; margin:0;" title="Without it the zip contains no API keys and no .env - safer to share, but you have to enter the keys again.">
+                        <input type="checkbox" id="backupSecretsCheckbox" checked> Include API keys and .env
+                    </label>
+                </div>
+                <div class="row">
+                    <label style="display:flex; align-items:center; gap:6px; margin:0;" title="HuggingFace + PaddleOCR model caches: big, but the new computer then needs no download.">
+                        <input type="checkbox" id="backupModelsCheckbox"> Include downloaded models (large)
+                    </label>
+                </div>
+                <div class="row">
+                    <label style="display:flex; align-items:center; gap:6px; margin:0;">
+                        <input type="checkbox" id="backupLogsCheckbox"> Include application logs
+                    </label>
+                </div>
+                <div style="display:flex; gap:8px; margin-top:8px;">
+                    <button id="exportAllBtn" class="primary">Export all data...</button>
+                    <button id="importAllBtn">Import from backup...</button>
+                </div>
+                <progress id="backupProgress" class="hidden" max="100" value="0" style="width:100%; margin-top:10px;"></progress>
+                <p class="text-muted" id="backupStatus" style="margin-top:10px; white-space:pre-wrap;"></p>
+            </div>
+
             <div class="card">
                 <h2>About</h2>
                 <div class="row">

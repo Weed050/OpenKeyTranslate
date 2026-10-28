@@ -374,7 +374,7 @@ def apply_plan(cur, con, plan, deletions, workspace, raw_dir, processed_dir, sta
             cur.execute(
                 "UPDATE chapters SET number = ?, title = ?, raw_path = ?, processed_path = ? WHERE id = ?",
                 (e["label"], e["label"].replace("_", " "),
-                 os.path.join(raw_dir, e["label"]), os.path.join(processed_dir, e["label"]), e["id"]),
+                 f"raw/{e['label']}", f"processed/{e['label']}", e["id"]),   # stored relative (portable DB)
             )
         if status_changes:
             cur.executemany("UPDATE pages SET status = 'pending' WHERE id = ?", [(i,) for i in status_changes["to_pending"]])
@@ -410,11 +410,13 @@ def main():
 
     con = sqlite3.connect(db_path)
     cur = con.cursor()
-    cur.execute("SELECT id, workspace_path FROM projects WHERE name = ?", (args.project,))
+    cur.execute("SELECT id FROM projects WHERE name = ?", (args.project,))
     row = cur.fetchone()
     if not row:
         sys.exit(f"Project '{args.project}' not found.")
-    project_id, workspace = row
+    project_id = row[0]
+    from core.config import WORKSPACE_DIR
+    workspace = os.path.join(WORKSPACE_DIR, args.project)   # dynamic: <workspace root>/<project name>
     raw_dir, processed_dir = os.path.join(workspace, "raw"), os.path.join(workspace, "processed")
 
     rows = load_rows(cur, project_id)

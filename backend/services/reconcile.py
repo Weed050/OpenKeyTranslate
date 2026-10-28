@@ -29,6 +29,7 @@ import os
 
 from sqlalchemy.orm import Session
 
+from core.config import WORKSPACE_DIR
 from models.models import Chapter, Page, Project
 from utils.chapter_labels import chapter_sort_key, list_images
 
@@ -39,6 +40,62 @@ def _outputs_exist(processed_dir: str, label: str, file_name: str) -> bool:
     base = os.path.splitext(file_name)[0]
     d = os.path.join(processed_dir, label)
     return os.path.exists(os.path.join(d, f"{base}_ocr.json")) and os.path.exists(os.path.join(d, f"ocr_{base}_inpainted.png"))
+
+
+def normalize_stored_paths(db: Session) -> int:
+    """
+    The DB must not contain machine-specific absolute paths (see models.models.Project.workspace_path). Old databases
+    do: rewrite them to the portable form (folder name / "raw/<chapter>" / "processed/<chapter>"). The real paths
+    are computed from settings.json + project name, so this is bookkeeping only - but it keeps exported / copied
+    databases free of the old PC's directory layout.
+    """
+    changed = 0
+    for p in db.query(Project).all():
+        if p._stored_workspace != p.name:
+            p._stored_workspace = p.name
+            changed += 1
+        for ch in p.chapters:
+            raw, processed = f"raw/{ch.number}", f"processed/{ch.number}"
+            if ch._stored_raw != raw or ch._stored_processed != processed:
+                ch._stored_raw, ch._stored_processed = raw, processed
+                changed += 1
+    if changed:
+        db.commit()
+        print(f"[RECONCILE] normalized {changed} stored path value(s) to the portable form.")
+    return changed
+
+
+def reconcile_projects(db: Session) -> dict:
+    """
+    Startup safety net for WHOLE projects:
+      - folder <workspace>/<name>/raw exists but no project row has that name -> the project is registered; its
+        chapters + pages are then registered by reconcile_chapters (one code path for chapters, not three)
+      - a project row whose folder is missing is KEPT and reported (the old code deleted the row together with all of
+        its corrections + glossary - i.e. the thesis data - when a drive was offline or the workspace path was wrong)
+    Paths are dynamic, so moving the workspace to another PC / drive needs no database change at all.
+    """
+    report = {"added": [], "warnings": []}
+    if not os.path.isdir(WORKSPACE_DIR):
+        report["warnings"].append(f"workspace folder not found: {WORKSPACE_DIR}")
+        return report
+
+    known = {p.name for p in db.query(Project).all()}
+    for entry in sorted(os.listdir(WORKSPACE_DIR)):
+        if entry in known or not os.path.isdir(os.path.join(WORKSPACE_DIR, entry, "raw")):
+            continue
+        db.add(Project(name=entry))
+        report["added"].append(entry)
+        print(f"[RECONCILE] Re-registering orphaned project folder: {entry}")
+    db.flush()
+
+    for p in db.query(Project).all():
+        if not os.path.isdir(p.workspace_path):
+            report["warnings"].append(f"project '{p.name}': folder missing ({p.workspace_path}) - DB rows kept")
+    db.commit()
+    normalize_stored_paths(db)
+    for w in report["warnings"]:
+        print(f"[RECONCILE] WARNING {w}")
+    return report
 
 
 def reconcile_chapters(db: Session, project_id: int | None = None) -> dict:

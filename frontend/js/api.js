@@ -70,6 +70,10 @@ export const api = {
         reinpaint: (pageId) => request(`/pages/${pageId}/reinpaint`, { method: "POST" }),
         patchBubble: (pageId, bubbleId, payload) =>
             request(`/pages/${pageId}/bubbles/${bubbleId}`, { method: "PATCH", body: JSON.stringify(payload) }),
+        reocrBubble: (pageId, bubbleId) => request(`/pages/${pageId}/bubbles/${bubbleId}/reocr`, { method: "POST" }),
+        addBubble: (pageId, box) => request(`/pages/${pageId}/bubbles`, { method: "POST", body: JSON.stringify({ box }) }),
+        mergeBubble: (pageId, bubbleId, otherId) =>
+            request(`/pages/${pageId}/bubbles/${bubbleId}/merge`, { method: "POST", body: JSON.stringify({ with: otherId }) }),
         retranslateBubble: (pageId, bubbleId) =>
             request(`/pages/${pageId}/bubbles/${bubbleId}/retranslate`, { method: "POST" }),
         status: (pageId) => request(`/pages/${pageId}/status`),
@@ -86,6 +90,13 @@ export const api = {
         openPath: (path) => request("/system/open-path", { method: "POST", body: JSON.stringify({ path }) }),
         tailLog: (lines = 200, errorsOnly = false) =>
             request(`/system/tail-log?lines=${lines}&errors_only=${errorsOnly}`),
+        // export / import everything (moving to another computer)
+        pickSaveFile: (defaultName) => request(`/system/pick-save-file?default_name=${encodeURIComponent(defaultName)}`),
+        pickOpenFile: () => request("/system/pick-open-file"),
+        exportAll: (payload) => request("/system/export", { method: "POST", body: JSON.stringify(payload) }),
+        inspectBackup: (path) => request("/system/import/inspect", { method: "POST", body: JSON.stringify({ path }) }),
+        importBackup: (payload) => request("/system/import", { method: "POST", body: JSON.stringify(payload) }),
+        job: (jobId) => request(`/system/jobs/${jobId}`),
     },
  
     corrections: {

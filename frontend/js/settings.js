@@ -29,6 +29,8 @@ async function loadSettings() {
         document.getElementById("ocrTextfixCheckbox").checked = appSettings.ocr_textfix !== false;
         document.getElementById("ocrSkipNumericCheckbox").checked = appSettings.ocr_skip_numeric !== false;
         document.getElementById("ocrSkipSymbolsCheckbox").checked = appSettings.ocr_skip_symbols !== false;
+        document.getElementById("inpaintInteriorCheckbox").checked = appSettings.inpaint_use_interior !== false;
+        document.getElementById("ocrRefineCheckbox").checked = appSettings.ocr_refine !== false;
     } catch (e) {
         document.getElementById("currentWorkspacePath").textContent = `Error: ${e.message}`;
     }
@@ -262,9 +264,90 @@ document.getElementById("saveOcrOptionsBtn")?.addEventListener("click", async ()
             ocr_textfix: document.getElementById("ocrTextfixCheckbox").checked,
             ocr_skip_numeric: document.getElementById("ocrSkipNumericCheckbox").checked,
             ocr_skip_symbols: document.getElementById("ocrSkipSymbolsCheckbox").checked,
+            inpaint_use_interior: document.getElementById("inpaintInteriorCheckbox").checked,
+            ocr_refine: document.getElementById("ocrRefineCheckbox").checked,
         });
         status.textContent = result.message;
     } catch (e) {
         status.textContent = `Failed: ${e.message}`;
+    }
+});
+
+
+/* ----------------------- backup / move to another computer ----------------------- */
+
+const backupStatus = () => document.getElementById("backupStatus");
+
+/** Poll a background job, driving the progress bar. Resolves with the finished job (state "done" or "error"). */
+async function followJob(jobId) {
+    const bar = document.getElementById("backupProgress");
+    bar.classList.remove("hidden");
+    for (;;) {
+        const job = await api.system.job(jobId);
+        const pct = job.total_bytes ? Math.round((100 * job.done_bytes) / job.total_bytes) : 0;
+        bar.value = pct;
+        backupStatus().textContent = `${job.kind === "export" ? "Exporting" : "Importing"}: ${job.step}${job.total_bytes ? ` (${pct}%)` : ""}`;
+        if (job.state !== "running") { bar.classList.add("hidden"); return job; }
+        await new Promise((r) => setTimeout(r, 700));
+    }
+}
+
+function setBackupButtons(disabled) {
+    document.getElementById("exportAllBtn").disabled = disabled;
+    document.getElementById("importAllBtn").disabled = disabled;
+}
+
+document.getElementById("exportAllBtn")?.addEventListener("click", async () => {
+    const stamp = new Date().toISOString().slice(0, 10);
+    try {
+        const { path } = await api.system.pickSaveFile(`OpenKeyTranslate-backup-${stamp}.zip`);
+        if (!path) return;
+        setBackupButtons(true);
+        backupStatus().textContent = "Starting...";
+        const { job_id } = await api.system.exportAll({
+            path,
+            include_secrets: document.getElementById("backupSecretsCheckbox").checked,
+            include_models: document.getElementById("backupModelsCheckbox").checked,
+            include_logs: document.getElementById("backupLogsCheckbox").checked,
+        });
+        const job = await followJob(job_id);
+        backupStatus().textContent = job.state === "done" ? `\u2713 ${job.message}` : `\u2717 Export failed: ${job.message}`;
+    } catch (e) {
+        backupStatus().textContent = `\u2717 ${e.message}`;
+    } finally {
+        setBackupButtons(false);
+    }
+});
+
+document.getElementById("importAllBtn")?.addEventListener("click", async () => {
+    try {
+        const { path } = await api.system.pickOpenFile();
+        if (!path) return;
+        const info = await api.system.inspectBackup(path);
+        const m = info.manifest;
+        const projects = (m.projects || []).map((p) => `  - ${p.name}: ${p.chapters} chapters, ${p.pages} pages, ${p.corrections} corrections, ${p.glossary_terms} glossary terms`).join("\n");
+        const summary = `Backup from ${new Date(m.created_at).toLocaleString()} (app ${m.app_version}, ${m.source_platform}).\n`
+            + `${(m.total_bytes / 1048576).toFixed(0)} MB, ${m.file_count} files. API keys: ${m.has_secrets ? "included" : "not included"}; models: ${m.has_models ? "included" : "no"}.\n\nProjects:\n${projects || "  (none)"}`;
+        if (info.busy_pages) { backupStatus().textContent = `\u2717 ${info.busy_pages} page(s) are being processed - wait, then import.`; return; }
+
+        let mode = "fresh";
+        if (info.target_has_data) {
+            if (!confirm(`${summary}\n\nThis installation ALREADY has projects. Importing REPLACES them.\nThe current database and workspace are moved aside (not deleted) into a pre_import_backup_... folder next to the workspace.\n\nReplace the current data?`)) return;
+            mode = "replace";
+        } else if (!confirm(`${summary}\n\nImport into this (empty) installation?`)) return;
+
+        setBackupButtons(true);
+        const { job_id } = await api.system.importBackup({ path, mode });
+        const job = await followJob(job_id);
+        if (job.state === "done") {
+            const notes = (job.result.notes || []).map((n) => `\n- ${n}`).join("");
+            backupStatus().textContent = `\u2713 ${job.message}${notes}\nReload the page (and restart the backend if a .env was restored).`;
+        } else {
+            backupStatus().textContent = `\u2717 Import failed: ${job.message}\n(Nothing was lost - the previous data is back in place.)`;
+        }
+    } catch (e) {
+        backupStatus().textContent = `\u2717 ${e.message}`;
+    } finally {
+        setBackupButtons(false);
     }
 });

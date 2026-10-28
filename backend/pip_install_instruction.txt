@@ -1,0 +1,40 @@
+# OpenKeyTranslate - installing the CPU or the GPU build
+# (all commands run in ./backend)
+#
+# NEW: you no longer edit services/ocr_pipeline.py to switch builds. The device, oneDNN, threads and extra Paddle
+# flags are read from settings.json (see core/ocr_runtime.py):
+#
+#   "ocr_device":      "auto"   auto = GPU if this Paddle build + machine have CUDA, otherwise CPU (default)
+#                      "cpu"    always CPU
+#                      "gpu"    GPU; on a machine without CUDA it falls back to CPU and shows a warning banner
+#   "ocr_cpu_threads": 0        0 = library default; 3, 4, ... = limit CPU threads (replaces OMP_NUM_THREADS edits)
+#   "ocr_mkldnn":      false    oneDNN acceleration, CPU only. Leave OFF unless you know it works on your machine.
+#   "ocr_env_flags":   {}       extra environment variables applied BEFORE paddle loads, e.g.
+#                               {"FLAGS_enable_pir_api": "0"}
+#   "models_dir":      ""       "" = libraries' default caches; a folder = HuggingFace + PaddleX caches live there
+#
+# Restart the backend after changing the ocr_* keys (the OCR model is built once at start).
+
+
+# ---------------------------------------------------------------- CPU only
+pip uninstall paddlepaddle-gpu torch -y
+pip install torch==2.14.0 --index-url https://download.pytorch.org/whl/cpu
+pip install -r requirements_cpu_only.txt
+# settings.json:  "ocr_device": "cpu"      (optionally "ocr_cpu_threads": 3)
+
+
+# ---------------------------------------------------------------- CPU + GPU
+pip uninstall paddlepaddle torch -y
+pip install -r req_gtx_1050ti_OKT.txt
+# settings.json:  "ocr_device": "auto"     (default)
+
+
+# ---------------------------------------------------------------- if OCR fails on CPU with
+#   (Unimplemented) ConvertPirAttribute2RuntimeAttribute not support [pir::ArrayAttribute<pir::DoubleAttribute>]
+#   (a oneDNN instruction inside Paddle's executor)
+# try, in this order, restarting the backend after each step:
+#   1. nothing to do if ocr_mkldnn is false: the app now sets FLAGS_use_mkldnn=0 BEFORE paddle is imported
+#      (before, only PaddleOCR(enable_mkldnn=False) was set and the executor could still pick oneDNN kernels)
+#   2. "ocr_env_flags": {"FLAGS_enable_pir_api": "0"}     (falls back to Paddle's older IR executor)
+#   3. pin another Paddle:  pip install paddlepaddle==3.0.0   (and keep paddleocr/paddlex compatible)
+# Step 1-2 are the known workarounds for this error class; they were NOT run against your Paddle build here.
