@@ -40,7 +40,7 @@ def run_checks(check_network: bool = True) -> list[dict]:
     ACTIVE_PROVIDER = get_setting("active_provider", "groq")
     PROVIDERS = get_setting("providers", {}) or {}
     TRANSLATION_ON = get_setting("translation_on", True)
-    MEMORY_SIMILARITY_THRESHOLD = get_setting("memory_similarity_threshold", 0.80)
+    MEMORY_SIMILARITY_THRESHOLD = get_setting("memory_similarity_threshold", 0.67)
     MEMORY_TOP_K = get_setting("memory_top_k", 3)
     OCR_IGNORE_PATTERNS = get_setting("ocr_ignore_patterns", []) or []
 

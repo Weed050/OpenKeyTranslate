@@ -54,16 +54,17 @@ class GeminiProvider(TranslationProvider):
         self._max_tokens = max_tokens
         self._exhausted_labels: set[str] = set()
 
-    def _thinking_config(self):
+    def _thinking_config(self, model: str):
         """None = leave the model default. Only Gemini 2.5 takes a token budget (3.x uses thinking_level)."""
         budget = get_setting("gemini_thinking_budget", 0)
-        if budget is None or budget < 0 or "2.5" not in self._model:
+        if budget is None or budget < 0 or "2.5" not in model:
             return None
-        if "pro" in self._model and budget < 128:
+        if "pro" in model and budget < 128:
             budget = 128                     # 2.5 Pro cannot switch thinking off
         return types.ThinkingConfig(thinking_budget=int(budget))
 
-    def _call_key(self, api_key: str, system_prompt: str, user_message: str, schema: type[BaseModel]) -> BaseModel:
+    def _call_key(self, api_key: str, system_prompt: str, user_message: str, schema: type[BaseModel],
+                  model: str) -> BaseModel:
         """One request attempt with a single key. Raises on any failure."""
         client = genai.Client(api_key=api_key)
         config = dict(
@@ -73,11 +74,11 @@ class GeminiProvider(TranslationProvider):
             temperature=self._temperature,
             max_output_tokens=self._max_tokens,
         )
-        thinking = self._thinking_config()
+        thinking = self._thinking_config(model)
         if thinking is not None:
             config["thinking_config"] = thinking
         response = client.models.generate_content(
-            model=self._model,
+            model=model,
             contents=user_message,
             config=types.GenerateContentConfig(**config),
         )
@@ -105,11 +106,13 @@ class GeminiProvider(TranslationProvider):
 
         for key_entry in available:
             label = key_entry.get("label", "default")
+            model = key_entry.get("model") or self._model       # per-key model overrides the provider default
 
             for attempt in range(_SERVER_ERROR_RETRIES + 1):
                 try:
-                    result = self._call_key(key_entry["api_key"], system_prompt, user_message, schema)
+                    result = self._call_key(key_entry["api_key"], system_prompt, user_message, schema, model)
                     self.current_key_label = label
+                    self.current_model = model
                     return result
 
                 except genai_errors.ClientError as e:

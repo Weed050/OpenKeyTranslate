@@ -7,6 +7,7 @@
  */
 
 import { api } from "./api.js";
+import { offerMemoryCleanup } from "./memory-links.js";
 import { diffHtml } from "./diff.js";
 
 const params = new URLSearchParams(window.location.search);
@@ -217,6 +218,7 @@ function suggestionRow(s) {
             });
             row.remove();
             loadGlossary();
+            offerMemoryCleanup(projectId, s.old_translation, target);
         } catch (e) {
             alert(`Couldn't add term: ${e.message}`);
         }

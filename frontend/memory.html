@@ -106,6 +106,23 @@
                     <button id="reembedMemoryBtn" title="Recompute the search vectors of all entries from the cleaned-up source text (OCR fixes like SQUAD- RON -> SQUADRON). Run once after updating.">Re-embed memory</button>
                 </div>
  
+                <details id="memoryReplaceBox" class="item-row" style="margin-bottom:12px;">
+                    <summary><span class="item-summary-text">Find &amp; replace in memory</span></summary>
+                    <div class="item-body">
+                        <p class="text-muted" style="margin:0;">Changes the stored final translations, e.g. a term you changed your mind about (WIWERN &rarr; WYWERN). Preview first, untick what should stay. The first-saved text of every changed entry is kept for the logs.</p>
+                        <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
+                            <input type="text" id="replaceFindInput" placeholder="Find, e.g. WIWERN" style="max-width:200px;">
+                            <input type="text" id="replaceWithInput" placeholder="Replace with, e.g. WYWERN" style="max-width:200px;">
+                            <select id="replaceModeSelect" title="Word + forms: every word STARTING with the text, each keeps its own ending (WIWERNY -> WYWERNY)">
+                                <option value="prefix">Word + its inflected forms (WIWERN, WIWERNY...)</option>
+                                <option value="word">Whole word only</option>
+                            </select>
+                            <button id="replacePreviewBtn">Preview</button>
+                        </div>
+                        <div id="replacePreview"></div>
+                    </div>
+                </details>
+
                 <div id="correctionList"></div>
             </div>
  

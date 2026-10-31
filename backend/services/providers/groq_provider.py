@@ -45,11 +45,12 @@ class GroqProvider(TranslationProvider):
         self._max_tokens = max_tokens
         self._exhausted_labels: set[str] = set()
 
-    def _call_key(self, api_key: str, system_prompt: str, user_message: str, schema: type[BaseModel]) -> BaseModel:
+    def _call_key(self, api_key: str, system_prompt: str, user_message: str, schema: type[BaseModel],
+                  model: str) -> BaseModel:
         """One request attempt with a single key. Raises on any failure (incl. a reply that doesn't fit `schema`)."""
         client = Groq(api_key=api_key)
         response = client.chat.completions.create(
-            model=self._model,
+            model=model,
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_message},
@@ -80,11 +81,13 @@ class GroqProvider(TranslationProvider):
 
         for key_entry in available:
             label = key_entry.get("label", "default")
+            model = key_entry.get("model") or self._model       # per-key model overrides the provider default
 
             for attempt in range(_SERVER_ERROR_RETRIES + 1):
                 try:
-                    result = self._call_key(key_entry["api_key"], system_prompt, user_message, schema)
+                    result = self._call_key(key_entry["api_key"], system_prompt, user_message, schema, model)
                     self.current_key_label = label
+                    self.current_model = model
                     return result
 
                 except RateLimitError:

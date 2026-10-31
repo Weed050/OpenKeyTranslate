@@ -6,7 +6,8 @@ import os
 import re
 import shutil
 from models.schemas import SettingsSchema
-from core.config import APP_ROOT_DIR, load_settings, save_settings, get_default_app_root, APP_VERSION, DATABASE_PATH
+from core.config import (APP_ROOT_DIR, load_settings, save_settings, get_default_app_root, APP_VERSION, DATABASE_PATH,
+                         SETTINGS_FILE)
 
 """
 API Router - right now used for managing application settings and data migration.
@@ -57,6 +58,7 @@ async def get_settings():
     data["app_version"] = APP_VERSION
     data["log_file_path"] = os.path.join(APP_ROOT_DIR, "logs", "app.log")
     data["database_path"] = DATABASE_PATH
+    data["settings_path"] = SETTINGS_FILE        # outside the project folder (core/config.py) - shown under "About"
     return data
 
 @router.post("/")
@@ -201,10 +203,12 @@ def _mask(key: str) -> str:
 async def update_translation_settings(payload: dict):
     """
     BYOK settings from the UI (before: only by hand-editing settings.json): translation on/off, active provider,
-    per-provider model + key pool, temperature. Applied LIVE - the provider is rebuilt on the next translation.
+    per-provider default model + key pool (each key may carry its own "model"), temperature, max output tokens.
+    Applied LIVE - the provider is rebuilt on the next translation.
 
     A key sent back masked ("\u2022\u2022\u2022\u20221234", exactly what GET /settings/ returned) keeps the stored secret
-    for that label, so saving the form never wipes a key the browser never saw. Response never contains keys.
+    for that label, so saving the form never wipes a key the browser never saw. A row moved to another provider in
+    the UI sends from_provider / from_label, so its stored secret moves with it. Response never contains keys.
     """
     from services.providers import reset_provider
 
@@ -225,7 +229,15 @@ async def update_translation_settings(payload: dict):
         current["translation_temperature"] = t
     if "gemini_thinking_budget" in payload:
         current["gemini_thinking_budget"] = max(-1, int(payload["gemini_thinking_budget"]))
+    if "translation_max_tokens" in payload:
+        n = int(payload["translation_max_tokens"])
+        if not 256 <= n <= 65536:
+            raise HTTPException(status_code=400, detail="Max output tokens must be 256-65536")
+        current["translation_max_tokens"] = n
 
+    # every stored secret BEFORE anything changes, by (provider, label): a row may have moved between providers
+    stored_all = {(pn, k.get("label", "default")): k.get("api_key", "")
+                  for pn, c in providers.items() for k in c.get("keys", [])}
     for name, cfg in (payload.get("providers") or {}).items():
         if name not in ("groq", "gemini"):
             continue
@@ -233,7 +245,6 @@ async def update_translation_settings(payload: dict):
         if "model" in cfg:
             slot["model"] = str(cfg["model"]).strip()
         if "keys" in cfg:
-            stored = {k.get("label", "default"): k.get("api_key", "") for k in slot.get("keys", [])}
             new_keys, seen = [], set()
             for k in cfg["keys"]:
                 label = (str(k.get("label") or "default")).strip() or "default"
@@ -242,15 +253,21 @@ async def update_translation_settings(payload: dict):
                 seen.add(label)
                 value = str(k.get("api_key") or "").strip()
                 if value.startswith("\u2022"):                 # untouched masked value -> keep the stored secret
-                    value = stored.get(label, "")
-                new_keys.append({"label": label, "api_key": value})
+                    origin = (str(k.get("from_provider") or name), str(k.get("from_label") or label))
+                    value = stored_all.get(origin, "")
+                entry = {"label": label, "api_key": value}
+                key_model = str(k.get("model") or "").strip()
+                if key_model:                                   # empty = the provider's default model
+                    entry["model"] = key_model
+                new_keys.append(entry)
             slot["keys"] = new_keys or [{"label": "default", "api_key": ""}]
 
     save_settings(current)
     reset_provider()
     return {"message": "Translation settings saved and applied.", "active_provider": current.get("active_provider"),
-            "providers": {n: {"model": c.get("model", ""), "keys": [{"label": k.get("label"), "api_key": _mask(k.get("api_key", ""))}
-                                                                   for k in c.get("keys", [])]} for n, c in providers.items()}}
+            "providers": {n: {"model": c.get("model", ""),
+                              "keys": [{"label": k.get("label"), "api_key": _mask(k.get("api_key", "")), "model": k.get("model", "")}
+                                       for k in c.get("keys", [])]} for n, c in providers.items()}}
 
 
 @router.post("/test-translation")

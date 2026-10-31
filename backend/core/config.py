@@ -14,10 +14,9 @@ Handles loading, migrating, and exposing application settings,
 system paths, and pipeline constants.
 """
 
-# Define the project directory structure and configuration file path
+# Define the project directory structure
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 ROOT_DIR = os.path.dirname(BASE_DIR)
-SETTINGS_FILE = os.path.join(os.path.dirname(ROOT_DIR), "settings.json")
 
 # Set by scripts/build_docs.py. pdoc prints the VALUE of every module-level variable into the HTML, and the docs are
 # public (GitHub Pages) - a docs build once published a Groq key this way. In this mode settings.json is never read.
@@ -37,6 +36,16 @@ def get_default_app_root():
     if os.name == 'nt':
         return os.path.join(os.environ.get('APPDATA'), app_name)
     return os.path.join(os.path.expanduser('~'), f".{app_name.lower()}")
+
+
+# settings.json (API keys!) lives in the per-user app data folder, NOT in the project folder: next to the code it was
+# one `git add -f` or one generated file away from a public repository. OKT_SETTINGS_FILE overrides the location.
+# Fixed location on purpose - it cannot follow app_root_dir, because that value is stored IN this file.
+SETTINGS_FILE = os.environ.get("OKT_SETTINGS_FILE") or os.path.join(get_default_app_root(), "settings.json")
+"""@private Path of the user's settings file (contains the Windows user name)."""
+# Before 2026-10-28 the file lived in the project folder; _move_legacy_settings() moves it once.
+LEGACY_SETTINGS_FILE = os.path.join(os.path.dirname(ROOT_DIR), "settings.json")
+"""@private Old location of settings.json (project folder)."""
 
 
 # Default fallback settings and schema definition
@@ -95,7 +104,8 @@ DEFAULT_SETTINGS = {
     #   correction to be injected as a hint. Treat as an open research
     #   parameter, not a fixed constant - similarity_score is logged for
     #   every match so this can be tuned after the fact against real data.
-    "memory_similarity_threshold": 0.80,
+    #   0.67 together with the lexical gate below (memory_lexical_min) - 0.80 alone missed most real matches.
+    "memory_similarity_threshold": 0.67,
     # How many similar past corrections are sent to the LLM as style hints per bubble.
     "memory_top_k": 3,
     # Local sentence-transformers model used to embed English source text.
@@ -115,9 +125,10 @@ DEFAULT_SETTINGS = {
     # Share of translation runs (pages) that get the hint-free counterfactual pass when A/B logging is on.
     # 1.0 = every run (doubles requests for pages with a memory match), 0.3 = ~every third page - saves free-tier quota.
     "memory_ab_sample_rate": 1.0,
-    # Store translations the user ACCEPTED unchanged as kind="approved" translation-memory entries (corrections stay
-    # kind="corrected" and are ranked first). More material to retrieve from = memory fires far more often.
-    "memory_store_approved": True,
+    # Allow storing translations the user accepted unchanged as kind="approved" memory entries - only through the
+    # explicit "Approve to memory" button in the editor, never by just moving on. Off: approved entries are the
+    # model's own text fed back to it as examples (and the study measures the effect of the user's CORRECTIONS).
+    "memory_store_approved": False,
     # Second, lexical gate for the embedding lane (content-word Jaccard overlap, 0-100): a candidate must clear BOTH
     # the cosine threshold and this - unless its cosine is >= memory_strong_similarity. Rejects "same topic,
     # different line" matches that MiniLM scores ~0.7 (measured: useful matches 30-75, noise 0-20). 0 = off.
@@ -260,6 +271,7 @@ def save_settings(data: dict) -> None:
     Atomic write: temp file -> fsync -> os.replace, after copying the previous file to settings.json.bak.
     A crash mid-write can no longer leave a half-written settings.json (= lost API keys).
     """
+    os.makedirs(os.path.dirname(SETTINGS_FILE), exist_ok=True)     # app data folder may not exist yet (fresh install)
     tmp_path = SETTINGS_FILE + ".tmp"
     with open(tmp_path, "w", encoding="utf-8") as file:
         json.dump(data, file, indent=4, ensure_ascii=False)
@@ -276,6 +288,40 @@ def _read_json(path: str) -> dict:
         return json.load(file)
 
 
+def _move_legacy_settings() -> None:
+    """
+    One-time move of settings.json out of the project folder (LEGACY_SETTINGS_FILE) into SETTINGS_FILE. A NEW file
+    is written: this version's defaults + every value of the old file (API keys included). The old file and its
+    .bak / .tmp are then moved next to the new one as legacy_settings.json*.bak - no key stays inside the repository
+    folder. Does nothing when the new file already exists or there is no old one.
+    """
+    if os.path.abspath(SETTINGS_FILE) == os.path.abspath(LEGACY_SETTINGS_FILE):
+        return
+    if os.path.exists(SETTINGS_FILE) or not os.path.exists(LEGACY_SETTINGS_FILE):
+        return
+    try:
+        old = _read_json(LEGACY_SETTINGS_FILE)
+    except (json.JSONDecodeError, OSError) as e:
+        print(f"[CONFIG] settings.json in the project folder is unreadable ({e}) - not moved; fix or delete "
+              f"{LEGACY_SETTINGS_FILE}")
+        return
+    new = copy.deepcopy(old)
+    _migrate_provider_keys(new)        # BEFORE _deep_fill: it would add an empty default key pool and the old key is lost
+    _deep_fill(new, DEFAULT_SETTINGS)
+    target_dir = os.path.dirname(SETTINGS_FILE)
+    os.makedirs(target_dir, exist_ok=True)
+    save_settings(new)
+    for suffix in ("", ".bak", ".tmp"):
+        src = LEGACY_SETTINGS_FILE + suffix
+        if os.path.exists(src):
+            try:
+                shutil.move(src, os.path.join(target_dir, f"legacy_settings.json{suffix}.bak"))
+            except OSError as e:
+                print(f"[CONFIG] WARNING could not move {src} out of the project folder ({e}) - delete it by hand")
+    print(f"[CONFIG] settings.json moved out of the project folder to {SETTINGS_FILE} "
+          f"(previous file kept there as legacy_settings.json.bak)")
+
+
 def load_settings():
     """
     Load settings from the JSON file.
@@ -287,12 +333,14 @@ def load_settings():
     - Unreadable / corrupt file: falls back to settings.json.bak, otherwise stops with a clear error
       (it does NOT silently replace your keys with an empty template).
     - Docs build (OKT_DOCS_BUILD): defaults only, data folder in a throwaway temp directory, nothing read or written.
+    - Old location (project folder): moved once to the user app data folder first (_move_legacy_settings).
     """
     if _DOCS_BUILD:
         docs_settings = copy.deepcopy(DEFAULT_SETTINGS)
         docs_settings["app_root_dir"] = os.path.join(tempfile.gettempdir(), "okt_docs_build")
         return docs_settings
 
+    _move_legacy_settings()
     if not os.path.exists(SETTINGS_FILE):
         save_settings(copy.deepcopy(DEFAULT_SETTINGS))
         return copy.deepcopy(DEFAULT_SETTINGS)
@@ -308,8 +356,10 @@ def load_settings():
         current_settings = _read_json(backup)
         save_settings(current_settings)
 
-    updated = _deep_fill(current_settings, DEFAULT_SETTINGS)
-    if _migrate_provider_keys(current_settings):
+    # key shape first: _deep_fill would otherwise add the default (empty) key pool next to an old single api_key,
+    # and the migration then sees a pool and leaves the real key behind
+    updated = _migrate_provider_keys(current_settings)
+    if _deep_fill(current_settings, DEFAULT_SETTINGS):
         updated = True
 
     if updated:
@@ -368,7 +418,7 @@ TRANSLATION_TEMPERATURE = settings.get("translation_temperature", 0.4)
 TRANSLATION_MAX_TOKENS = settings.get("translation_max_tokens", 4096)
 
 # Correction Memory
-MEMORY_SIMILARITY_THRESHOLD = settings.get("memory_similarity_threshold", 0.80)
+MEMORY_SIMILARITY_THRESHOLD = settings.get("memory_similarity_threshold", 0.67)
 MEMORY_TOP_K = settings.get("memory_top_k", 3)
 MEMORY_EMBEDDING_MODEL = settings.get("memory_embedding_model", "all-MiniLM-L6-v2")
 MEMORY_MIN_WORDS = settings.get("memory_min_words", 3)

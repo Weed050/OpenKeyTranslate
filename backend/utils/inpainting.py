@@ -39,6 +39,7 @@ LEFTOVER_MIN_PIXELS = 40        # dark pixels not covered by any OCR text ...
 LEFTOVER_MIN_RATIO = 0.004      # ... and at least this share of the interior => "missed text"
 GLYPH_DARK = 150                # gray level below which a pixel counts as ink when selecting glyph components
 MIN_GLYPH_COVERAGE = 0.015      # a box whose glyph pixels are below this share of its area uses the rectangle instead
+OUTLINE_BAND_PX = 21            # width (kernel size) of the band around a bubble interior where its outline is protected
 
 
 def inpaint_mode() -> str:
@@ -64,10 +65,11 @@ def _gray(roi: np.ndarray) -> np.ndarray:
 
 # ------------------------------------------------------------------ glyph-complete mask of one text line
 
-def glyph_mask(image: np.ndarray, box):
+def glyph_mask(image: np.ndarray, box, with_ink: bool = False):
     """
     :return: ((x0, y0), mask_roi uint8) with the ink of the letters belonging to this OCR box, or None when no usable
-             glyphs were found (the caller then uses the rectangle).
+             glyphs were found (the caller then uses the rectangle). with_ink=True adds a third item: the bool ROI of
+             the selected letter strokes themselves (before the anti-aliasing halo).
     """
     ih, iw = image.shape[:2]
     bx1, by1, bx2, by2 = _bbox(box)
@@ -112,7 +114,7 @@ def glyph_mask(image: np.ndarray, box):
         near = cv2.dilate(ink.astype(np.uint8), cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * gap + 1,) * 2)) > 0
         ink |= np.isin(labels, [lab for lab in small if near[labels == lab].mean() > 0.5])
     mask = cv2.dilate(ink.astype(np.uint8) * 255, np.ones((3, 3), np.uint8), iterations=2)   # anti-aliasing halo
-    return (x0, y0), mask
+    return ((x0, y0), mask, ink) if with_ink else ((x0, y0), mask)
 
 
 # ------------------------------------------------------------------ one bubble
@@ -180,19 +182,23 @@ def build_erase_mask(image: np.ndarray, boxes: list, bubbles: list | None = None
     ih, iw = image.shape[:2]
     mask = np.zeros((ih, iw), np.uint8)
     rect = np.zeros((ih, iw), np.uint8)              # lines that fall back to the plain rectangle
+    letters = np.zeros((ih, iw), bool)               # selected letter strokes: never "outline", see below
     for box in boxes:
-        g = glyph_mask(image, box) if mode == "glyph" else None
+        g = glyph_mask(image, box, with_ink=True) if mode == "glyph" else None
         if g is None:
             cv2.fillPoly(rect, [_poly(box)], 255)
         else:
-            (gx, gy), gm = g
+            (gx, gy), gm, ink = g
             mask[gy:gy + gm.shape[0], gx:gx + gm.shape[1]] |= gm
+            letters[gy:gy + ink.shape[0], gx:gx + ink.shape[1]] |= ink
     mask |= cv2.dilate(rect, np.ones((5, 5), np.uint8), iterations=1)
 
     info: dict = {}
     flats: list = []
     if not (use_interior and bubbles):
         return mask, info, flats
+    letter_edge = cv2.dilate(letters.astype(np.uint8), np.ones((3, 3), np.uint8), iterations=1) > 0   # + anti-aliasing
+    letter_halo = cv2.dilate(letters.astype(np.uint8), np.ones((3, 3), np.uint8), iterations=2)       # = glyph_mask halo
 
     for b in bubbles:
         it, bubble_info, leftover = analyze_bubble(image, b, mode)
@@ -208,13 +214,22 @@ def build_erase_mask(image: np.ndarray, boxes: list, bubbles: list | None = None
             inside = cv2.dilate(it.hull, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5)), iterations=1)
             roi_mask |= cv2.bitwise_and(grown, inside)
 
-        # outline protection: a rectangle fallback may have swallowed dark outline pixels outside the interior
+        # outline protection: a rectangle fallback or a glyph halo may have swallowed dark outline pixels outside the
+        # interior. Only in a thin band around THIS bubble: the ROI is the whole find_interior search window (>= 480 px
+        # each side, i.e. most of a manga page), and protecting every dark pixel outside this hull removed the text of
+        # all OTHER bubbles from the mask - only the first white bubble of a page was erased, captions got a grey halo.
+        # Selected letter strokes are never outline (glyph_mask already rejects components that look like one) - a
+        # last line sitting close to the outline used to be "protected" and stayed on the page.
         gray = _gray(image[ry:ry + rh, rx:rx + rw])
         near_hull = cv2.dilate(it.hull, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5)), iterations=1)
-        outline = (gray < 180) & (near_hull == 0)
+        outline_band = cv2.dilate(it.hull, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (OUTLINE_BAND_PX,) * 2), iterations=1)
+        outline = (gray < 180) & (near_hull == 0) & (outline_band > 0) & ~letter_edge[ry:ry + rh, rx:rx + rw]
         roi_mask[outline & (cv2.bitwise_and(roi_mask, 255) > 0)] = 0
 
-        flat_region = (roi_mask > 0) & (near_hull > 0)
+        # flat fill = the interior + this bubble's letters (with their halo) right next to the outline; TELEA there
+        # mixed in the outline and left a grey ghost of the last line
+        own_letters = (letter_halo[ry:ry + rh, rx:rx + rw] > 0) & (outline_band > 0)
+        flat_region = (roi_mask > 0) & ((near_hull > 0) | own_letters)
         if flat_region.any():
             bright = gray[(it.hull > 0) & (gray >= 220)]
             color = tuple(int(c) for c in np.median(image[ry:ry + rh, rx:rx + rw][(it.hull > 0) & (gray >= 220)], axis=0)) \

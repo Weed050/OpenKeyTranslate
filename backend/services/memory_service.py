@@ -20,8 +20,9 @@ pushing the model toward phrasing the user has already approved for similar text
 Two kinds of entries (Correction.kind):
     - "corrected": the user changed the AI proposal - the strongest signal. The rejected AI version is kept
       (ai_translation) and shown to the model as "rejected", so it also learns what NOT to write.
-    - "approved":  the user accepted the AI proposal unchanged (memory_store_approved). A plain TM entry: it
-      keeps character voice / recurring lines consistent and makes the memory fire far more often.
+    - "approved":  the user explicitly approved the AI proposal unchanged ("Approve to memory" button, only with
+      memory_store_approved on - off by default). A plain TM entry: it keeps character
+      voice / recurring lines consistent and makes the memory fire far more often.
     Corrected entries win ties at retrieval.
 
 Design notes:
@@ -49,6 +50,7 @@ Design notes:
 """
 
 import re
+from datetime import datetime, timezone
 from functools import lru_cache
 
 import numpy as np
@@ -256,7 +258,7 @@ def find_top_matches(
     :return: List of (Correction, cosine score), best first. Empty if nothing matches.
     """
     if threshold is None:
-        threshold = get_setting("memory_similarity_threshold", 0.80)
+        threshold = get_setting("memory_similarity_threshold", 0.67)
     if top_k is None:
         top_k = get_setting("memory_top_k", 3)
     lexical_min = get_setting("memory_lexical_min", 25) or 0
@@ -323,13 +325,16 @@ def save_correction(
         source_text: str,
         ai_translation: str | None,
         final_translation: str,
+        approve: bool = False,
 ) -> Correction | None:
     """
     Persist a confirmed translation and its embedding as a TM entry - subject to a few
     quality gates, so the memory only grows from signal, not noise:
 
     - Kind: final != AI proposal -> "corrected". final == AI proposal (the user accepted it unchanged) ->
-      "approved", or nothing at all when memory_store_approved is off.
+      "approved" only for an explicit approval (approve=True) with memory_store_approved on, otherwise nothing.
+      Off by default: approved entries are the model's own text fed back to it as examples, and moving on from a
+      bubble used to approve it silently (an accidental "WIWERN" became memory that way).
     - Junk gate (longer sources only): skip fragments whose final translation
       is shorter than MEMORY_MIN_WORDS.
     - Short-phrase lane: sources of <= MEMORY_SHORT_PHRASE_MAX_WORDS words
@@ -350,7 +355,7 @@ def save_correction(
 
     kind = "corrected"
     if final_clean.lower() == ai_clean.lower():
-        if not get_setting("memory_store_approved", True):
+        if not (approve and get_setting("memory_store_approved", False)):
             return None
         kind = "approved"
 
@@ -402,6 +407,90 @@ def reembed_project(db: Session, project_id: int) -> int:
         c.embedding = encode_embedding(embed_text(memory_text(c.source_text)))
     db.commit()
     return len(rows)
+
+
+def _set_final(correction: Correction, new_final: str) -> None:
+    """Change a stored entry's final text, keeping the first-saved version (final_before_edit) for the evaluation."""
+    if correction.final_before_edit is None:
+        correction.final_before_edit = correction.final_translation
+    correction.final_translation = new_final
+    correction.edited_at = datetime.now(timezone.utc)
+    if (correction.ai_translation or "").strip().lower() != new_final.strip().lower():
+        correction.kind = "corrected"     # an edited approval is the user's own wording now
+
+
+def edit_correction(db: Session, correction_id: int, new_final: str) -> Correction | None:
+    """
+    Inline edit from the Memory page. The embedding is NOT recomputed - it is built from the English source, which
+    does not change. None when there is no such entry.
+    """
+    correction = db.query(Correction).filter(Correction.id == correction_id).first()
+    if correction is None:
+        return None
+    new_final = new_final.strip()
+    if new_final and new_final != correction.final_translation:
+        _set_final(correction, new_final)
+        db.commit()
+        db.refresh(correction)
+    return correction
+
+
+def _same_case(original: str, replacement: str) -> str:
+    """Give the replacement the letter case of the text it replaces (memory is mostly ALL CAPS)."""
+    if original.isupper():
+        return replacement.upper()
+    if original.islower():
+        return replacement.lower()
+    if original[:1].isupper() and original[1:].islower():
+        return replacement[:1].upper() + replacement[1:].lower()
+    return replacement
+
+
+def replace_in_memory(db: Session, project_id: int, find: str, replace: str, mode: str = "word",
+                      ids: list[int] | None = None, apply: bool = False) -> list[dict]:
+    """
+    Find & replace in the stored final translations of one project (the Memory page; also offered after a glossary
+    term is accepted, so old entries stop contradicting it).
+
+    mode "word":   whole words only, case-insensitive (WIWERN, not WIWERNY).
+    mode "prefix": words STARTING with `find` - the term and its Polish inflected forms: find "WIWERN" ->
+                   WIWERN, WIWERNY, WIWERNAMI, each keeping its own ending (WYWERN, WYWERNY, WYWERNAMI).
+    The replacement takes the letter case of what it replaces. Only `ids` are changed when given (the user unticked
+    the rest of the preview). apply=False is a dry run.
+
+    :return: [{"id", "source_text", "before", "after"}] for every entry that changes.
+    """
+    find = (find or "").strip()
+    if len(find) < 2:
+        return []
+    word = re.escape(find)
+    if mode == "prefix":
+        pattern = re.compile(rf"(?<!\w){word}(\w*)", re.IGNORECASE)
+
+        def substitute(m):
+            rest = m.group(1)
+            return _same_case(m.group(0)[:len(m.group(0)) - len(rest)], replace) + rest
+    else:
+        pattern = re.compile(rf"(?<!\w){word}(?!\w)", re.IGNORECASE)
+
+        def substitute(m):
+            return _same_case(m.group(0), replace)
+
+    wanted = set(ids) if ids is not None else None
+    changes = []
+    rows = db.query(Correction).filter(Correction.project_id == project_id).order_by(Correction.id.desc()).all()
+    for c in rows:
+        if wanted is not None and c.id not in wanted:
+            continue
+        after = pattern.sub(substitute, c.final_translation)
+        if after == c.final_translation:
+            continue
+        changes.append({"id": c.id, "source_text": c.source_text, "before": c.final_translation, "after": after})
+        if apply:
+            _set_final(c, after)
+    if apply and changes:
+        db.commit()
+    return changes
 
 
 def delete_correction(db: Session, correction_id: int) -> bool:

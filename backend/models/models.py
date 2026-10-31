@@ -173,6 +173,12 @@ class Correction(Base):
     # NULL = rows from before this column existed = "corrected" (the old code stored edits only).
     kind = Column(String, nullable=True, default="corrected")
 
+    # Edited later on the Memory page (inline edit / find & replace), e.g. a term the user changed their mind about
+    # (WIWERN -> WYWERN). final_before_edit keeps the text as it was first saved from the editor, so the evaluation
+    # can tell an in-editor correction from a later memory clean-up. NULL = never edited.
+    edited_at = Column(DateTime(timezone=True), nullable=True)
+    final_before_edit = Column(Text, nullable=True)
+
     # Relationships
     project = relationship("Project", back_populates="corrections")
 

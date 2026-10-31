@@ -173,7 +173,7 @@ def _busy_pages() -> int:
 
 # ------------------------------------------------------------------ export
 
-def create_backup(job: dict, dest_path: str, include_secrets: bool = True, include_models: bool = False,
+def create_backup(job: dict, dest_path: str, include_secrets: bool = False, include_models: bool = False,
                   include_logs: bool = False) -> dict:
     dest_path = os.path.abspath(dest_path)
     if not dest_path.lower().endswith(".zip"):

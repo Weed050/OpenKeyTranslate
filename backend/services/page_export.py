@@ -14,6 +14,7 @@ be exactly one place that defines it.
 import json
 import os
 import tempfile
+from datetime import datetime, timezone
 
 from core.config import SCALE
 
@@ -141,6 +142,11 @@ def update_bubble_translation(json_path: str, bubble_id: str, new_translation: s
     the editor shows the user's saved edit next time the page loads instead
     of reverting to the AI's first draft every time.
 
+    Also stamps the bubble as reviewed: `confirmed_at` + `confirmed_translation`. That is the only record of "the user
+    read this and accepted it unchanged" now that unchanged translations no longer go into memory by default
+    (memory_store_approved) - the evaluation needs it to tell an accepted line from one nobody looked at. The stamp is
+    valid only while translation == confirmed_translation, so a later retranslation invalidates it by itself.
+
     :return: True if the bubble was found and updated, False otherwise
         (missing file or unknown bubble_id).
     """
@@ -151,6 +157,8 @@ def update_bubble_translation(json_path: str, bubble_id: str, new_translation: s
     for b in data.get("bubbles", []):
         if b["bubble_id"] == bubble_id:
             b["translation"] = new_translation
+            b["confirmed_translation"] = new_translation
+            b["confirmed_at"] = datetime.now(timezone.utc).isoformat()
             write_page_json(json_path, data)
             return True
     return False

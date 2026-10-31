@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+# .githooks/pre-commit
+#
+# Blocks a commit that would put a secret into the repository:
+#   1. files that must never be committed (settings.json, .env, keys, databases, backups) - even when force-added;
+#   2. API keys anywhere in the staged content of ANY file (also generated ones: docs/ once leaked a Groq key
+#      because pdoc printed the loaded settings into docs/core/config.html).
+# Only names and masked values are printed. No dependencies besides git + bash (Git for Windows has both).
+#
+# Enable once per clone (from the repository root):   git config core.hooksPath .githooks
+# False positive?  Fix it or commit consciously with:  git commit --no-verify
+
+PATTERN='gsk_[A-Za-z0-9]{20,}|AIza[0-9A-Za-z_-]{30,}|sk-(ant-|proj-)?[A-Za-z0-9_-]{20,}|hf_[A-Za-z0-9]{20,}|gh[pousr]_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{30,}|-----BEGIN [A-Z ]*PRIVATE KEY-----|"api_key"[[:space:]]*:[[:space:]]*"[^"]{16,}"'
+
+fail=0
+while IFS= read -r -d '' file; do
+    base=$(basename "$file")
+    case "$base" in
+        .env.example) ;;
+        settings.json|settings.json.bak|settings.json.tmp|.env|.env.*|keys.json|config_private.json|api_key*.txt|*.pem|*.key|*.db|*.db-wal|*.db-shm|*.sqlite|*.7z|*.rar|*vault*)
+            echo "  BLOCKED file (must never be committed): $file"
+            fail=1
+            continue ;;
+    esac
+    matches=$(git show ":$file" 2>/dev/null | grep -a -o -E -- "$PATTERN" | sed -E 's/^(.{6}).*(.{3})$/\1...\2/' | sort -u)
+    if [ -n "$matches" ]; then
+        echo "  SECRET in $file:"
+        echo "$matches" | sed 's/^/      /'
+        fail=1
+    fi
+done < <(git diff --cached --name-only --diff-filter=ACMR -z)
+
+if [ "$fail" -ne 0 ]; then
+    echo
+    echo "pre-commit: commit stopped - remove the secret / unstage the file (git restore --staged <file>)."
+    echo "Generated docs: rebuild them with  python backend/scripts/build_docs.py  (never plain pdoc)."
+    exit 1
+fi
+exit 0

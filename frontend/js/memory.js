@@ -1,9 +1,13 @@
 /**
  * @file frontend/js/memory.js
  * @description Correction-memory browser (the "TM analytics" panel):
- * lists every stored Correction for a project with a trash button, so a
- * stale or wrong hint can be removed from future retrieval. Also owns the
- * Corrections/Glossary tab switcher shared with glossary.js.
+ * lists every stored Correction for a project; an entry can be edited in place or deleted, and a find & replace
+ * fixes a term across many entries at once (WIWERN -> WYWERN). Also owns the Corrections/Glossary tab switcher
+ * shared with glossary.js.
+ *
+ * URL parameters (the editor opens this page in a new tab):
+ *   ?project=1&correction=12                              open, highlight and scroll to entry 12
+ *   ?project=1&find=WIWERN&replace=WYWERN&mode=prefix     prefill the find & replace and show its preview
  */
  
 import { api } from "./api.js";
@@ -20,7 +24,7 @@ window.addEventListener("DOMContentLoaded", () => {
         document.getElementById("noProject").classList.remove("hidden");
         return;
     }
-    loadCorrections();
+    loadCorrections().then(applyUrlTargets);
 });
  
 function setupTabs() {
@@ -47,9 +51,7 @@ async function loadCorrections() {
         return;
     }
  
-    const approvedCount = allCorrections.filter((c) => c.kind === "approved").length;
-    document.getElementById("correctionsCountBadge").textContent =
-        `${allCorrections.length - approvedCount} corrected, ${approvedCount} approved`;
+    updateCountBadge();
  
     if (!allCorrections.length) {
         listEl.innerHTML = `<p class="text-muted">No corrections stored yet for this project.</p>`;
@@ -59,6 +61,12 @@ async function loadCorrections() {
     renderList();
 }
  
+function updateCountBadge() {
+    const approvedCount = allCorrections.filter((c) => c.kind === "approved").length;
+    document.getElementById("correctionsCountBadge").textContent =
+        `${allCorrections.length - approvedCount} corrected, ${approvedCount} approved`;
+}
+
 function renderList() {
     const listEl = document.getElementById("correctionList");
     const query = (document.getElementById("memorySearchInput").value || "").toLowerCase();
@@ -91,12 +99,14 @@ function renderList() {
 function correctionRow(c) {
     const details = document.createElement("details");
     details.className = "item-row";
+    details.dataset.correctionId = c.id;
     details.innerHTML = `
         <summary>
             <span class="item-summary-text">${escapeHtml(c.final_translation)}</span>
             ${(c.kind || "corrected") === "approved"
                 ? '<span class="badge" title="Accepted unchanged - a plain translation-memory entry">approved</span>'
                 : '<span class="badge" title="You changed the AI text - ranked first, the AI text is shown to the model as rejected">corrected</span>'}
+            ${c.edited_at ? `<span class="badge" title="Edited on the Memory page ${escapeHtml(formatDate(c.edited_at))}. First saved as: ${escapeHtml(c.final_before_edit || "")}">edited</span>` : ""}
             <span class="badge" title="Times used as a hint">used ${c.reuse_count || 0}×</span>
         </summary>
         <div class="item-body">
@@ -110,11 +120,20 @@ function correctionRow(c) {
             </div>
             <div>
                 <div class="field-label">User's final translation</div>
-                <div class="field-value">${escapeHtml(c.final_translation)}</div>
+                <div class="field-value" data-final>${escapeHtml(c.final_translation)}</div>
+                <div class="hidden" data-edit-box>
+                    <textarea rows="2" lang="pl" data-edit-input style="width:100%;">${escapeHtml(c.final_translation)}</textarea>
+                    <div style="display:flex; gap:8px; margin-top:6px;">
+                        <button class="primary" data-edit-save>Save</button>
+                        <button data-edit-cancel>Cancel</button>
+                    </div>
+                </div>
             </div>
+            ${c.final_before_edit ? `<div class="text-muted" style="font-size:11px;">First saved as: ${escapeHtml(c.final_before_edit)}</div>` : ""}
             <div class="text-muted" style="font-size:11px;">Saved ${formatDate(c.created_at)}</div>
             <div style="display:flex; gap:8px;">
                 <button class="copy-btn usage-toggle" data-usage="${c.id}">Show usage (${c.reuse_count || 0})</button>
+                <button data-edit title="Change the stored final translation (the English source and its search vector stay)">Edit</button>
                 <button class="danger" data-id="${c.id}">Delete from memory</button>
             </div>
             <div class="usage-panel hidden" id="usage-${c.id}"></div>
@@ -128,8 +147,141 @@ function correctionRow(c) {
         event.preventDefault();
         toggleUsage(c.id);
     });
+    setupInlineEdit(details, c);
     return details;
 }
+
+function setupInlineEdit(details, c) {
+    const view = details.querySelector("[data-final]");
+    const box = details.querySelector("[data-edit-box]");
+    const input = details.querySelector("[data-edit-input]");
+    const toggle = (editing) => {
+        view.classList.toggle("hidden", editing);
+        box.classList.toggle("hidden", !editing);
+        if (editing) input.focus();
+    };
+    details.querySelector("[data-edit]").addEventListener("click", (event) => {
+        event.preventDefault();
+        input.value = c.final_translation;
+        toggle(true);
+    });
+    details.querySelector("[data-edit-cancel]").addEventListener("click", (event) => {
+        event.preventDefault();
+        toggle(false);
+    });
+    details.querySelector("[data-edit-save]").addEventListener("click", async (event) => {
+        event.preventDefault();
+        const value = input.value.trim();
+        if (!value) {
+            alert("The translation must not be empty - use 'Delete from memory' instead.");
+            return;
+        }
+        try {
+            const result = await api.corrections.edit(c.id, value);
+            if (c.final_before_edit == null && value !== c.final_translation) c.final_before_edit = c.final_translation;
+            c.final_translation = result.final_translation;
+            c.kind = result.kind;
+            c.edited_at = result.edited_at;
+            const fresh = correctionRow(c);
+            fresh.open = true;
+            details.replaceWith(fresh);
+            updateCountBadge();
+        } catch (e) {
+            alert(`Save failed: ${e.message}`);
+        }
+    });
+}
+
+/* -------- deep links from the editor: ?correction=ID, ?find=..&replace=..&mode=.. -------- */
+
+function applyUrlTargets() {
+    const targetId = params.get("correction");
+    if (targetId) {
+        const row = document.querySelector(`[data-correction-id="${CSS.escape(targetId)}"]`);
+        if (row) {
+            row.open = true;
+            row.style.outline = "2px solid var(--accent, #6c8cff)";
+            row.scrollIntoView({ block: "center" });
+        } else {
+            alert(`Memory entry #${targetId} no longer exists (it was deleted).`);
+        }
+    }
+    if (params.get("find")) {
+        document.getElementById("replaceFindInput").value = params.get("find");
+        document.getElementById("replaceWithInput").value = params.get("replace") || "";
+        document.getElementById("replaceModeSelect").value = params.get("mode") === "word" ? "word" : "prefix";
+        const box = document.getElementById("memoryReplaceBox");
+        box.open = true;
+        box.scrollIntoView({ block: "start" });
+        previewReplace();
+    }
+}
+
+/* ---------------------------- find & replace ---------------------------- */
+
+function replacePayload() {
+    return {
+        find: document.getElementById("replaceFindInput").value.trim(),
+        replace: document.getElementById("replaceWithInput").value.trim(),
+        mode: document.getElementById("replaceModeSelect").value,
+    };
+}
+
+async function previewReplace() {
+    const out = document.getElementById("replacePreview");
+    const payload = replacePayload();
+    if (payload.find.length < 2) {
+        out.innerHTML = `<p class="text-muted">Type at least 2 characters to search for.</p>`;
+        return;
+    }
+    let result;
+    try {
+        result = await api.corrections.replace(projectId, { ...payload, apply: false });
+    } catch (e) {
+        out.innerHTML = `<p class="text-muted">Preview failed: ${escapeHtml(e.message)}</p>`;
+        return;
+    }
+    if (!result.count) {
+        out.innerHTML = `<p class="text-muted">No stored translation contains "${escapeHtml(payload.find)}".</p>`;
+        return;
+    }
+    const plural = result.count === 1 ? "entry" : "entries";
+    out.innerHTML = `
+        <div class="text-muted" style="margin:6px 0;">${result.count} ${plural} would change:</div>
+        ${result.changes.map((ch) => `
+            <label class="usage-row" style="display:flex; gap:8px; align-items:flex-start;">
+                <input type="checkbox" data-replace-id="${ch.id}" checked>
+                <span>
+                    <span class="text-muted" style="font-size:11px;">${escapeHtml(ch.source_text)}</span><br>
+                    ${diffHtml(ch.before, ch.after, escapeHtml)}
+                </span>
+            </label>`).join("")}
+        <button class="primary" id="replaceApplyBtn" style="margin-top:8px;">Replace in selected entries</button>`;
+    document.getElementById("replaceApplyBtn").addEventListener("click", () => applyReplace(payload));
+}
+
+async function applyReplace(payload) {
+    const ids = [...document.querySelectorAll("[data-replace-id]")]
+        .filter((box) => box.checked).map((box) => Number(box.dataset.replaceId));
+    if (!ids.length) {
+        alert("Nothing selected.");
+        return;
+    }
+    const plural = ids.length === 1 ? "entry" : "entries";
+    if (!confirm(`Change ${ids.length} memory ${plural}: "${payload.find}" -> "${payload.replace}"?`)) return;
+    try {
+        const result = await api.corrections.replace(projectId, { ...payload, ids, apply: true });
+        document.getElementById("replacePreview").innerHTML =
+            `<p class="text-muted">Changed ${result.count} ${result.count === 1 ? "entry" : "entries"}.</p>`;
+        await loadCorrections();
+    } catch (e) {
+        alert(`Replace failed: ${e.message}`);
+    }
+}
+
+document.getElementById("replacePreviewBtn")?.addEventListener("click", previewReplace);
+document.getElementById("replaceFindInput")?.addEventListener("keydown", (e) => { if (e.key === "Enter") previewReplace(); });
+document.getElementById("replaceWithInput")?.addEventListener("keydown", (e) => { if (e.key === "Enter") previewReplace(); });
  
 async function toggleUsage(correctionId) {
     const panel = document.getElementById(`usage-${correctionId}`);
@@ -197,7 +349,7 @@ async function deleteCorrection(id, rowEl) {
         rowEl.remove();
         allCorrections = allCorrections.filter((c) => c.id !== id);
         usageCache.delete(id);
-        document.getElementById("correctionsCountBadge").textContent = `${allCorrections.length} corrections`;
+        updateCountBadge();
     } catch (e) {
         alert(`Delete failed: ${e.message}`);
     }

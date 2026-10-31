@@ -11,6 +11,7 @@ import { api } from "./api.js";
 import { renderSidebar } from "./nav.js";
 import { params, pageId, state, el, escapeHtml, showToast, openOrAlert, groupByChapter, compareChapterNames } from "./editor-shared.js";
 import { showPagePicker } from "./pagepicker.js";
+import { memoryEntryUrl, offerMemoryCleanup } from "./memory-links.js";
  
 const enterAt = params.get("enterAt"); // "first" | "last" | null - set when arriving via cross-page nav
 const resumeBubbleIndex = params.get("bubble"); // set by the dashboard's "Resume where I left off" link
@@ -156,6 +157,7 @@ async function init() {
     setupResizers(); 
  
     renderSidebar(state.projectId);
+    loadEditorSettings();   // not awaited: only decides whether "Approve to memory" is shown
  
     if (!pageId) {
         await showPagePicker();
@@ -724,6 +726,7 @@ function renderBubbleDetail() {
             <label>Translated text</label>
             <textarea id="translationInput" rows="4" lang="pl" spellcheck="${isSpellcheckEnabled()}">${escapeHtml(bubble.translation || "")}</textarea>
         </div>
+        <div id="memoryUsedPanel" class="memory-used"></div>
  
         <div class="detail-tools">
             <button id="resetBtn" title="Revert to the AI's original translation (does not save)">Reset to AI</button>
@@ -741,6 +744,7 @@ function renderBubbleDetail() {
  
         <div class="detail-actions" style="align-items:center;">
             ${isSkipped ? "" : '<button id="saveBtn" class="primary" title="Save this translation (Ctrl/Cmd+Enter also works while typing)">Save</button>'}
+            ${isSkipped || !state.storeApproved ? "" : '<button id="approveBtn" title="Store this UNCHANGED translation in the correction memory as an approved example (Settings: memory_store_approved). Moving on never does that.">Approve to memory</button>'}
             <span id="saveInlineStatus" style="font-size:12px;"></span>
             <div class="detail-nav-actions" style="margin-left:auto;">
                 <button id="prevBtn" class="${isFirst ? "nav-crosses-page" : ""}"
@@ -799,6 +803,7 @@ function renderBubbleDetail() {
     document.getElementById("mergeNextBtn")?.addEventListener("click", () => mergeCurrentBubble(1));
     document.getElementById("skipBtn").addEventListener("click", () => setSkip(true));
     document.getElementById("saveBtn").addEventListener("click", () => saveCurrentBubble());
+    document.getElementById("approveBtn")?.addEventListener("click", () => approveCurrentBubble());
  
     textarea.addEventListener("keydown", (event) => {
         if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
@@ -806,6 +811,58 @@ function renderBubbleDetail() {
             saveCurrentBubble();
         }
     });
+    loadMemoryUsed(bubble.bubble_id);
+}
+
+/* ------------- "Used from memory": what the memory gave the AI for this bubble (links open the Memory page) ------------- */
+
+async function loadMemoryUsed(bubbleId) {
+    const panel = document.getElementById("memoryUsedPanel");
+    if (!panel || !pageId) return;
+    let used;
+    try {
+        used = await api.corrections.usedFor(pageId, bubbleId);
+    } catch (e) {
+        panel.innerHTML = "";
+        return;
+    }
+    const current = state.selectedIndex !== null ? state.bubbles[state.selectedIndex] : null;
+    const target = document.getElementById("memoryUsedPanel");
+    if (!target || !current || current.bubble_id !== bubbleId) return;     // the user moved on meanwhile
+
+    const entries = used.entries || [];
+    const glossary = used.glossary || [];
+    if (!entries.length && !glossary.length) {
+        target.innerHTML = `<div class="field-label">Used from memory: <span class="text-muted">nothing for this AI draft</span></div>`;
+        return;
+    }
+    const laneNote = used.lane === "exact" ? "exact line (reused verbatim unless grammar requires otherwise)" : "similar lines (examples)";
+    const rows = entries.map((e) => {
+        const sim = e.similarity != null ? `${Math.round(e.similarity * 100)}%` : "";
+        const changed = e.exists && e.pl_now && e.pl_now !== e.pl_shown;
+        const link = e.exists
+            ? `<a href="${memoryEntryUrl(state.projectId, e.correction_id)}" target="_blank" rel="noopener" title="Open this entry on the Memory page (new tab) - edit or delete it there">open in memory &#8599;</a>`
+            : `<span class="text-muted" title="This memory entry was deleted after the translation">deleted</span>`;
+        return `
+            <div class="memory-used-row">
+                ${sim ? `<span class="badge" title="Similarity to this bubble's source">${sim}</span>` : ""}
+                ${e.kind ? `<span class="badge">${escapeHtml(e.kind)}</span>` : ""}
+                <span class="memory-used-text">
+                    <span class="text-muted">${escapeHtml(e.en || "")}</span><br>
+                    &rarr; ${escapeHtml(changed ? e.pl_now : (e.pl_shown || e.pl_now || ""))}
+                    ${changed ? `<span class="text-muted" title="The model was given the old text">(model saw: ${escapeHtml(e.pl_shown)})</span>` : ""}
+                </span>
+                ${link}
+            </div>`;
+    }).join("");
+    const terms = glossary.length
+        ? `<div class="memory-used-row text-muted">Glossary: ${glossary.map((g) => `${escapeHtml(g.source_term)} &rarr; ${escapeHtml(g.target_term)}`).join(", ")}</div>`
+        : "";
+    target.innerHTML = `
+        <details class="memory-used-box">
+            <summary class="field-label">Used from memory: ${entries.length} ${entries.length ? `&middot; ${laneNote}` : ""}${glossary.length ? ` &middot; ${glossary.length} glossary term(s)` : ""}</summary>
+            ${rows}${terms}
+        </details>`;
 }
 
 /* ---------------- per-bubble source edit / skip / retranslate ---------------- */
@@ -1023,10 +1080,10 @@ async function saveCurrentBubble() {
     const newValue = textarea.value.trim();
 
     if (newValue === (bubble.translation || "")) {
-        // Unchanged = the user read it and moved on: confirm it once as an "approved" translation-memory entry
-        // (the backend decides whether to store it - memory_store_approved, duplicate / length gates).
+        // Unchanged = the user read it and moved on: confirm it once as REVIEWED (stamped in the page JSON for the
+        // evaluation). It does NOT go into the correction memory - that needs the explicit "Approve to memory".
         if (newValue && !state.savedThisSession.has(bubble.bubble_id)) {
-            await approveUnchanged(bubble, newValue);
+            await confirmUnchanged(bubble, newValue);
         } else {
             flashInlineStatus("No changes to save");
         }
@@ -1062,18 +1119,62 @@ async function saveCurrentBubble() {
     }
 }
  
-/** Silent "approved" confirmation of an unchanged translation. Never blocks navigation on failure. */
-async function approveUnchanged(bubble, value) {
+/** Silent "reviewed" confirmation of an unchanged translation (approve: false = no memory entry). Never blocks navigation. */
+async function confirmUnchanged(bubble, value) {
+    try {
+        await api.corrections.save(pageId, bubble.bubble_id, {
+            source_text: bubble.text,
+            ai_translation: bubble.ai_translation,
+            final_translation: value,
+            approve: false,
+        });
+        state.savedThisSession.add(bubble.bubble_id);
+    } catch (e) {
+        console.warn("[EDITOR] review confirmation not stored:", e);
+    }
+}
+
+/** Explicit "Approve to memory": an unchanged translation becomes an approved memory entry (edits: use Save). */
+async function approveCurrentBubble() {
+    if (state.selectedIndex === null) return;
+    const bubble = state.bubbles[state.selectedIndex];
+    const value = (document.getElementById("translationInput")?.value || "").trim();
+    if (!value) return;
+    if (value !== (bubble.translation || "")) {
+        await saveCurrentBubble();      // edited: that is a correction, stored as "corrected"
+        return;
+    }
     try {
         const result = await api.corrections.save(pageId, bubble.bubble_id, {
             source_text: bubble.text,
             ai_translation: bubble.ai_translation,
             final_translation: value,
+            approve: true,
         });
         state.savedThisSession.add(bubble.bubble_id);
-        if (result.correction_id) flashInlineStatus("Approved ✓");
+        renderBubbleList();
+        if (result.correction_id) {
+            flashInlineStatus("Approved to memory ✓");
+            showToast("Approved - stored in memory");
+        } else {
+            showToast("Not added to memory (duplicate, too short, or approvals are off in Settings)");
+        }
     } catch (e) {
-        console.warn("[EDITOR] approval not stored:", e);
+        showToast(`Approve failed: ${e.message}`);
+    }
+}
+
+/** memory_store_approved decides whether the "Approve to memory" button exists at all (off by default). */
+async function loadEditorSettings() {
+    try {
+        const settings = await api.settings.get();
+        state.storeApproved = settings.memory_store_approved === true;
+        const typing = document.getElementById("translationInput");
+        const untouched = !typing || state.selectedIndex === null
+            || typing.value === (state.bubbles[state.selectedIndex]?.translation || "");
+        if (state.storeApproved && state.selectedIndex !== null && untouched) renderBubbleDetail();   // never wipe typing
+    } catch (e) {
+        console.warn("[EDITOR] settings not loaded, approve button hidden:", e);
     }
 }
 
@@ -1118,6 +1219,7 @@ function offerGlossarySuggestions(suggestions) {
                     auto_detected: true, occurrences: s.occurrences,
                 });
                 showToast(`Glossary: ${s.source_term} → ${s.new_translation}`);
+                offerMemoryCleanup(state.projectId, s.old_translation, s.new_translation);
             } catch (e) {
                 showToast(`Glossary: ${e.message}`, 3500);
             }

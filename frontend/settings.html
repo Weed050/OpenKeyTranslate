@@ -69,7 +69,7 @@
  
             <div class="card">
                 <h2>Translation (BYOK)</h2>
-                <p class="text-muted">Your own API keys. Saved and applied immediately - no restart. Keys are never shown again in full.</p>
+                <p class="text-muted">Your own API keys. Every change is saved as soon as you leave the field and applied immediately - no restart. Keys are never shown again in full.</p>
                 <div class="row">
                     <label style="display:flex; align-items:center; gap:6px; margin:0;">
                         <input type="checkbox" id="translationOnCheckbox"> Translate pages (off = OCR only)
@@ -77,24 +77,32 @@
                     <button id="testTranslationBtn" title="Sends one tiny request through the active provider and key pool">Test connection</button>
                 </div>
                 <div class="row">
-                    <div class="text-muted">Active provider</div>
+                    <div class="text-muted" title="Only the keys of this provider are used (in the order below); keys of the other provider are kept for when you switch">Active provider</div>
                     <select id="providerSelect" style="max-width:200px;">
                         <option value="groq">Groq</option>
                         <option value="gemini">Gemini</option>
                     </select>
                 </div>
                 <div class="row">
-                    <div class="text-muted">Model for this provider</div>
-                    <input type="text" id="providerModelInput" style="max-width:320px;" spellcheck="false">
+                    <div class="text-muted" title="Used by every key whose own Model field is empty">Default model: Groq</div>
+                    <input type="text" id="providerModelGroq" style="max-width:320px;" spellcheck="false">
+                </div>
+                <div class="row">
+                    <div class="text-muted" title="Used by every key whose own Model field is empty">Default model: Gemini</div>
+                    <input type="text" id="providerModelGemini" style="max-width:320px;" spellcheck="false">
                 </div>
                 <div>
-                    <div class="text-muted" style="margin:8px 0 4px;">API keys for this provider (several keys = automatic rotation on rate limits)</div>
+                    <div class="text-muted" style="margin:8px 0 4px;" title="Several keys of the active provider = automatic rotation on rate limits. Different models in one pool make zero-shot vs memory pairs less comparable - every log row records the model that answered.">API keys - one row per key: name, provider, model (empty = provider default), key</div>
                     <div id="keyList"></div>
                     <button id="addKeyBtn" style="margin-top:6px;">+ Add key</button>
                 </div>
                 <div class="row">
                     <div class="text-muted">Temperature (0 = most repeatable; use 0 for the zero-shot vs memory experiment)</div>
                     <input type="text" id="temperatureInput" style="max-width:80px;" inputmode="decimal">
+                </div>
+                <div class="row">
+                    <div class="text-muted" title="Upper limit for the model's answer to ONE page (the JSON with every bubble's translation). 4096 is plenty for a manga page; raise it only if very dense pages come back cut off.">Max output tokens per page (advanced; default 4096)</div>
+                    <input type="text" id="translationMaxTokensInput" style="max-width:80px;" inputmode="numeric">
                 </div>
                 <div class="row">
                     <div class="text-muted" title="Gemini 2.5 thinking tokens count against the output limit and can cut off the JSON of a dense page. 0 = off (Flash), -1 = model default. Pro models use at least 128.">Gemini thinking budget (tokens; 0 = off, -1 = model default)</div>
@@ -126,8 +134,8 @@
                     <div class="text-muted" title="Share of content words (stopwords ignored) a fuzzy match must ALSO have in common with the line, unless its similarity is 0.90 or more. Filters 'same topic, different line' matches. 25 recommended.">Minimum content-word overlap for fuzzy matches (%, 0 = off)</div>
                     <input type="text" id="memoryLexicalInput" style="max-width:80px;" inputmode="numeric">
                 </div>
-                <label style="display:flex; align-items:center; gap:6px; margin:6px 0;" title="A translation you accept without changes is stored as an 'approved' memory entry. Edits are stored as 'corrected' and always rank first.">
-                    <input type="checkbox" id="memoryStoreApprovedCheckbox"> Also remember translations I accept unchanged (approved)
+                <label style="display:flex; align-items:center; gap:6px; margin:6px 0;" title="Shows an 'Approve to memory' button in the editor: it stores an UNCHANGED AI translation as an 'approved' memory example. Moving on from a bubble never does that. Off by default - approved entries feed the model's own text back to it; edits are always stored as 'corrected'.">
+                    <input type="checkbox" id="memoryStoreApprovedCheckbox"> Allow approving unchanged translations into memory ("Approve to memory" button in the editor)
                 </label>
                 <label style="display:flex; align-items:center; gap:6px; margin:6px 0;" title="For bubbles with a memory match the same payload is translated a second time WITHOUT the memory (same glossary and context) - the zero-shot vs memory comparison in Logs.">
                     <input type="checkbox" id="memoryAbCheckbox"> A/B experiment: also translate matched bubbles without memory (for Logs)
@@ -229,8 +237,8 @@
                 <h2>Backup &amp; move to another computer</h2>
                 <p class="text-muted">One zip with everything: database (projects, corrections, glossary, logs), settings (without this PC's folder path), the .env file and all page images + OCR results. On the new computer install the app, open this page and import the zip - everything is put in the right place automatically.</p>
                 <div class="row">
-                    <label style="display:flex; align-items:center; gap:6px; margin:0;" title="Without it the zip contains no API keys and no .env - safer to share, but you have to enter the keys again.">
-                        <input type="checkbox" id="backupSecretsCheckbox" checked> Include API keys and .env
+                    <label style="display:flex; align-items:center; gap:6px; margin:0;" title="Off by default: the zip then contains no API keys and no .env - safe to copy or share, you enter the keys again on the new computer. Tick it only for a zip that stays with you.">
+                        <input type="checkbox" id="backupSecretsCheckbox"> Include API keys and .env (keep such a zip private)
                     </label>
                 </div>
                 <div class="row">
@@ -267,6 +275,10 @@
                 <div class="row">
                     <div class="text-muted">Database file (open with "DB Browser for SQLite" to inspect corrections/logs)</div>
                     <button class="copy-btn" id="openDbFolderBtn">Open</button>
+                </div>
+                <div class="row">
+                    <div class="text-muted" title="Kept in your user app data folder, outside the project/repository folder, so API keys can never be committed">Settings file (contains your API keys)</div>
+                    <span class="text-mono" id="settingsPathLabel" style="font-size:11px; overflow-wrap:anywhere;">...</span>
                 </div>
                 <div id="logViewerBlock" class="hidden">
                     <label style="display:flex; align-items:center; gap:6px; margin:10px 0;">

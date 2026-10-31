@@ -47,11 +47,19 @@ def _mask(value: str) -> str:
     return value[:6] + "..." + value[-3:] if len(value) > 12 else "***"
 
 
+def _settings_candidates() -> list[str]:
+    """Where settings.json can be (core/config.py SETTINGS_FILE; before 2026-10-28 it was in the project folder)."""
+    app_root = (os.path.join(os.environ.get("APPDATA", ""), "OpenKeyTranslate") if os.name == "nt"
+                else os.path.join(os.path.expanduser("~"), ".openkeytranslate"))
+    paths = [os.environ.get("OKT_SETTINGS_FILE", ""), os.path.join(app_root, "settings.json"),
+             os.path.join(app_root, "legacy_settings.json.bak"), os.path.join(PROJECT_DIR, "settings.json")]
+    return [p for p in paths if p and os.path.exists(p)]
+
+
 def _real_secret_values() -> list[str]:
     """API keys from settings.json and secret-looking entries of backend/.env - only to search for them, never printed."""
     values = []
-    settings_path = os.path.join(PROJECT_DIR, "settings.json")
-    if os.path.exists(settings_path):
+    for settings_path in _settings_candidates():
         try:
             with open(settings_path, encoding="utf-8") as f:
                 data = json.load(f)

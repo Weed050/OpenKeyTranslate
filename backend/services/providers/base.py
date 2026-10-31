@@ -39,6 +39,9 @@ class TranslationProvider(ABC):
         # actually served the last request - read by translation_service.py
         # right after each call, for TranslationLog.key_label.
         self.current_key_label: str | None = None
+        # Model that served the last request: a key may carry its own "model" (Settings: one row per key), so the
+        # provider-level model is only the default. Logged per TranslationLog row (A/B pairs must use one model).
+        self.current_model: str | None = None
         # label -> time.monotonic() until which the key is skipped. A 429 is usually per-MINUTE; the old
         # permanent "exhausted" set killed translation until restart after the first burst (single-key users!).
         self._cooldown_until: dict[str, float] = {}

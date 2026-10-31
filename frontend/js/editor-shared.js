@@ -15,6 +15,7 @@ export const state = {
     bubbles: [],
     selectedIndex: null,
     savedThisSession: new Set(),
+    storeApproved: false,     // memory_store_approved: show the explicit "Approve to memory" button
     zoomFactor: 1,
     baseScale: 1,
     naturalW: 0,

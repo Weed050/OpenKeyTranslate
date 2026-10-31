@@ -119,6 +119,13 @@ export const api = {
         import: (projectId, payload) => request(`/corrections/import/${projectId}`, { method: "POST", body: JSON.stringify(payload) }),
         usage: (correctionId) => request(`/corrections/${correctionId}/usage`),
         reembed: (projectId) => request(`/corrections/reembed/${projectId}`, { method: "POST" }),
+        edit: (correctionId, finalTranslation) =>
+            request(`/corrections/${correctionId}`, { method: "PATCH", body: JSON.stringify({ final_translation: finalTranslation }) }),
+        // payload: {find, replace, mode: "word" | "prefix", ids?: [...], apply: bool} - apply=false is a preview
+        replace: (projectId, payload) =>
+            request(`/corrections/replace/${projectId}`, { method: "POST", body: JSON.stringify(payload) }),
+        // what the memory contributed to this bubble's latest AI translation (editor panel)
+        usedFor: (pageId, bubbleId) => request(`/corrections/used/${pageId}/${encodeURIComponent(bubbleId)}`),
     },
  
     glossary: {

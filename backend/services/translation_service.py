@@ -137,7 +137,7 @@ def translate_bubbles(
         return all_bubbles
 
     MEMORY_TOP_K = get_setting("memory_top_k", 3)
-    MEMORY_SIMILARITY_THRESHOLD = get_setting("memory_similarity_threshold", 0.80)
+    MEMORY_SIMILARITY_THRESHOLD = get_setting("memory_similarity_threshold", 0.67)
     MEMORY_AB_TEST_LOGGING = get_setting("memory_ab_test_logging", True)
     AB_SAMPLE_RATE = float(get_setting("memory_ab_sample_rate", 1.0))
     POSTEDIT = get_setting("glossary_postedit", True)
@@ -192,6 +192,7 @@ def translate_bubbles(
     ]
     model_output = provider.translate(texts_payload)
     shown_key_label = provider.current_key_label
+    shown_model = provider.current_model or ACTIVE_MODEL_NAME     # a key can have its own model (Settings)
 
     # 3. Terminology check + constrained post-edit (one extra call, only for bubbles that missed a glossary term).
     terms_info: dict[str, dict] = {}
@@ -235,6 +236,7 @@ def translate_bubbles(
     # 4. Counterfactual for the A/B experiment: identical payload, memory fields removed, same glossary and context.
     zero_shot_raw: dict[str, str] = {}
     zero_shot_key_label = None
+    zero_shot_model = None
     ab_sampled = MEMORY_AB_TEST_LOGGING and logging_enabled and bool(matches) and random.random() < AB_SAMPLE_RATE
     if ab_sampled:
         counterfactual_payload = context_items + [
@@ -246,6 +248,7 @@ def translate_bubbles(
         try:
             zero_shot_raw = provider.translate(counterfactual_payload)
             zero_shot_key_label = provider.current_key_label
+            zero_shot_model = provider.current_model or ACTIVE_MODEL_NAME   # != shown_model = pair not comparable
         except Exception as e:
             # the shown translation is already paid for - a failed experiment call must not fail the page
             print(f"[TRANSLATION] A/B counterfactual failed, skipped: {type(e).__name__}: {e}")
@@ -283,8 +286,11 @@ def translate_bubbles(
             injection["terms"] = terms_info[bid]
         if found:
             injection["ab"] = "counterfactual" if bid in zero_shot_raw else ("not_sampled" if not ab_sampled else "failed")
+            # log only (never sent to the model): which memory entries these were, in the order of "examples" / the
+            # one "exact" entry - the editor's "Used from memory" panel links each one to the Memory page
+            injection["correction_ids"] = [c.id for c, _ in found]
         glossary_json = json.dumps(glossary_by_bubble[bid], ensure_ascii=False) if bid in glossary_by_bubble else None
-        common = dict(page_id=page_id, bubble_id=bid, source_text=b["text"], model_used=ACTIVE_MODEL_NAME,
+        common = dict(page_id=page_id, bubble_id=bid, source_text=b["text"], model_used=shown_model,
                       run_id=run_id, glossary_terms_used=glossary_json)
 
         if found:
@@ -301,7 +307,7 @@ def translate_bubbles(
             if bid in zero_shot_raw:
                 zs_raw = zero_shot_raw[bid]
                 log_rows.append(TranslationLog(
-                    **common, variant="zero_shot",
+                    **dict(common, model_used=zero_shot_model or shown_model), variant="zero_shot",
                     output_text=match_case(b["text"], zs_raw) if MATCH_CASE else zs_raw,
                     matched_correction_id=best_correction.id, similarity_score=best_score,
                     threshold_used=threshold_used, key_label=zero_shot_key_label, memory_lane=lane,

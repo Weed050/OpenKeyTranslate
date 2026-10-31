@@ -371,3 +371,10 @@
 }
 .glossary-suggest-actions{ display: flex; gap: 6px; flex-shrink: 0; }
 .glossary-suggest-actions button{ padding: 2px 8px; font-size: 12px; }
+
+/* "Used from memory" panel under the translation (editor.js loadMemoryUsed) */
+.memory-used { margin-top: 4px; }
+.memory-used-box summary { cursor: pointer; }
+.memory-used-row { display: flex; gap: 6px; align-items: flex-start; padding: 4px 0; border-top: 1px solid var(--border); font-size: 12px; }
+.memory-used-text { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.memory-used-row a { white-space: nowrap; font-size: 11px; }

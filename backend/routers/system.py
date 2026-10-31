@@ -25,7 +25,7 @@ class OpenPathRequest(BaseModel):
 
 class ExportRequest(BaseModel):
     path: str
-    include_secrets: bool = True      # API keys in settings.json + the .env file
+    include_secrets: bool = False     # API keys in settings.json + the .env file - opt-in: a zip gets copied around
     include_models: bool = False      # HuggingFace / PaddleX caches (big, but the new PC then needs no download)
     include_logs: bool = False
 
