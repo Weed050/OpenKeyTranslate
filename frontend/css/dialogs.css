@@ -25,3 +25,11 @@
 .import-footer{ display: flex; justify-content: flex-end; gap: 8px; }
 
 .rescan-report{ white-space: pre-wrap; font-size: 12px; max-height: 50vh; overflow: auto; }
+/* checkbox rows inside dialogs (merge preview, Re-OCR options) */
+.import-dialog .checkbox-label{ display: flex; align-items: center; gap: 6px; font-size: 13px; cursor: pointer; }
+.import-dialog .checkbox-label input{ width: 16px; height: 16px; margin: 0; accent-color: var(--accent); }
+/* export dialog (js/pagepicker.js askExportOptions) */
+.export-dialog{ width: min(620px, 94vw); }
+.export-grid{ display: grid; grid-template-columns: 70px 1fr; gap: 10px var(--space-md); align-items: start; font-size: 13px; }
+.export-options{ display: flex; flex-wrap: wrap; align-items: center; gap: 6px 16px; }
+.export-options input[type="number"]{ padding: 3px 6px; }

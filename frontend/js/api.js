@@ -70,8 +70,14 @@ export const api = {
         process: (pageId) => request(`/pages/${pageId}/process`, { method: "POST" }),
         // translate=false: prefetch OCR + inpainting only; the page is translated when opened (fresh memory/glossary)
         processAsync: (pageId, translate = true) => request(`/pages/${pageId}/process-async?translate=${translate}`, { method: "POST" }),
-        reocr: (pageId) => request(`/pages/${pageId}/reocr`, { method: "POST" }),
+        // detectRotation: true / false = the page's own whole-page-rotation choice; null = keep the stored one
+        reocr: (pageId, detectRotation = null) => request(`/pages/${pageId}/reocr`, {
+            method: "POST", body: detectRotation === null ? undefined : JSON.stringify({ detect_rotation: detectRotation }),
+        }),
         reinpaint: (pageId) => request(`/pages/${pageId}/reinpaint`, { method: "POST" }),
+        // manual "Clean area" rectangles (stored in the page JSON, kept by Rebuild image / Re-OCR)
+        addCleanup: (pageId, box) => request(`/pages/${pageId}/cleanups`, { method: "POST", body: JSON.stringify({ box }) }),
+        removeCleanups: (pageId, all = false) => request(`/pages/${pageId}/cleanups?all=${all}`, { method: "DELETE" }),
         patchBubble: (pageId, bubbleId, payload) =>
             request(`/pages/${pageId}/bubbles/${bubbleId}`, { method: "PATCH", body: JSON.stringify(payload) }),
         // box (optional) = [x1, y1, x2, y2] the user drew: that exact area is read instead of the detected bubble
@@ -80,8 +86,21 @@ export const api = {
         reorderBubbles: (pageId, payload) =>
             request(`/pages/${pageId}/bubbles/reorder`, { method: "POST", body: JSON.stringify(payload) }),
         addBubble: (pageId, box) => request(`/pages/${pageId}/bubbles`, { method: "POST", body: JSON.stringify({ box }) }),
-        mergeBubble: (pageId, bubbleId, otherId) =>
-            request(`/pages/${pageId}/bubbles/${bubbleId}/merge`, { method: "POST", body: JSON.stringify({ with: otherId }) }),
+        // otherIds: one id or a list; order: every merged id in joining order (null = reading-order setting)
+        mergeBubble: (pageId, bubbleId, otherIds, order = null) =>
+            request(`/pages/${pageId}/bubbles/${bubbleId}/merge`, { method: "POST", body: JSON.stringify({ with: otherIds, order }) }),
+        bubbleLines: (pageId, bubbleId) => request(`/pages/${pageId}/bubbles/${bubbleId}/lines`),
+        // Lettering mode: text areas of the page, one bubble's placement, export of this page
+        layout: (pageId) => request(`/pages/${pageId}/layout`),
+        setLayout: (pageId, bubbleId, changes) =>
+            request(`/pages/${pageId}/bubbles/${bubbleId}/layout`, { method: "PATCH", body: JSON.stringify(changes) }),
+        exportPage: (pageId, options) => request(`/pages/${pageId}/export`, { method: "POST", body: JSON.stringify(options) }),
+        splitPreview: (pageId, bubbleId, newLines) =>
+            request(`/pages/${pageId}/bubbles/${bubbleId}/split`, { method: "POST", body: JSON.stringify({ new_lines: newLines, preview: true }) }),
+        splitBubble: (pageId, bubbleId, newLines) =>
+            request(`/pages/${pageId}/bubbles/${bubbleId}/split`, { method: "POST", body: JSON.stringify({ new_lines: newLines }) }),
+        mergePreview: (pageId, bubbleId, otherIds, order = null) =>
+            request(`/pages/${pageId}/bubbles/${bubbleId}/merge`, { method: "POST", body: JSON.stringify({ with: otherIds, order, preview: true }) }),
         retranslateBubble: (pageId, bubbleId) =>
             request(`/pages/${pageId}/bubbles/${bubbleId}/retranslate`, { method: "POST" }),
         status: (pageId) => request(`/pages/${pageId}/status`),

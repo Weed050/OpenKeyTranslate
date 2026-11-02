@@ -232,24 +232,100 @@ function setupBulkDelete(byChapter) {
 
 /* --------------------------- export translated pages --------------------------- */
 
+const EXPORT_KEY = "okt-export-options";      // shared with the editor's "Export page" (editor-lettering.js)
+
+function exportPrefs() {
+    try {
+        return { content: "translated", format: "png", quality: 92, zip: false, includeUntranslated: false,
+                 ...JSON.parse(localStorage.getItem(EXPORT_KEY) || "{}") };
+    } catch {
+        return { content: "translated", format: "png", quality: 92, zip: false, includeUntranslated: false };
+    }
+}
+
+/** Export dialog: what, format, where (project's exported/ folder or another one), ZIP. Resolves to options or null. */
+function askExportOptions(label) {
+    const prefs = exportPrefs();
+    return new Promise((resolve) => {
+        let customPath = "";
+        const dlg = document.createElement("dialog");
+        dlg.className = "import-dialog export-dialog";
+        const radio = (name, value, text, checked, title = "") =>
+            `<label class="checkbox-label" title="${title}"><input type="radio" name="${name}" value="${value}" ${checked ? "checked" : ""}> ${text}</label>`;
+        dlg.innerHTML = `
+            <h2 style="margin:0;">Export pages - ${escapeHtml(label)}</h2>
+            <div class="export-grid">
+                <span class="text-muted">What</span>
+                <div class="export-options">
+                    ${radio("content", "translated", "With the translation", prefs.content === "translated")}
+                    ${radio("content", "clean", "Clean (text erased)", prefs.content === "clean", "For lettering in another program")}
+                    ${radio("content", "both", "Both (clean copies get _clean)", prefs.content === "both")}
+                </div>
+                <span class="text-muted">Format</span>
+                <div class="export-options">
+                    ${radio("format", "png", "PNG (lossless)", prefs.format === "png")}
+                    ${radio("format", "jpg", "JPG, quality", prefs.format === "jpg")}
+                    <input type="number" id="exportQuality" min="50" max="100" value="${prefs.quality}" style="width:70px;">
+                </div>
+                <span class="text-muted">Where</span>
+                <div class="export-options">
+                    ${radio("where", "project", "Project folder &rsaquo; exported", true, "Next to raw and processed - one sub-folder per chapter")}
+                    ${radio("where", "custom", "Another folder...", false)}
+                    <span class="text-mono text-muted" id="exportPath"></span>
+                </div>
+                <span></span>
+                <div class="export-options">
+                    <label class="checkbox-label"><input type="checkbox" id="exportZip" ${prefs.zip ? "checked" : ""}> Pack into one ZIP file</label>
+                    <label class="checkbox-label" title="Otherwise pages without any translation are left out"><input type="checkbox" id="exportUntranslated" ${prefs.includeUntranslated ? "checked" : ""}> Also pages without a translation (clean)</label>
+                </div>
+            </div>
+            <div class="import-footer">
+                <button data-act="cancel">Cancel</button>
+                <button class="primary" data-act="ok">Export</button>
+            </div>`;
+        document.body.appendChild(dlg);
+        let answer = null;
+        dlg.querySelectorAll('input[name="where"]').forEach((r) => r.addEventListener("change", async () => {
+            if (r.value !== "custom" || !r.checked) return;
+            try {
+                customPath = (await api.projects.selectFolder()).path || "";
+            } catch (e) {
+                alert(`Couldn't open the folder dialog: ${e.message}`);
+            }
+            if (!customPath) dlg.querySelector('input[name="where"][value="project"]').checked = true;
+            dlg.querySelector("#exportPath").textContent = customPath;
+        }));
+        dlg.querySelector('[data-act="cancel"]').addEventListener("click", () => dlg.close());
+        dlg.querySelector('[data-act="ok"]').addEventListener("click", () => {
+            const value = (name) => dlg.querySelector(`input[name="${name}"]:checked`).value;
+            const opts = {
+                content: value("content"), format: value("format"),
+                quality: Math.max(50, Math.min(100, parseInt(dlg.querySelector("#exportQuality").value, 10) || 92)),
+                zip: dlg.querySelector("#exportZip").checked, includeUntranslated: dlg.querySelector("#exportUntranslated").checked,
+            };
+            try { localStorage.setItem(EXPORT_KEY, JSON.stringify(opts)); } catch { /* ignore */ }
+            answer = { ...opts, path: value("where") === "custom" ? customPath : "" };
+            dlg.close();
+        });
+        dlg.addEventListener("close", () => { dlg.remove(); resolve(answer); });
+        dlg.showModal();
+    });
+}
+
 async function exportTranslatedPages() {
     const btn = document.getElementById("exportPagesBtn");
     const chapterIds = [...el.pagePickerBody.querySelectorAll("input.chapter-select:checked")].map((b) => parseInt(b.dataset.chapterId, 10));
-    let dest;
-    try {
-        dest = (await api.projects.selectFolder()).path;
-    } catch (e) {
-        alert(`Couldn't open the folder dialog: ${e.message}`);
-        return;
-    }
-    if (!dest) return;
     const label = chapterIds.length ? `${chapterIds.length} selected chapter(s)` : "all chapters";
-    if (!confirm(`Export the translated pages of ${label} as PNG files into:\n${dest}\n\nPages with no translation are skipped.`)) return;
+    const opts = await askExportOptions(label);
+    if (!opts) return;
 
     const original = btn.textContent;
     btn.disabled = true;
     try {
-        const { job_id } = await api.projects.exportPages(state.projectId, { path: dest, chapter_ids: chapterIds });
+        const { job_id } = await api.projects.exportPages(state.projectId, {
+            path: opts.path, chapter_ids: chapterIds, content: opts.content, format: opts.format, quality: opts.quality,
+            zip: opts.zip, include_untranslated: opts.includeUntranslated,
+        });
         for (;;) {
             const job = await api.system.job(job_id);
             if (job.state === "running") {

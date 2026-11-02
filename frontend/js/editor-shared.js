@@ -14,8 +14,11 @@ export const state = {
     pageId,
     bubbles: [],
     selectedIndex: null,
-    savedThisSession: new Set(),
+    unsavedId: null,          // bubble_id whose open textarea differs from its saved translation ("unsaved" marker)
     storeApproved: false,     // memory_store_approved: show the explicit "Approve to memory" button
+    mergePicks: [],           // bubble ids Shift+clicked to be merged into the selected bubble
+    detectRotation: false,    // this page's "whole page is rotated" OCR choice (Re-OCR dialog)
+    cleanups: [],             // this page's manual "Clean area" rectangles ({box}), newest last
     zoomFactor: 1,
     baseScale: 1,
     naturalW: 0,

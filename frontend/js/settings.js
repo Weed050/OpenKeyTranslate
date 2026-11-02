@@ -7,12 +7,16 @@
  
 import { api } from "./api.js";
 import { renderSidebar } from "./nav.js";
+import { ACTIONS, SCOPES, currentBindings, loadOverrides, saveOverrides, validateBinding, comboFromEvent,
+         formatCombo, normalizeCombo } from "./shortcuts.js";
  
 let appSettings = {};
 
 window.addEventListener("DOMContentLoaded", () => {
     renderSidebar(null);
-    initThemeSelect();
+    initAppearance();
+    initShortcuts();
+    initSettingsToc();
     loadSettings();
     wireAutosave();
 });
@@ -33,7 +37,7 @@ const SECTION_FIELDS = {
              "memoryLexicalInput", "memoryAbRateInput", "memoryStoreApprovedCheckbox", "memoryAbCheckbox",
              "glossaryPosteditCheckbox", "glossarySuggestCheckbox", "matchCaseCheckbox"],
     ocr: ["ocrTextfixCheckbox", "ocrSkipNumericCheckbox", "ocrSkipSymbolsCheckbox", "inpaintInteriorCheckbox",
-          "ocrRefineCheckbox", "ocrScanCheckbox", "inpaintModeSelect", "bubbleOrderSelect"],
+          "ocrRefineCheckbox", "ocrScanCheckbox", "ocrDetectRotationCheckbox", "inpaintModeSelect", "bubbleOrderSelect"],
     typesetting: ["typesettingFontInput", "typesettingUpperCheckbox"],
     ignore: ["ignorePatternsInput"],
 };
@@ -79,13 +83,226 @@ function savedNow() {
     return `Saved \u2713 ${new Date().toLocaleTimeString()}`;
 }
 
-/** Appearance card: browser-local preference (js/theme.js), not part of settings.json - applies instantly. */
-function initThemeSelect() {
-    const select = document.getElementById("themeSelect");
-    if (!select || !window.oktTheme) return;
-    select.value = window.oktTheme.get();
-    select.addEventListener("change", () => window.oktTheme.set(select.value));
-    window.oktTheme.onChange((pref) => { select.value = pref; });   // sidebar toggle / other tab
+/* ------------------------------ appearance ------------------------------ */
+
+/**
+ * Appearance card: color scheme (System / Light / Dark), the palette of the light look, the palette of the dark look
+ * and the surface tint - browser-local preferences of js/theme.js (not part of settings.json) that apply instantly.
+ * The previews are drawn with the real tokens: an element with data-theme / data-palette gets that scheme's colors
+ * (css/tokens.css), so a light preview can sit inside a dark page without any color being repeated here.
+ */
+function initAppearance() {
+    const theme = window.oktTheme;
+    const schemeGrid = document.getElementById("schemeGrid");
+    const grids = { light: document.getElementById("paletteGridLight"), dark: document.getElementById("paletteGridDark") };
+    const tintSwitch = document.getElementById("tintSwitch");
+    if (!theme || !schemeGrid || !grids.light || !grids.dark || !tintSwitch) return;
+
+    const paletteAttr = (id) => (id === "default" ? "" : ` data-palette="${id}"`);
+    const mock = (scheme, palette) => `
+        <span class="mock" data-theme="${scheme}"${paletteAttr(palette)}>
+            <span class="mock-side"><i></i><i></i><i></i></span>
+            <span class="mock-main">
+                <i class="mock-pill"></i><i class="mock-line"></i><i class="mock-line short"></i>
+                <span class="mock-input"><i class="mock-dot"></i></span>
+            </span>
+            <span class="mock-card"><i></i><i></i><i></i></span>
+        </span>`;
+
+    const SCHEMES = [
+        { id: "system", label: "System", hint: "Follows the light / dark setting of your OS" },
+        { id: "light", label: "Light", hint: "Always light" },
+        { id: "dark", label: "Dark", hint: "Always dark" },
+    ];
+
+    const TINTS = [
+        { id: "off", label: "Off", hint: "Neutral grey surfaces; only the accent color changes" },
+        { id: "subtle", label: "Subtle", hint: "A hint of the theme color in backgrounds and panels (default)" },
+        { id: "strong", label: "Strong", hint: "Backgrounds and panels clearly in the theme color" },
+    ];
+
+    function render() {
+        const scheme = theme.get();
+        const light = theme.getPalette("light");
+        const dark = theme.getPalette("dark");
+        const tint = theme.getTint();
+
+        schemeGrid.innerHTML = SCHEMES.map((s) => `
+            <button type="button" class="scheme-card${s.id === scheme ? " selected" : ""}" role="radio"
+                    aria-checked="${s.id === scheme}" data-scheme="${s.id}" title="${s.hint}">
+                <span class="scheme-preview${s.id === "system" ? " split" : ""}">
+                    ${s.id === "system" ? mock("light", light) + mock("dark", dark) : mock(s.id, s.id === "light" ? light : dark)}
+                </span>
+                <span class="scheme-label">${s.label}</span>
+            </button>`).join("");
+
+        for (const [look, grid] of Object.entries(grids)) {
+            const chosen = look === "light" ? light : dark;
+            grid.innerHTML = theme.palettes.map((p) => `
+                <button type="button" class="palette-tile${p.id === chosen ? " selected" : ""}" role="radio"
+                        aria-checked="${p.id === chosen}" data-palette-id="${p.id}" data-look="${look}"
+                        title="${p.label} (${look}): ${p.hint}">
+                    <span class="palette-swatch" data-theme="${look}"${paletteAttr(p.id)}></span>
+                    <span class="palette-label">${p.label}</span>
+                </button>`).join("");
+        }
+
+        tintSwitch.innerHTML = TINTS.map((t) => `
+            <button type="button" class="${t.id === tint ? "selected" : ""}" role="radio" aria-checked="${t.id === tint}"
+                    data-tint="${t.id}" title="${t.hint}">${t.label}</button>`).join("");
+    }
+
+    schemeGrid.addEventListener("click", (e) => {
+        const card = e.target.closest("[data-scheme]");
+        if (card) theme.set(card.dataset.scheme);
+    });
+    Object.values(grids).forEach((grid) => grid.addEventListener("click", (e) => {
+        const tile = e.target.closest("[data-palette-id]");
+        if (tile) theme.setPalette(tile.dataset.paletteId, tile.dataset.look);
+    }));
+    tintSwitch.addEventListener("click", (e) => {
+        const btn = e.target.closest("[data-tint]");
+        if (btn) theme.setTint(btn.dataset.tint);
+    });
+    theme.onChange(render);   // sidebar toggle, OS switch, another tab
+    render();
+}
+
+/* ------------------------------ keyboard shortcuts ------------------------------ */
+
+/**
+ * Keyboard shortcuts card: every action of js/shortcuts.js with its key. "Change" listens for the next key press
+ * (Esc = cancel, Backspace = no key); the combo is checked by validateBinding (collisions where both actions could
+ * fire, browser keys, the while-typing rule) before it is stored. Browser-local, applies to pages opened afterwards.
+ */
+function initShortcuts() {
+    const list = document.getElementById("shortcutList");
+    const status = document.getElementById("shortcutStatus");
+    if (!list) return;
+    let capturing = null;          // action id waiting for a key press
+
+    function render(errorFor = null, error = "") {
+        const bindings = currentBindings();
+        const overrides = loadOverrides();
+        list.innerHTML = ACTIONS.map((a) => {
+            const combo = bindings[a.id];
+            const custom = Object.prototype.hasOwnProperty.call(overrides, a.id);
+            return `
+            <div class="shortcut-row${capturing === a.id ? " capturing" : ""}">
+                <span class="shortcut-label">${a.label}</span>
+                <span class="shortcut-scope text-muted">${SCOPES[a.scope]}${a.whileTyping ? ", also while typing" : ""}</span>
+                <span class="shortcut-key">${capturing === a.id ? "Press keys... (Esc cancels, Backspace = no key)" : combo ? `<kbd>${formatCombo(combo)}</kbd>` : '<span class="text-muted">no key</span>'}${custom ? ' <span class="badge" title="Changed from the default">custom</span>' : ""}</span>
+                <span class="shortcut-actions">
+                    <button type="button" data-change="${a.id}">${capturing === a.id ? "Cancel" : "Change"}</button>
+                    <button type="button" data-default="${a.id}" ${custom ? "" : "disabled"} title="Back to ${formatCombo(a.keys)}">Default</button>
+                </span>
+                ${errorFor === a.id ? `<span class="shortcut-error">${error}</span>` : ""}
+            </div>`;
+        }).join("");
+    }
+
+    function store(id, combo) {
+        const overrides = loadOverrides();
+        const action = ACTIONS.find((a) => a.id === id);
+        if (normalizeCombo(combo) === normalizeCombo(action.keys)) delete overrides[id];
+        else overrides[id] = combo;
+        saveOverrides(overrides);
+    }
+
+    window.addEventListener("keydown", (e) => {
+        if (!capturing) return;
+        e.preventDefault();
+        e.stopPropagation();
+        const id = capturing;
+        if (e.key === "Escape") { capturing = null; render(); return; }
+        const combo = e.key === "Backspace" ? "" : comboFromEvent(e);
+        if (combo === null) return;                                  // a modifier alone: wait for the key
+        const check = validateBinding(id, combo);
+        if (!check.ok) { render(id, check.error); return; }
+        capturing = null;
+        store(id, combo);
+        render();
+        status.textContent = `${savedNow()} - applies to pages opened from now on`;
+    }, true);
+
+    list.addEventListener("click", (e) => {
+        const change = e.target.closest("[data-change]");
+        const def = e.target.closest("[data-default]");
+        if (change) {
+            capturing = capturing === change.dataset.change ? null : change.dataset.change;
+            render();
+        } else if (def) {
+            const id = def.dataset.default;
+            const action = ACTIONS.find((a) => a.id === id);
+            const check = validateBinding(id, action.keys, { ...currentBindings(), [id]: "" });
+            if (!check.ok) { render(id, `${check.error} - change that one first`); return; }
+            store(id, action.keys);
+            render();
+        }
+    });
+    document.getElementById("resetShortcutsBtn").addEventListener("click", () => {
+        if (!confirm("Put every keyboard shortcut back to its default?")) return;
+        saveOverrides({});
+        capturing = null;
+        render();
+        status.textContent = "All shortcuts are back to their defaults";
+    });
+    render();
+}
+
+/* ------------------------------ section list (right side) ------------------------------ */
+
+/**
+ * The sticky list of settings sections on the right (css/settings.css): one link per card, from the card's heading,
+ * so a new card shows up by itself. A click scrolls the card into view; while scrolling, the card at the top of the
+ * view is highlighted. The scrolling element is <main class="main-content">, not the window.
+ */
+function initSettingsToc() {
+    const toc = document.getElementById("settingsToc");
+    const scroller = document.querySelector(".main-content");
+    const cards = [...document.querySelectorAll(".settings-cards > .card")].filter((c) => c.querySelector("h2"));
+    if (!toc || !scroller || !cards.length) return;
+
+    const slug = (text) => text.toLowerCase().replace(/&/g, "and").replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+    toc.innerHTML = `<div class="settings-toc-title">On this page</div>`;
+    const links = cards.map((card) => {
+        const title = card.querySelector("h2").textContent.trim();
+        card.id = card.id || `section-${slug(title)}`;
+        const a = document.createElement("a");
+        a.href = `#${card.id}`;
+        // short label: <h2 data-toc="..."> or the heading without "(...)": "Text on the page (preview and export)"
+        a.textContent = card.querySelector("h2").dataset.toc || title.replace(/\s*\(.*\)$/, "");
+        a.title = title;
+        a.addEventListener("click", (e) => {
+            e.preventDefault();
+            card.scrollIntoView({ behavior: "smooth", block: "start" });
+            history.replaceState(null, "", a.href);
+            setActive(a);
+        });
+        toc.appendChild(a);
+        return a;
+    });
+
+    function setActive(link) {
+        links.forEach((a) => a.classList.toggle("active", a === link));
+    }
+
+    let ticking = false;
+    function update() {
+        ticking = false;
+        const top = scroller.getBoundingClientRect().top + 80;
+        let current = 0;
+        cards.forEach((card, i) => { if (card.getBoundingClientRect().top <= top) current = i; });
+        if (scroller.scrollTop + scroller.clientHeight >= scroller.scrollHeight - 4) current = cards.length - 1;   // bottom reached
+        setActive(links[current]);
+    }
+    scroller.addEventListener("scroll", () => {
+        if (!ticking) { ticking = true; requestAnimationFrame(update); }
+    }, { passive: true });
+
+    const fromHash = cards.findIndex((c) => `#${c.id}` === location.hash);
+    if (fromHash > 0) cards[fromHash].scrollIntoView({ block: "start" });
+    update();
 }
  
 async function loadSettings() {
@@ -113,6 +330,7 @@ async function loadSettings() {
         document.getElementById("inpaintInteriorCheckbox").checked = appSettings.inpaint_use_interior !== false;
         document.getElementById("ocrRefineCheckbox").checked = appSettings.ocr_refine !== false;
         document.getElementById("ocrScanCheckbox").checked = appSettings.ocr_scan_missed_bubbles === true;
+        document.getElementById("ocrDetectRotationCheckbox").checked = appSettings.ocr_detect_page_rotation === true;
         document.getElementById("typesettingFontInput").value = appSettings.typesetting_font || "";
         document.getElementById("typesettingUpperCheckbox").checked = appSettings.typesetting_uppercase !== false;
         document.getElementById("inpaintModeSelect").value = appSettings.inpaint_mode || "glyph";
@@ -459,6 +677,7 @@ async function saveOcrOptions() {
             inpaint_use_interior: document.getElementById("inpaintInteriorCheckbox").checked,
             ocr_refine: document.getElementById("ocrRefineCheckbox").checked,
             ocr_scan_missed_bubbles: document.getElementById("ocrScanCheckbox").checked,
+            ocr_detect_page_rotation: document.getElementById("ocrDetectRotationCheckbox").checked,
             inpaint_mode: document.getElementById("inpaintModeSelect").value,
             bubble_order: document.getElementById("bubbleOrderSelect").value,
         });

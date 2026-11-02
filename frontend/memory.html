@@ -10,6 +10,8 @@
     <script src="js/theme.js"></script>
     <link rel="stylesheet" href="css/base.css">
     <link rel="stylesheet" href="css/layout.css">
+    <link rel="stylesheet" href="css/help.css">
+    <script src="js/help.js" defer></script>
     <style>
         .tab-bar { display:flex; gap:4px; margin-bottom:16px; border-bottom:1px solid var(--border); }
         .tab-btn {
@@ -19,7 +21,28 @@
         .tab-btn:hover { color:var(--text-primary); background:transparent; }
         .tab-btn.active { color:var(--text-primary); border-bottom-color:var(--accent); }
  
-        .item-row { border: 1px solid var(--border); border-radius: var(--radius-sm); margin-bottom: 8px; overflow: hidden; }
+        .item-row {
+            border: 1px solid var(--border); border-radius: var(--radius-sm); margin-bottom: 8px; overflow: hidden;
+            background: var(--bg-panel); box-shadow: var(--card-shadow);
+        }
+
+        /* toolbar button that opens a tool panel: shows "on" while its panel is open */
+        button.active { background: var(--accent-soft); border-color: var(--accent); color: var(--text-primary); }
+
+        /* Find & replace: a tool panel, deliberately unlike the entry rows (accent edge, own header, close button) */
+        .tool-panel {
+            margin-bottom: 16px; padding: 12px 14px 14px;
+            background: var(--bg-panel-2); border: 1px solid var(--border-strong); border-left: 3px solid var(--accent);
+            border-radius: var(--radius); box-shadow: var(--card-shadow);
+            display: flex; flex-direction: column; gap: 8px;
+        }
+        .tool-panel-head { display: flex; align-items: center; gap: 8px; }
+        .tool-panel-body { display: flex; flex-direction: column; gap: 8px; }
+        .tool-panel-head h3 { margin: 0; color: var(--text-primary); font-size: 14px; font-weight: 600; }
+        .tool-panel-head .icon-btn { margin-left: auto; font-size: 16px; line-height: 1; padding: 2px 9px; }
+        .tool-panel-label { font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--accent); border: 1px solid var(--accent); border-radius: 8px; padding: 0 6px; }
+
+        .list-heading { display: flex; align-items: baseline; gap: 8px; margin: 4px 0 8px; font-size: 12px; color: var(--text-muted); }
         .item-row summary {
             display: flex; align-items: center; gap: 12px; padding: 10px 12px;
             cursor: pointer; list-style: none; font-size: 13px;
@@ -103,12 +126,18 @@
                     <button id="exportMemoryBtn">Export JSON</button>
                     <input type="file" id="importMemoryFile" accept="application/json" class="hidden">
                     <button id="importMemoryBtn">Import JSON</button>
+                    <button id="replaceToggleBtn" aria-expanded="false" aria-controls="memoryReplaceBox" title="Change a word in many stored translations at once (e.g. WIWERN -> WYWERN), with a preview">Find &amp; replace...</button>
                     <button id="reembedMemoryBtn" title="Recompute the search vectors of all entries from the cleaned-up source text (OCR fixes like SQUAD- RON -> SQUADRON). Run once after updating.">Re-embed memory</button>
                 </div>
  
-                <details id="memoryReplaceBox" class="item-row" style="margin-bottom:12px;">
-                    <summary><span class="item-summary-text">Find &amp; replace in memory</span></summary>
-                    <div class="item-body">
+                <section id="memoryReplaceBox" class="tool-panel hidden" aria-label="Find and replace in memory">
+                    <div class="tool-panel-head">
+                        <span class="tool-panel-label">Tool</span>
+                        <h3>Find &amp; replace in memory</h3>
+                        <button type="button" class="help-chip" id="replaceHelpBtn" title="Help: Memory &amp; glossary">?</button>
+                        <button type="button" class="icon-btn" id="replaceCloseBtn" title="Close" aria-label="Close find and replace">&times;</button>
+                    </div>
+                    <div class="tool-panel-body">
                         <p class="text-muted" style="margin:0;">Changes the stored final translations, e.g. a term you changed your mind about (WIWERN &rarr; WYWERN). Preview first, untick what should stay. The first-saved text of every changed entry is kept for the logs.</p>
                         <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
                             <input type="text" id="replaceFindInput" placeholder="Find, e.g. WIWERN" style="max-width:200px;">
@@ -121,8 +150,9 @@
                         </div>
                         <div id="replacePreview"></div>
                     </div>
-                </details>
+                </section>
 
+                <div class="list-heading">Stored entries <span>- click one to see, edit or delete it</span></div>
                 <div id="correctionList"></div>
             </div>
  

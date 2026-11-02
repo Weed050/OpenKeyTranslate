@@ -111,3 +111,66 @@ label { display: block; font-size: 12px; color: var(--text-secondary); margin-bo
  
 .field-label { font-size: 11px; color: var(--text-muted); }
 .field-value { font-size: 13px; color: var(--text-primary); background: var(--bg-panel-2); border-radius: var(--radius-sm); padding: 6px 10px; }
+/* Review status of a bubble (editor bubble list + its legend in the Help dialog, js/help.js): a small tinted square
+   with an icon. The icon is a CSS mask, so it takes the marker's own color (currentColor) in every theme. */
+.status-mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 5px;
+  flex-shrink: 0;
+  vertical-align: middle;
+}
+.status-mark::before {
+  content: "";
+  width: 12px;
+  height: 12px;
+  background: currentColor;
+  -webkit-mask: var(--mark-icon) center / contain no-repeat;
+  mask: var(--mark-icon) center / contain no-repeat;
+}
+.status-mark.edited {
+  color: var(--edited);
+  background: var(--edited-soft);
+  --mark-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z'/%3E%3C/svg%3E");
+}
+.status-mark.accepted {
+  color: var(--success);
+  background: var(--success-soft);
+  --mark-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='3.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M20 6 9 17l-5-5'/%3E%3C/svg%3E");
+}
+.status-mark.unsaved { color: var(--warn); background: var(--warn-soft); }
+.status-mark.unsaved::before { width: 8px; height: 8px; border-radius: 50%; -webkit-mask: none; mask: none; }
+
+/* ---------- shared small components: segmented switch (Settings > Appearance, editor mode bar, Lettering panel) and a key cap ---------- */
+
+.segmented {
+  display: inline-flex;
+  padding: 2px;
+  background: var(--bg-sunken);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+.segmented button {
+  padding: 4px 12px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+}
+.segmented button:hover { color: var(--text-primary); background: var(--bg-hover); }
+.segmented button.selected { color: var(--accent-text); background: var(--accent); }
+kbd {
+  display: inline-block;
+  padding: 1px 6px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-primary);
+  background: var(--bg-sunken);
+  border: 1px solid var(--border-strong);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+}

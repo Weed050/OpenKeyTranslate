@@ -10,6 +10,10 @@
     <script src="js/theme.js"></script>
     <link rel="stylesheet" href="css/base.css">
     <link rel="stylesheet" href="css/layout.css">
+    <link rel="stylesheet" href="css/appearance.css">
+    <link rel="stylesheet" href="css/settings.css">
+    <link rel="stylesheet" href="css/help.css">
+    <script src="js/help.js" defer></script>
 </head>
 <body>
  
@@ -35,6 +39,8 @@
         </nav>
  
         <main class="main-content">
+          <div class="settings-layout">
+           <div class="settings-cards">
             <div class="page-header">
                 <h1>Settings</h1>
             </div>
@@ -57,16 +63,48 @@
 
             <div class="card">
                 <h2>Appearance</h2>
-                <div class="row">
-                    <div class="text-muted">Color theme (System follows your OS light/dark setting; printing always uses Light)</div>
-                    <select id="themeSelect" style="max-width:200px;">
-                        <option value="system">System</option>
-                        <option value="light">Light</option>
-                        <option value="dark">Dark</option>
-                    </select>
+                <p class="text-muted">Stored in this browser only and applied at once. Printing always uses the neutral light look.</p>
+                <div class="appearance-row">
+                    <div class="appearance-row-label">Color scheme</div>
+                    <div class="scheme-grid" id="schemeGrid" role="radiogroup" aria-label="Color scheme"></div>
+                </div>
+                <div class="appearance-row">
+                    <div class="appearance-row-label">Light theme colors<small>used while the app is light</small></div>
+                    <div class="palette-grid" id="paletteGridLight" role="radiogroup" aria-label="Colors of the light theme"></div>
+                </div>
+                <div class="appearance-row">
+                    <div class="appearance-row-label">Dark theme colors<small>used while the app is dark</small></div>
+                    <div class="palette-grid" id="paletteGridDark" role="radiogroup" aria-label="Colors of the dark theme"></div>
+                </div>
+                <div class="appearance-row">
+                    <div class="appearance-row-label">Surface tint</div>
+                    <div>
+                        <div class="segmented" id="tintSwitch" role="radiogroup" aria-label="Surface tint"></div>
+                        <p class="appearance-note">How much of the theme color goes into backgrounds and panels. The accent (buttons, selection) is the same at every level; Slate and Ink stay neutral.</p>
+                    </div>
                 </div>
             </div>
  
+            <div class="card">
+                <h2>Editor</h2>
+                <div class="row">
+                    <div class="text-muted">Polish spellcheck in translation text field (browser's built-in dictionary - needs a Polish language pack in your OS/browser to actually underline anything)</div>
+                    <label style="display:flex; align-items:center; gap:6px;">
+                        <input type="checkbox" id="spellcheckSettingCheckbox"> Enable
+                    </label>
+                </div>
+            </div>
+
+            <div class="card">
+                <h2 data-toc="Shortcuts">Keyboard shortcuts</h2>
+                <p class="text-muted">Stored in this browser only. A key cannot be given twice where both actions could fire, nor taken from the browser; an action that also works while typing needs Ctrl or Alt. Fixed: Esc cancels, Shift+click picks bubbles to merge, Ctrl+scroll zooms.</p>
+                <div id="shortcutList" class="shortcut-list"></div>
+                <div style="display:flex; gap:8px; align-items:center; margin-top:10px;">
+                    <button id="resetShortcutsBtn">Reset all to default</button>
+                    <span class="text-muted" id="shortcutStatus"></span>
+                </div>
+            </div>
+
             <div class="card">
                 <h2>Translation (BYOK)</h2>
                 <p class="text-muted">Your own API keys. Every change is saved as soon as you leave the field and applied immediately - no restart. Keys are never shown again in full.</p>
@@ -205,6 +243,11 @@
                         <input type="checkbox" id="ocrScanCheckbox"> Look for bubbles the OCR did not find at all (experimental)
                     </label>
                 </div>
+                <div class="row">
+                    <label style="display:flex; align-items:center; gap:6px; margin:0;" title="PaddleOCR's whole-image orientation step. Off: on upright manga it wrongly turned 12 of 67 page strips in a test and garbled their text. Sideways text inside a page is read without it. For one sideways page use Re-OCR in the editor -> 'The whole page is rotated'.">
+                        <input type="checkbox" id="ocrDetectRotationCheckbox"> Detect whole-page rotation on every page (only for scans that lie sideways)
+                    </label>
+                </div>
                 <p class="text-muted">Skipped bubbles stay in the editor list (you can still force-translate one) but are not sent to the LLM and their original pixels are NOT erased. Applies to pages processed from now on; use <b>Re-OCR</b> in the editor for existing pages.</p>
                 <button id="saveOcrOptionsBtn" class="primary">Save</button>
                 <p class="text-muted" id="ocrOptionsStatus" style="margin-top:10px;"></p>
@@ -234,7 +277,7 @@
             </div>
  
             <div class="card">
-                <h2>Backup &amp; move to another computer</h2>
+                <h2 data-toc="Backup &amp; moving">Backup &amp; move to another computer</h2>
                 <p class="text-muted">One zip with everything: database (projects, corrections, glossary, logs), settings (without this PC's folder path), the .env file and all page images + OCR results. On the new computer install the app, open this page and import the zip - everything is put in the right place automatically.</p>
                 <div class="row">
                     <label style="display:flex; align-items:center; gap:6px; margin:0;" title="Off by default: the zip then contains no API keys and no .env - safe to copy or share, you enter the keys again on the new computer. Tick it only for a zip that stays with you.">
@@ -287,15 +330,9 @@
                     <pre id="logViewerContent" class="text-mono" style="max-height:300px; overflow-y:auto; background:var(--bg-panel-2); padding:10px; border-radius:var(--radius-sm); font-size:11px; white-space:pre-wrap;"></pre>
                 </div>
             </div>
-            <div class="card">
-                <h2>Editor</h2>
-                <div class="row">
-                    <div class="text-muted">Polish spellcheck in translation text field (browser's built-in dictionary - needs a Polish language pack in your OS/browser to actually underline anything)</div>
-                    <label style="display:flex; align-items:center; gap:6px;">
-                        <input type="checkbox" id="spellcheckSettingCheckbox"> Enable
-                    </label>
-                </div>
-            </div>
+           </div>
+           <nav class="settings-toc" id="settingsToc" aria-label="Settings sections"></nav>
+          </div>
         </main>
     </div>
  

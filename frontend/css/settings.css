@@ -1,0 +1,66 @@
+/* frontend/css/settings.css
+   Settings page layout: the cards in one column of a readable width, and on the right a sticky list of the sections
+   (built by js/settings.js from the cards' headings) that scrolls to a section and highlights the one in view.
+   Below ~1100 px of window width there is no room for it: the list is hidden and the cards take the full width. */
+
+.settings-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 980px) 190px;
+  justify-content: center;
+  align-items: start;
+  gap: var(--space-lg);
+}
+.settings-cards { min-width: 0; }
+.settings-cards > .card { scroll-margin-top: var(--space-md); }
+
+.settings-toc {
+  position: sticky;
+  top: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: var(--space-sm) 0;
+  font-size: 13px;
+}
+.settings-toc-title {
+  margin: 0 0 var(--space-xs);
+  padding-left: 11px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+.settings-toc a {
+  display: block;
+  padding: 5px 8px 5px 10px;
+  color: var(--text-secondary);
+  text-decoration: none;
+  border-left: 2px solid var(--border);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+}
+.settings-toc a:hover { color: var(--text-primary); background: var(--bg-hover); }
+.settings-toc a.active { color: var(--accent); border-left-color: var(--accent); background: var(--accent-soft); font-weight: 500; }
+
+@media (max-width: 1100px) {
+  .settings-layout { grid-template-columns: minmax(0, 1fr); }
+  .settings-toc { display: none; }
+}
+
+/* Keyboard shortcuts card (js/settings.js initShortcuts) */
+.shortcut-list { display: flex; flex-direction: column; }
+.shortcut-row {
+  display: grid;
+  grid-template-columns: minmax(180px, 1.2fr) minmax(150px, 1fr) minmax(170px, 1fr) auto;
+  gap: var(--space-sm);
+  align-items: center;
+  padding: 6px 0;
+  border-top: 1px solid var(--border);
+  font-size: 13px;
+}
+.shortcut-row:first-child { border-top: none; }
+.shortcut-row.capturing { background: var(--accent-soft); }
+.shortcut-scope { font-size: 12px; }
+.shortcut-actions { display: flex; gap: 6px; }
+.shortcut-actions button { padding: 3px 10px; font-size: 12px; }
+.shortcut-error { grid-column: 1 / -1; color: var(--danger); font-size: 12px; }

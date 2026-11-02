@@ -10,6 +10,8 @@
     <script src="js/theme.js"></script>
     <link rel="stylesheet" href="css/base.css">
     <link rel="stylesheet" href="css/layout.css">
+    <link rel="stylesheet" href="css/help.css">
+    <script src="js/help.js" defer></script>
     <link rel="stylesheet" href="css/editor.css">
     <link rel="stylesheet" href="css/pagepicker.css">
     <link rel="stylesheet" href="css/dialogs.css">
@@ -58,6 +60,8 @@
                         </select>
                         <button id="applyOrderBtn" class="icon-btn" title="Sort the bubbles of this page in the chosen order (the numbers on the page show the result)">Sort</button>
                         <button id="reinpaintBtn" class="icon-btn" title="Rebuild the clean image from the original (after deleting / skipping bubbles) - no OCR, no translation">Rebuild image</button>
+                        <button id="cleanAreaBtn" class="icon-btn" title="Draw a rectangle over a leftover trace (pale ghost of a letter, a smudge): it is painted with the plain colour around it, or filled from the surroundings on artwork. Kept by Rebuild image and Re-OCR (Esc cancels)">Clean area</button>
+                        <button id="undoCleanBtn" class="icon-btn hidden" title="Remove the last cleaned area of this page (Shift+click: remove all of them)">Undo clean</button>
                         <span class="toolbar-sep"></span>
                         <button id="zoomOutBtn" class="icon-btn" title="Zoom out (Ctrl + scroll down)">&minus;</button>
                         <span id="zoomLabel">100%</span>
@@ -72,6 +76,8 @@
                             <img id="pageImage" alt="Page">
                         </div>
                     </div>
+                    <!-- Translate / Lettering switch + Export page (js/editor-lettering.js renderModeBar) -->
+                    <div class="mode-bar" id="modeBar"></div>
                 </div>
 
                 <div class="panel-resizer-x" id="panelResizerX" title="Drag to resize"></div>
@@ -118,7 +124,7 @@
 
                         <div class="controls-right">
                             <button id="addChaptersBtn" class="primary">Import new chapters...</button>
-                            <button id="exportPagesBtn" title="Write the translated pages as PNG files (selected chapters, or all when none is ticked)">Export translated pages...</button>
+                            <button id="exportPagesBtn" title="Write pages as image files - with the translation, clean or both; PNG or JPG; into the project's exported folder or another one, optionally as one ZIP (selected chapters, or all when none is ticked)">Export pages...</button>
                             <button id="rescanBtn" title="Compare the project folders on disk with the database right now (new / missing page files, wrong statuses)">Rescan folders</button>
                             <button id="deleteSelectedChaptersBtn" class="danger" disabled>Delete selected</button>
                             <label class="checkbox-label">

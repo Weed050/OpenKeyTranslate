@@ -210,14 +210,30 @@ function applyUrlTargets() {
         document.getElementById("replaceFindInput").value = params.get("find");
         document.getElementById("replaceWithInput").value = params.get("replace") || "";
         document.getElementById("replaceModeSelect").value = params.get("mode") === "word" ? "word" : "prefix";
-        const box = document.getElementById("memoryReplaceBox");
-        box.open = true;
-        box.scrollIntoView({ block: "start" });
+        setReplacePanel(true);
+        document.getElementById("memoryReplaceBox").scrollIntoView({ block: "start" });
         previewReplace();
     }
 }
 
 /* ---------------------------- find & replace ---------------------------- */
+
+/*
+ * A TOOL, not a memory entry: opened from the toolbar button into its own accented panel. It used to be a collapsed
+ * row styled exactly like the entries below it, so it read as one more stored hint and was easy to miss.
+ */
+function setReplacePanel(open) {
+    document.getElementById("memoryReplaceBox").classList.toggle("hidden", !open);
+    const toggle = document.getElementById("replaceToggleBtn");
+    toggle.classList.toggle("active", open);
+    toggle.setAttribute("aria-expanded", String(open));
+    if (open) document.getElementById("replaceFindInput").focus();
+}
+
+document.getElementById("replaceToggleBtn")?.addEventListener("click", () =>
+    setReplacePanel(document.getElementById("memoryReplaceBox").classList.contains("hidden")));
+document.getElementById("replaceCloseBtn")?.addEventListener("click", () => setReplacePanel(false));
+document.getElementById("replaceHelpBtn")?.addEventListener("click", () => window.oktHelp?.open("memory"));
 
 function replacePayload() {
     return {

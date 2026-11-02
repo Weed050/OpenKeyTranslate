@@ -24,7 +24,7 @@ _DOCS_BUILD = bool(os.environ.get("OKT_DOCS_BUILD"))
 
 # Bump manually on release. Stamped into every log file header (see
 # core/app_logging.py) so a bug report's log always says which version produced it.
-APP_VERSION = "0.1.1"
+APP_VERSION = "0.2.0"
 
 
 def get_default_app_root():
@@ -60,8 +60,11 @@ DEFAULT_SETTINGS = {
     "ocr_text_threshold": 0.85,
     "ocr_soft_tolerance" : 0.15,
     "ocr_scale": 1.0,
-    "ocr_slice_h_ratio": 0.1,
-    "ocr_overlap_ratio": 0.15,
+    "ocr_slice_h_ratio": 0.1,      # unused (old slicing heuristics) - see ocr_slice_max_h
+    "ocr_overlap_ratio": 0.15,     # unused
+    # Images up to this height (px, after ocr_scale) are OCR'd in ONE pass; taller ones (webtoons) are sliced, cut in blank
+    # bands between panels (services/ocr_pipeline.get_overlap_size). PaddleOCR 3 shrinks only images over 4000 px.
+    "ocr_slice_max_h": 2000,
     "ocr_iou_thresh": 0.5,
 
     # Deduplication Settings
@@ -164,6 +167,10 @@ DEFAULT_SETTINGS = {
     "ocr_mkldnn": False,           # oneDNN acceleration (CPU only); off by default - it crashes on some Paddle/CPU combos
     "ocr_env_flags": {},           # extra env vars applied before paddle is imported, e.g. {"FLAGS_enable_pir_api": "0"}
     "models_dir": "",              # "" = library default caches; a folder = HuggingFace + PaddleX caches live inside it
+    # PaddleOCR's whole-image orientation classifier (0/90/180/270). OFF: on upright manga it turned 12 of 67 slices of
+    # 26 test pages (garbage like "SIHI" for "THIS", lost lines). Sideways text INSIDE a page does not need it (tall lines
+    # are turned and 0/180-checked per line). A single sideways page: editor Re-OCR -> "the whole page is rotated".
+    "ocr_detect_page_rotation": False,
 
     # Bubble geometry (utils/bubble_interior.py - one flood-fill detector for inpainting, typesetting and refine)
     "inpaint_mode": "glyph",       # "glyph" = erase whole letters + flat-fill white bubbles; "box" = the old rectangle + TELEA

@@ -19,7 +19,8 @@ from datetime import datetime, timezone
 from core.config import SCALE
 
 
-def save_ocr_json(out_dir: str, file_base_name: str, ocr_result: dict, pending_translation: bool = False) -> str:
+def save_ocr_json(out_dir: str, file_base_name: str, ocr_result: dict, pending_translation: bool = False,
+                  detect_rotation: bool | None = None, cleanups: list | None = None) -> str:
     """
     Save OCR results (items, lines, bubbles with translations) to JSON.
 
@@ -58,9 +59,11 @@ def save_ocr_json(out_dir: str, file_base_name: str, ocr_result: dict, pending_t
         }
         if b.get("text_raw"):
             entry["text_raw"] = b["text_raw"]          # raw OCR string when ocr_textfix changed the text
-        for flag in ("interior_box", "missed_text", "refined", "merged_from"):
+        for flag in ("interior_box", "missed_text", "refined", "merged_from", "layout"):   # layout: carried by Re-OCR
             if b.get(flag) is not None and b.get(flag) is not False:
                 entry[flag] = b[flag]
+        if b.get("confirmed_at") and not b.get("skip"):   # review stamp carried over by Re-OCR (utils.bubble_post.carry_over)
+            entry["confirmed_translation"], entry["confirmed_at"] = b.get("confirmed_translation", ""), b["confirmed_at"]
         if b.get("skip"):
             entry["skip"] = True                        # number / symbol-only bubble: listed, never translated/inpainted
             entry["skip_reason"] = b.get("skip_reason")
@@ -78,13 +81,18 @@ def save_ocr_json(out_dir: str, file_base_name: str, ocr_result: dict, pending_t
             for item in ocr_result["items"]
         ],
         "bubbles": bubbles_out,
-        "lines": [
-            {"line_id": l["line_id"], "box": orig(l["box"]), "bubble_id": owner.get(l["line_id"])}
+        "lines": [   # text per line: lets the editor split a bubble without OCR (services/bubble_edit.split_bubble)
+            {"line_id": l["line_id"], "box": orig(l["box"]), "bubble_id": owner.get(l["line_id"]), "text": l.get("text", ""),
+             **({"angle": l["angle"]} if "angle" in l else {})}     # tilted line: slant (utils/merge_boxes.build_text_lines)
             for l in ocr_result.get("lines", [])
         ],
     }
     if pending_translation:
         payload["pending_translation"] = True   # prefetched: the editor translates when the page is opened
+    if detect_rotation is not None:
+        payload["detect_rotation"] = bool(detect_rotation)   # the page's own choice (Re-OCR dialog), see ocr_pipeline.PageOCR
+    if cleanups:
+        payload["cleanups"] = cleanups                       # manual "Clean area" rectangles (routers/pages.py add_cleanup)
 
     out_path = os.path.join(out_dir, f"{file_base_name}_ocr.json")
     with open(out_path, "w", encoding="utf-8") as f:
@@ -159,6 +167,7 @@ def update_bubble_translation(json_path: str, bubble_id: str, new_translation: s
             b["translation"] = new_translation
             b["confirmed_translation"] = new_translation
             b["confirmed_at"] = datetime.now(timezone.utc).isoformat()
+            b.pop("split_check", None)          # the user looked at the divided translation of a split bubble
             write_page_json(json_path, data)
             return True
     return False

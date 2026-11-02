@@ -87,6 +87,7 @@
 .card {
   background: var(--bg-panel);
   border: 1px solid var(--border);
+  box-shadow: var(--card-shadow);
   border-radius: var(--radius);
   padding: var(--space-md);
   margin-bottom: var(--space-md);
@@ -180,8 +181,8 @@
 .health-row.error { border-left-color: var(--danger); }
 .health-row.warn { border-left-color: var(--warn); }
 
-/* theme switch in the sidebar footer (added by js/theme.js): looks like the links above it, not like a button */
-.sidebar-link.theme-toggle {
+/* buttons in the sidebar footer (theme switch from js/theme.js, Help from js/help.js): look like the links above */
+.sidebar-link.sidebar-button {
   width: 100%;
   height: auto;
   margin-top: var(--space-xs);

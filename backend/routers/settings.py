@@ -288,7 +288,8 @@ def test_translation():
 async def update_ocr_options(payload: dict):
     """Post-OCR options (utils/bubble_post.py). Apply to pages processed from now on - no restart."""
     current = load_settings()
-    for key in ("ocr_textfix", "ocr_skip_numeric", "ocr_skip_symbols", "inpaint_use_interior", "ocr_refine", "ocr_scan_missed_bubbles"):
+    for key in ("ocr_textfix", "ocr_skip_numeric", "ocr_skip_symbols", "inpaint_use_interior", "ocr_refine", "ocr_scan_missed_bubbles",
+                "ocr_detect_page_rotation"):
         if key in payload:
             current[key] = bool(payload[key])
     if "typesetting_uppercase" in payload:

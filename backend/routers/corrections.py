@@ -22,7 +22,7 @@ from services.memory_service import (save_correction, delete_correction, encode_
                                        get_correction_usage, memory_text, reembed_project, edit_correction,
                                        replace_in_memory, normalize_phrase)
 from services.glossary_service import suggestions_for_correction
-from services.page_export import page_paths, update_bubble_translation
+from services.page_export import page_paths, update_bubble_translation, load_page_json
 
 router = APIRouter(prefix="/corrections", tags=["Corrections"])
 
@@ -133,6 +133,38 @@ async def replace_corrections(project_id: int, payload: MemoryReplaceSchema, db:
     return {"applied": payload.apply, "count": len(changes), "changes": changes}
 
 
+def _same_text(a: str, b: str) -> bool:
+    return " ".join((a or "").split()).upper() == " ".join((b or "").split()).upper()
+
+
+def _runs_for_current_text(db: Session, page: Page, bubble_id: str):
+    """
+    Log rows (newest first) of the translation runs that produced this bubble's CURRENT text. Bubble ids are not stable:
+    Re-OCR renumbers bubbles and merge / split change a bubble's text, so the newest row with this id can belong to a
+    different line. Rows are therefore matched by source text: this id first, then any bubble of the page (the same line
+    under its old id). [] = never translated; None = there are logs for this id, but none for its current text (the text
+    changed after the translation - nothing to show).
+    """
+    try:
+        data = load_page_json(page_paths(page)["json"])
+    except (OSError, ValueError):
+        data = {}
+    bubble = next((b for b in data.get("bubbles", []) if b.get("bubble_id") == bubble_id), None)
+    rows = (db.query(TranslationLog).filter(TranslationLog.page_id == page.id, TranslationLog.bubble_id == bubble_id)
+            .order_by(TranslationLog.id.desc()).all())
+    if bubble is None:
+        return rows                                          # page JSON unreadable: the old behaviour
+    text = bubble.get("text", "")
+    same = [r for r in rows if _same_text(r.source_text, text)]
+    if same:
+        return same
+    moved = [r for r in (db.query(TranslationLog).filter(TranslationLog.page_id == page.id)
+                         .order_by(TranslationLog.id.desc()).all()) if _same_text(r.source_text, text)]
+    if moved:
+        return moved
+    return None if rows else []
+
+
 @router.get("/used/{page_id}/{bubble_id}")
 async def memory_used_for_bubble(page_id: int, bubble_id: str, db: Session = Depends(get_db)):
     """
@@ -144,10 +176,10 @@ async def memory_used_for_bubble(page_id: int, bubble_id: str, db: Session = Dep
     page = db.query(Page).filter(Page.id == page_id).first()
     if not page:
         raise HTTPException(status_code=404, detail="Page not found")
-    rows = (db.query(TranslationLog)
-            .filter(TranslationLog.page_id == page_id, TranslationLog.bubble_id == bubble_id)
-            .order_by(TranslationLog.id.desc()).all())
-    empty = {"lane": None, "entries": [], "glossary": [], "translated_at": None}
+    empty = {"lane": None, "entries": [], "glossary": [], "translated_at": None, "stale": False}
+    rows = _runs_for_current_text(db, page, bubble_id)
+    if rows is None:
+        return {**empty, "stale": True}
     if not rows:
         return empty
     latest_run = rows[0].run_id

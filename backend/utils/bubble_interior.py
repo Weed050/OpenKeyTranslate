@@ -40,6 +40,31 @@ class Interior:
         h, w = self.hull.shape
         return 0 <= ix < w and 0 <= iy < h and self.hull[iy, ix] > 0
 
+    def encloses(self, box) -> bool:
+        """
+        The text box (x1, y1, x2, y2) lies in this bubble. Usually its centre is in the hull - but when a line's letters
+        TOUCH the outline (the last line where the bubble narrows, e.g. "WYVERN" under "WITH OUR"), the dilated letters
+        become part of the wall and the hull has a bay exactly there, so the centre is "outside". Such a line still has
+        interior on at least 3 of its 4 sides; a line of a neighbouring bubble has it on 1 side at most (towards us).
+        """
+        x1, y1, x2, y2 = box
+        cx, cy = (x1 + x2) / 2, (y1 + y2) / 2
+        if self.contains(cx, cy):
+            return True
+        ox, oy = self.origin
+        h, w = self.hull.shape
+        reach = max(6.0, y2 - y1)                         # look about one line height away from the box
+        qw, qh = max(2.0, (x2 - x1) / 4), max(2.0, (y2 - y1) / 4)
+        strips = ((cx - qw, y1 - reach, cx + qw, y1), (cx - qw, y2, cx + qw, y2 + reach),     # above, below
+                  (x1 - reach, cy - qh, x1, cy + qh), (x2, cy - qh, x2 + reach, cy + qh))     # left, right
+        sides = 0
+        for a, b, c, d in strips:
+            ia, ib = max(0, int(a) - ox), max(0, int(b) - oy)
+            ic, id_ = min(w, int(c) - ox), min(h, int(d) - oy)
+            if ic > ia and id_ > ib and (self.hull[ib:id_, ia:ic] > 0).any():
+                sides += 1
+        return sides >= 3
+
 
 def nearest_free_pixel(walls: np.ndarray, cx: float, cy: float, max_radius: int = 60, step: int = 5):
     """Nearest pixel that is not a wall (the seed is often ON a glyph stroke). None if there is none within max_radius."""
