@@ -103,6 +103,11 @@
   max-width: 820px;
   width: 100%;
 }
+/* one readable column in the middle of a wide window (Memory / Glossary - the same width as the Settings cards) */
+.content-column {
+  max-width: 980px;
+  margin: 0 auto;
+}
  
 .row-actions {
   display: flex;
@@ -180,6 +185,7 @@
 }
 .health-row.error { border-left-color: var(--danger); }
 .health-row.warn { border-left-color: var(--warn); }
+.health-fix { color: var(--accent); font-weight: 600; white-space: nowrap; }
 
 /* buttons in the sidebar footer (theme switch from js/theme.js, Help from js/help.js): look like the links above */
 .sidebar-link.sidebar-button {

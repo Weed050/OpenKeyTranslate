@@ -235,6 +235,49 @@ def _sentences(text: str) -> list[str]:
     return [s.strip() for s in _SENTENCE_END.split((text or "").strip()) if s.strip()]
 
 
+# English word that opens a piece -> Polish words the translation of that piece usually starts with
+_LINKS = {
+    "BUT": ("ALE", "LECZ", "JEDNAK", "A"), "AND": ("I", "A", "ORAZ"), "OR": ("ALBO", "LUB", "CZY"),
+    "SO": ("WIĘC", "TO", "DLATEGO", "TAK"), "BECAUSE": ("BO", "PONIEWAŻ", "GDYŻ"), "SINCE": ("SKORO", "PONIEWAŻ", "OD"),
+    "IF": ("JEŚLI", "JEŻELI", "GDY", "GDYBY"), "WHEN": ("GDY", "KIEDY"), "THEN": ("TO", "WTEDY", "POTEM"),
+    "THAT": ("ŻE", "KTÓRY", "KTÓRA", "KTÓRE"), "WHICH": ("KTÓRY", "KTÓRA", "KTÓRE", "CO"), "WHO": ("KTÓRY", "KTÓRA", "KTO"),
+    "ALTHOUGH": ("CHOĆ", "CHOCIAŻ", "MIMO"), "UNTIL": ("AŻ", "DOPÓKI"), "WHILE": ("PODCZAS", "GDY", "A"),
+}
+_CLAUSE_CUT = re.compile(r"(?<=[,;:–—-])\s+|\s+(?=[–—-]\s)")
+
+
+def _clause_split(text: str, piece_sources: list[str]) -> list[str] | None:
+    """
+    One-sentence translation, several pieces ("... AT 9:55" | "BUT SINCE THERE IS SOME FREE TIME" ->
+    "..., ALE PONIEWAŻ ..."): cut at clause boundaries (comma, semicolon, dash). A boundary whose next word is a
+    Polish counterpart of the word opening the next source piece (BUT -> ALE) wins; otherwise the boundary whose
+    share of the text is closest to the piece's share of the source. None when there are too few boundaries.
+    """
+    n = len(piece_sources)
+    spots = [m.start() for m in _CLAUSE_CUT.finditer(text)]
+    if len(spots) < n - 1:
+        return None
+    total = max(1, sum(max(1, len(p)) for p in piece_sources))
+    cuts, prev = [], 0
+    for k in range(1, n):
+        share = sum(max(1, len(p)) for p in piece_sources[:k]) / total
+        opener = (piece_sources[k].split() or [""])[0].strip(".,!?\"'").upper()
+        links = _LINKS.get(opener, ())
+        left = [p for p in spots if p > prev and len([q for q in spots if q > p]) >= n - 1 - k]
+        if not left:
+            return None
+        def score(p):
+            nxt = text[p:].lstrip(" ,;:-–—").split(" ", 1)[0].strip(".,!?\"'").upper()
+            return (0 if links and nxt in links else 1, abs(p / len(text) - share))
+        cut = min(left, key=score)
+        cuts.append(cut)
+        prev = cut
+    bounds = [0] + cuts + [len(text)]
+    parts = [text[a:b].strip() for a, b in zip(bounds, bounds[1:])]
+    parts = [p.rstrip(" ,;:–—-").strip() for p in parts[:-1]] + parts[-1:]   # the cut comma does not end a bubble
+    return parts if all(parts) else None
+
+
 def split_translation(text: str, piece_sources: list[str]) -> tuple[list[str], str]:
     """
     Divide an existing translation between the pieces of a split bubble, in order, WITHOUT asking the translator:
@@ -242,8 +285,10 @@ def split_translation(text: str, piece_sources: list[str]) -> tuple[list[str], s
                      number of sentences as its source text has ("WHAT... IS THIS?!" | "I DON'T KNOW." -> 2 | 1)
       "proportional" otherwise, with more sentences than pieces: cut between sentences where the share of the text
                      best matches the share of the source text of each piece
-      "unsplit"      fewer sentences than pieces: the whole translation stays with the first piece, the rest is empty
-    The editor marks "proportional" / "unsplit" pieces "check translation"; Retranslate is up to the user.
+      "clauses"      fewer sentences than pieces: cut at commas / dashes, preferring a Polish conjunction that matches
+                     the word opening the next source piece (BUT -> ALE), see _clause_split
+      "unsplit"      not even that: the whole translation stays with the first piece, the rest is empty
+    The editor marks "proportional" / "clauses" / "unsplit" pieces "check translation"; Retranslate is up to the user.
     """
     n = len(piece_sources)
     text = (text or "").strip()
@@ -251,7 +296,8 @@ def split_translation(text: str, piece_sources: list[str]) -> tuple[list[str], s
         return [text] + [""] * max(0, n - 1), "sentences" if n < 2 else "unsplit"
     sents = _sentences(text)
     if len(sents) < n:
-        return [text] + [""] * (n - 1), "unsplit"
+        clauses = _clause_split(text, piece_sources)
+        return (clauses, "clauses") if clauses else ([text] + [""] * (n - 1), "unsplit")
     counts = [len(_sentences(s)) for s in piece_sources]
     if all(counts) and sum(counts) == len(sents):
         bounds = [sum(counts[:k]) for k in range(n + 1)]
@@ -382,6 +428,49 @@ def split_bubble(ocr_data: dict, bubble_id: str, new_line_ids, image=None, ocr_r
     return {"bubbles": made, "method": plan["method"], "kept": bubble_id, "new": new_id}
 
 
+def _check_move(ocr_data: dict, bubble_id: str, target_id: str) -> None:
+    if target_id == bubble_id:
+        raise BubbleEditError("Pick another bubble to move the lines to.", 400)
+    target = _find(ocr_data, target_id)
+    if target.get("skip"):
+        raise BubbleEditError("That bubble is skipped - press 'Translate this' on it first.", 400)
+
+
+def _moved_piece(ocr_data: dict, split_result: dict, line_ids) -> str:
+    owner = {l["line_id"]: l.get("bubble_id") for l in ocr_data.get("lines", [])}
+    return owner[list(line_ids)[0]]
+
+
+def move_lines_preview(ocr_data: dict, bubble_id: str, line_ids, target_id: str) -> dict:
+    """What move_lines would do - on a copy, no OCR: the divided translation and the target's joined text."""
+    import copy
+    _check_move(ocr_data, bubble_id, target_id)
+    plan = split_preview(ocr_data, bubble_id, line_ids)
+    data = copy.deepcopy(ocr_data)
+    result = split_bubble(data, bubble_id, line_ids)
+    joined = merge_preview(data, target_id, [_moved_piece(data, result, line_ids)])
+    return {**plan, "target": {"bubble_id": target_id, "text": joined.get("text", ""), "translation": joined.get("translation", "")}}
+
+
+def move_lines(ocr_data: dict, bubble_id: str, line_ids, target_id: str, image=None, ocr_region_fn=None, protected=()) -> dict:
+    """
+    Move some text lines of a bubble - with their part of the translation - into ANOTHER existing bubble (the OCR put
+    a line into the wrong bubble). No translation request: it is split_bubble (the translation divided between the
+    lines that stay and the ones that move) followed by merge_bubbles into the target (joined in reading order).
+    Both bubbles lose their review stamps (new text); a division that was not clean tags them "check translation".
+    """
+    _check_move(ocr_data, bubble_id, target_id)
+    result = split_bubble(ocr_data, bubble_id, line_ids, image, ocr_region_fn, protected)
+    moved = _moved_piece(ocr_data, result, line_ids)
+    stays = next(b["bubble_id"] for b in result["bubbles"] if b["bubble_id"] != moved)
+    split_check = any(b.get("split_check") for b in result["bubbles"])
+    merged = merge_bubbles(ocr_data, target_id, [moved], image)
+    target = _find(ocr_data, target_id)
+    if split_check:
+        target["split_check"] = True
+    return {"method": result["method"], "source": stays, "target": target_id, "merged": merged}
+
+
 # ------------------------------------------------------------------ lettering layout
 
 def bubble_text_rect(ocr_data: dict, bubble: dict) -> list | None:
@@ -406,6 +495,7 @@ def bubble_text_rect(ocr_data: dict, bubble: dict) -> list | None:
 
 
 LAYOUT_ALIGNS = ("center", "left", "right")
+LAYOUT_VALIGNS = ("middle", "top", "bottom")
 LAYOUT_STROKES = ("none", "thin", "thick")
 
 
@@ -417,6 +507,9 @@ def set_layout(ocr_data: dict, bubble_id: str, changes: dict) -> dict:
       angle      degrees clockwise, -180..180
       align      center | left | right
       stroke     none | thin | thick (white outline, for text over artwork)
+      valign     middle | top | bottom
+      font       font family name (services/font_service.py); null = the default font (Settings)
+      bold / italic  true / false (imitated when the family has no such file)
       reset      true = forget everything (back to automatic)
     Only non-default values are kept, so an untouched bubble has no "layout" and renders exactly as before.
     """
@@ -454,7 +547,22 @@ def set_layout(ocr_data: dict, bubble_id: str, changes: dict) -> dict:
             layout["angle"] = angle          # 0 is kept for tilted text: "level" overrides the automatic slant
         else:
             layout.pop("angle", None)
-    for key, allowed, default in (("align", LAYOUT_ALIGNS, "center"), ("stroke", LAYOUT_STROKES, "none")):
+    if "font" in changes:
+        name = changes["font"]
+        if name in (None, ""):
+            layout.pop("font", None)
+        elif isinstance(name, str) and len(name) <= 200:
+            layout["font"] = name.strip()
+        else:
+            raise BubbleEditError("font must be a font family name", 400)
+    for key in ("bold", "italic"):
+        if key in changes:
+            if changes[key]:
+                layout[key] = True
+            else:
+                layout.pop(key, None)
+    for key, allowed, default in (("align", LAYOUT_ALIGNS, "center"), ("stroke", LAYOUT_STROKES, "none"),
+                                  ("valign", LAYOUT_VALIGNS, "middle")):
         if key in changes:
             if changes[key] not in allowed:
                 raise BubbleEditError(f"{key} must be one of {', '.join(allowed)}", 400)
@@ -520,4 +628,6 @@ def reorder_bubbles(ocr_data: dict, order: list[str] | None = None, auto: str | 
             raise BubbleEditError("order must list every bubble of the page exactly once", 400)
         new = [by_id[i] for i in order]
     ocr_data["bubbles"] = new
+    if auto:
+        ocr_data["bubble_order"] = auto          # the page's own reading order: shown by the editor, kept by Re-OCR
     return [b["bubble_id"] for b in new]

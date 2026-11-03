@@ -16,6 +16,13 @@ import { api } from "./api.js";
  * Small fixed banner for config/connectivity problems reported by GET /system/health
  * (missing API key, API host unreachable, ...). Dismissal is remembered per session.
  */
+const FIX_LINKS = {
+    no_api_key: { href: "settings.html#translation", label: "Open Settings > Translation & API keys" },
+    empty_key_slot: { href: "settings.html#translation", label: "Open Settings > Translation & API keys" },
+    no_model: { href: "settings.html#translation", label: "Open Settings > Translation & API keys" },
+    unknown_provider: { href: "settings.html#translation", label: "Open Settings > Translation & API keys" },
+};
+
 async function renderHealthBanner() {
     if (document.getElementById("healthBanner")) return;
     let issues;
@@ -36,6 +43,14 @@ async function renderHealthBanner() {
         row.className = `health-row ${i.level}`;
         const text = document.createElement("span");
         text.textContent = i.message;
+        const fix = FIX_LINKS[i.code];
+        if (fix && !location.pathname.endsWith("settings.html")) {   // straight to the field that fixes it
+            const a = document.createElement("a");
+            a.href = fix.href;
+            a.className = "health-fix";
+            a.textContent = fix.label;
+            text.append(" ", a);
+        }
         const close = document.createElement("button");
         close.className = "icon-btn";
         close.textContent = "\u00d7";

@@ -5,7 +5,7 @@
  * (an API key typed in but never saved was easy to lose).
  */
  
-import { api } from "./api.js";
+import { api, API_BASE } from "./api.js";
 import { renderSidebar } from "./nav.js";
 import { ACTIONS, SCOPES, currentBindings, loadOverrides, saveOverrides, validateBinding, comboFromEvent,
          formatCombo, normalizeCombo } from "./shortcuts.js";
@@ -331,7 +331,7 @@ async function loadSettings() {
         document.getElementById("ocrRefineCheckbox").checked = appSettings.ocr_refine !== false;
         document.getElementById("ocrScanCheckbox").checked = appSettings.ocr_scan_missed_bubbles === true;
         document.getElementById("ocrDetectRotationCheckbox").checked = appSettings.ocr_detect_page_rotation === true;
-        document.getElementById("typesettingFontInput").value = appSettings.typesetting_font || "";
+        await initFonts(appSettings.typesetting_font || "");
         document.getElementById("typesettingUpperCheckbox").checked = appSettings.typesetting_uppercase !== false;
         document.getElementById("inpaintModeSelect").value = appSettings.inpaint_mode || "glyph";
         document.getElementById("bubbleOrderSelect").value = appSettings.bubble_order || "ttb";
@@ -770,6 +770,104 @@ document.getElementById("importAllBtn")?.addEventListener("click", async () => {
 
 
 document.getElementById("saveTypesettingBtn")?.addEventListener("click", () => saveTypesetting());
+
+/* ------------------------------ fonts (Settings > Text & fonts) ------------------------------ */
+
+const fontEsc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+let fontFolder = "";
+
+/** Default-font select (families; Polish-capable first) + the user's font files. `current`: the saved setting. */
+async function initFonts(current, refresh = false) {
+    const select = document.getElementById("typesettingFontInput");
+    const keep = current ?? select.value;
+    try {
+        const [{ fonts, folder }, { files }] = await Promise.all([api.fonts.list(refresh), api.fonts.user()]);
+        fontFolder = folder;
+        const opt = (f) => `<option value="${fontEsc(f.family)}">${fontEsc(f.family)}${f.polish ? "" : " (no Polish letters)"}</option>`;
+        const mine = fonts.filter((f) => f.source === "user");
+        const sys = fonts.filter((f) => f.source === "system");
+        select.innerHTML = `<option value="">Automatic (Arial / DejaVu / Liberation)</option>`
+            + (mine.length ? `<optgroup label="Your fonts">${mine.map(opt).join("")}</optgroup>` : "")
+            + `<optgroup label="System fonts">${sys.map(opt).join("")}</optgroup>`;
+        if (keep && ![...select.options].some((o) => o.value === keep)) {
+            select.insertAdjacentHTML("beforeend", `<option value="${fontEsc(keep)}">File: ${fontEsc(keep)}</option>`);
+        }
+        select.value = keep;
+        renderUserFonts(files);
+    } catch (e) {
+        document.getElementById("userFontList").innerHTML = `<span class="text-muted">Fonts unavailable: ${fontEsc(e.message)}</span>`;
+        if (keep) {
+            select.insertAdjacentHTML("beforeend", `<option value="${fontEsc(keep)}">${fontEsc(keep)}</option>`);
+            select.value = keep;
+        }
+    }
+}
+
+function renderUserFonts(files) {
+    const list = document.getElementById("userFontList");
+    if (!files.length) {
+        list.innerHTML = '<span class="text-muted">None yet - the system fonts are used.</span>';
+        return;
+    }
+    list.innerHTML = files.map((f) => `
+        <div class="user-font">
+            <span class="font-sample" style="font-family:'${fontEsc(f.family).replace(/'/g, "")}'">Zażółć gęślą</span>
+            <span class="font-meta">${fontEsc(f.family)} <span class="text-muted">${fontEsc(f.style)} &middot; ${fontEsc(f.file)}</span>
+                ${f.polish ? "" : '<span class="font-warn" title="The font has no glyphs for some Polish letters">no Polish</span>'}</span>
+            <button class="copy-btn danger" data-font-file="${fontEsc(f.file)}">Remove</button>
+        </div>`).join("");
+    files.forEach((f, i) => {                     // the sample line in the font itself (it is not installed in the system)
+        const face = new FontFace(`okt-user-font-${i}`, `url(${API_BASE}/fonts/user/${encodeURIComponent(f.file)}/data)`);
+        face.load().then((loaded) => {
+            document.fonts.add(loaded);
+            const sample = list.querySelectorAll(".font-sample")[i];
+            if (sample) sample.style.fontFamily = `okt-user-font-${i}`;
+        }).catch(() => { /* keep the fallback font */ });
+    });
+    list.querySelectorAll("[data-font-file]").forEach((btn) => btn.addEventListener("click", async () => {
+        if (!confirm(`Remove the font file ${btn.dataset.fontFile} from the app's font folder?\n\nBubbles that use this font fall back to the default font.`)) return;
+        try {
+            await api.fonts.remove(btn.dataset.fontFile);
+            await initFonts(null, true);
+        } catch (e) {
+            alert(`Couldn't remove: ${e.message}`);
+        }
+    }));
+}
+
+function fileToBase64(file) {
+    return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result).split(",", 2)[1] || "");
+        reader.onerror = () => reject(reader.error);
+        reader.readAsDataURL(file);
+    });
+}
+
+document.getElementById("addFontBtn")?.addEventListener("click", () => document.getElementById("fontFileInput").click());
+document.getElementById("fontFileInput")?.addEventListener("change", async (e) => {
+    const status = document.getElementById("fontStatus");
+    const added = [];
+    for (const file of e.target.files) {
+        try {
+            const info = await api.fonts.upload(file.name, await fileToBase64(file));
+            added.push(`${info.family} ${info.style}${info.polish ? "" : " (no Polish letters!)"}`);
+        } catch (err) {
+            added.push(`${file.name}: ${err.message}`);
+        }
+    }
+    e.target.value = "";
+    status.textContent = added.join("; ");
+    await initFonts(null, true);
+});
+document.getElementById("openFontFolderBtn")?.addEventListener("click", async () => {
+    try {
+        await api.system.openPath(fontFolder);
+    } catch (e) {
+        alert(`Couldn't open: ${e.message}`);
+    }
+});
+document.getElementById("refreshFontsBtn")?.addEventListener("click", () => initFonts(null, true));
 
 async function saveTypesetting() {
     try {

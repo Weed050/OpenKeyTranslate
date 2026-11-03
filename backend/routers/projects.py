@@ -35,6 +35,30 @@ async def get_projects(db: Session = Depends(get_db)):
     projects = db.query(Project).all()
     return projects
 
+@router.get("/{project_id}/progress")
+def project_progress(project_id: int, db: Session = Depends(get_db)):
+    """
+    Pages of the project (not excluded): total, processed by the system (OCR + cleaning done) and reviewed by the user
+    (services.page_export.page_reviewed) - the three-colour bar on the project list.
+    """
+    from services.page_export import page_paths, page_reviewed
+    project = db.query(Project).filter(Project.id == project_id).first()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    total = processed = reviewed = 0
+    for chapter in project.chapters:
+        for page in chapter.pages:
+            if page.status == "excluded":
+                continue
+            total += 1
+            if page.status != "processed":
+                continue
+            processed += 1
+            if page_reviewed(page_paths(page)["json"]):
+                reviewed += 1
+    return {"total": total, "processed": processed, "reviewed": reviewed}
+
+
 @router.get("/select-folder")
 async def select_folder():
     """

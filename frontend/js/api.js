@@ -30,8 +30,15 @@ async function request(path, options = {}) {
 }
  
 export const api = {
+    fonts: {
+        list: (refresh = false) => request(`/fonts/${refresh ? "?refresh=true" : ""}`),   // {fonts: [{family, source, polish, styles}], folder}
+        user: () => request("/fonts/user"),                                                // {files: [{file, family, style, polish}], folder}
+        upload: (name, data) => request("/fonts/user", { method: "POST", body: JSON.stringify({ name, data }) }),
+        remove: (file) => request(`/fonts/user/${encodeURIComponent(file)}`, { method: "DELETE" }),
+    },
     projects: {
         list: () => request("/projects/"),
+        progress: (projectId) => request(`/projects/${projectId}/progress`),   // {total, processed, reviewed}
         selectFolder: () => request("/projects/select-folder"),
         import: (path, projectName) =>
             request("/projects/import", { method: "POST", body: JSON.stringify({ path, projectName }) }),
@@ -95,10 +102,11 @@ export const api = {
         setLayout: (pageId, bubbleId, changes) =>
             request(`/pages/${pageId}/bubbles/${bubbleId}/layout`, { method: "PATCH", body: JSON.stringify(changes) }),
         exportPage: (pageId, options) => request(`/pages/${pageId}/export`, { method: "POST", body: JSON.stringify(options) }),
-        splitPreview: (pageId, bubbleId, newLines) =>
-            request(`/pages/${pageId}/bubbles/${bubbleId}/split`, { method: "POST", body: JSON.stringify({ new_lines: newLines, preview: true }) }),
-        splitBubble: (pageId, bubbleId, newLines) =>
-            request(`/pages/${pageId}/bubbles/${bubbleId}/split`, { method: "POST", body: JSON.stringify({ new_lines: newLines }) }),
+        // target: an existing bubble id = MOVE the picked lines there (with their part of the translation)
+        splitPreview: (pageId, bubbleId, newLines, target = null) =>
+            request(`/pages/${pageId}/bubbles/${bubbleId}/split`, { method: "POST", body: JSON.stringify({ new_lines: newLines, preview: true, ...(target ? { target } : {}) }) }),
+        splitBubble: (pageId, bubbleId, newLines, target = null) =>
+            request(`/pages/${pageId}/bubbles/${bubbleId}/split`, { method: "POST", body: JSON.stringify({ new_lines: newLines, ...(target ? { target } : {}) }) }),
         mergePreview: (pageId, bubbleId, otherIds, order = null) =>
             request(`/pages/${pageId}/bubbles/${bubbleId}/merge`, { method: "POST", body: JSON.stringify({ with: otherIds, order, preview: true }) }),
         retranslateBubble: (pageId, bubbleId) =>

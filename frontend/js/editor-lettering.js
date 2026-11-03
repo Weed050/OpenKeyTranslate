@@ -110,7 +110,7 @@ export function renderModeBar() {
     // the switch is used most: on the right, next to the side panel it changes; rarely used things on the left
     bar.innerHTML = `
         <button type="button" id="exportPageBtn" title="Write this page into the project's exported folder (${what}, ${opts.format.toUpperCase()}) - the options are those of the last export on the project page${exportKey ? ` (${exportKey})` : ""}">Export page</button>
-        ${isLettering() ? '<span class="text-muted mode-hint">Drag a box to move it, corners resize, the knob turns it</span>' : ""}
+        ${isLettering() ? '<span class="text-muted mode-hint">Drag a box to move it, corners resize (Alt: evenly from the centre), the knob turns it</span>' : ""}
         <span class="mode-bar-spacer"></span>
         ${toggleKey ? `<span class="text-muted mode-hint"><kbd>${escapeHtml(toggleKey)}</kbd> switches</span>` : ""}
         <div class="segmented mode-switch" role="radiogroup" aria-label="Editor mode" title="Switch the editor mode${toggleKey ? ` (${toggleKey})` : ""}">
@@ -199,6 +199,13 @@ function startDrag(e, bubbleId, node, scale) {
             const ly = -dx * Math.sin(a) + dy * Math.cos(a);
             const sx = kind.includes("e") ? 1 : -1;
             const sy = kind.includes("s") ? 1 : -1;
+            if (ev.altKey) {                         // Alt: grow / shrink evenly in every direction, the centre stays
+                const w = Math.max(12, start.w + 2 * sx * lx);
+                const h = Math.max(12, start.h + 2 * sy * ly);
+                box = [start.cx - w / 2, start.cy - h / 2, start.cx + w / 2, start.cy + h / 2];
+                placeBox(node, box, angle, scale);
+                return;
+            }
             const w = Math.max(12, start.w + sx * lx);
             const h = Math.max(12, start.h + sy * ly);
             const ax = -sx * start.w / 2, ay = -sy * start.h / 2;              // anchor in local coordinates
@@ -257,6 +264,47 @@ export function letteringAction(action) {
     else if (action === "resetLayout") patchLayout(b.bubble_id, { reset: true });
 }
 
+/* ------------------------------------------------------------------ fonts */
+
+const RECENT_FONTS_KEY = "okt-recent-fonts";
+let fontList = null;                 // [{family, source, polish, styles}] from GET /fonts/, loaded once per page
+
+async function loadFonts() {
+    if (fontList) return fontList;
+    try {
+        fontList = (await api.fonts.list()).fonts;
+    } catch {
+        fontList = [];
+    }
+    return fontList;
+}
+
+function recentFonts() {
+    try { return JSON.parse(localStorage.getItem(RECENT_FONTS_KEY) || "[]"); } catch { return []; }
+}
+
+function rememberFont(family) {
+    if (!family) return;
+    const list = [family, ...recentFonts().filter((f) => f !== family)].slice(0, 6);
+    try { localStorage.setItem(RECENT_FONTS_KEY, JSON.stringify(list)); } catch { /* this page only */ }
+}
+
+function fontOptions(current) {
+    const fonts = fontList || [];
+    const known = new Set(fonts.map((f) => f.family));
+    const opt = (f) => `<option value="${escapeHtml(f.family)}" ${f.family === current ? "selected" : ""}>${escapeHtml(f.family)}${f.polish ? "" : " (no Polish!)"}</option>`;
+    const recent = recentFonts().filter((r) => known.has(r)).map((r) => fonts.find((f) => f.family === r));
+    const mine = fonts.filter((f) => f.source === "user");
+    const polish = fonts.filter((f) => f.source === "system" && f.polish);
+    const other = fonts.filter((f) => f.source === "system" && !f.polish);
+    return `<option value="" ${current ? "" : "selected"}>Default (Settings)</option>`
+        + (current && !known.has(current) ? `<option value="${escapeHtml(current)}" selected>${escapeHtml(current)} (not found)</option>` : "")
+        + (recent.length ? `<optgroup label="Recently used">${recent.map(opt).join("")}</optgroup>` : "")
+        + (mine.length ? `<optgroup label="Your fonts">${mine.map(opt).join("")}</optgroup>` : "")
+        + `<optgroup label="System fonts with Polish letters">${polish.map(opt).join("")}</optgroup>`
+        + (other.length ? `<optgroup label="Other system fonts">${other.map(opt).join("")}</optgroup>` : "");
+}
+
 /* ------------------------------------------------------------------ side panel */
 
 export function renderLetteringPanel() {
@@ -264,20 +312,19 @@ export function renderLetteringPanel() {
     panel.classList.remove("hidden");
     const b = selected();
     if (!b) {
-        panel.innerHTML = '<p class="text-muted">Pick a bubble in the list or a text box on the page.</p>';
+        panel.innerHTML = `<p class="text-muted detail-empty">Pick a bubble in the list or a text box on the page.</p>
+            <div class="detail-actions detail-bottom">${navButtons()}</div>`;
+        wireNav(panel);
         return;
     }
+    if (!fontList) loadFonts().then(() => { if (isLettering()) renderLetteringPanel(); });
     const index = state.selectedIndex;
     const p = state.layout[b.bubble_id];
-    const nav = `
-        <div class="detail-nav-actions" style="margin-left:auto;">
-            <button id="letterPrevBtn" title="Previous bubble">&#8592;</button>
-            <button id="letterNextBtn" title="Next bubble">&#8594;</button>
-        </div>`;
+    const nav = navButtons();
     if (!p) {
         const why = b.skip ? "This bubble is skipped - nothing is drawn." : "No translation yet - nothing is drawn. Translate it first.";
         panel.innerHTML = `<div class="lettering-panel"><div class="field-label">Bubble ${index + 1}</div><p class="text-muted">${why}</p>
-            <div class="detail-actions">${nav}</div></div>`;
+            <div class="detail-actions detail-bottom">${nav}</div></div>`;
         wireNav(panel);
         return;
     }
@@ -299,7 +346,14 @@ export function renderLetteringPanel() {
                     <button type="button" data-act="bigger" title="Bigger (fixed size)">+</button>
                     ${p.manual_size ? '<button type="button" data-act="sizeAuto" title="Largest size that fits">Auto</button>' : '<span class="text-muted">auto</span>'}
                 </span></div>
+            <div class="lettering-row"><span>Font</span>
+                <span class="lettering-font">
+                    <select id="letterFont" title="Font of this bubble (fonts: Settings > Text &amp; fonts)">${fontOptions(p.font || "")}</select>
+                    <button type="button" data-act="bold" class="${p.bold ? "selected" : ""}" title="Bold (imitated when the font has no bold file)"><b>B</b></button>
+                    <button type="button" data-act="italic" class="${p.italic ? "selected" : ""}" title="Italic (imitated when the font has no italic file)"><i>I</i></button>
+                </span></div>
             <div class="lettering-row"><span>Align</span>${seg("align", [["left", "Left"], ["center", "Center"], ["right", "Right"]], p.align)}</div>
+            <div class="lettering-row"><span>Vertical</span>${seg("valign", [["top", "Top"], ["middle", "Middle"], ["bottom", "Bottom"]], p.valign || "middle")}</div>
             <div class="lettering-row"><span>Rotation</span>
                 <span class="lettering-size">
                     <button type="button" data-act="rotLeft" title="-5°">&#8634;</button>
@@ -309,7 +363,8 @@ export function renderLetteringPanel() {
                     ${p.angle && !p.manual_angle ? '<span class="text-muted" title="The original text is tilted - the translation follows it">auto</span>' : ""}
                 </span></div>
             <div class="lettering-row"><span>Outline</span>${seg("stroke", [["none", "None"], ["thin", "Thin", "Thin white outline - text over artwork"], ["thick", "Thick", "Thick white outline"]], p.stroke)}</div>
-            <div class="detail-actions">
+            <div class="detail-actions detail-bottom">
+                <button type="button" data-act="fit" title="Text area = the inside of the bubble, centred both ways, largest size that fits (font, outline and angle stay)">Fit to bubble</button>
                 <button type="button" data-act="reset" title="Everything of this bubble back to automatic">Reset bubble</button>
                 ${nav}
             </div>
@@ -326,9 +381,24 @@ export function renderLetteringPanel() {
     act("rotRight", () => patchLayout(id, { angle: (p.angle || 0) + 5 }));
     act("rotZero", () => patchLayout(id, { angle: 0 }));
     act("reset", () => patchLayout(id, { reset: true }));
+    act("fit", () => patchLayout(id, { box: null, font_size: null, align: "center", valign: "middle" }));
+    act("bold", () => patchLayout(id, { bold: !p.bold }));
+    act("italic", () => patchLayout(id, { italic: !p.italic }));
+    panel.querySelector("#letterFont").addEventListener("change", (e) => {
+        rememberFont(e.target.value);
+        patchLayout(id, { font: e.target.value || null });
+    });
     panel.querySelector("#letterSize").addEventListener("change", (e) => patchLayout(id, { font_size: parseInt(e.target.value, 10) || null }));
     panel.querySelector("#letterAngle").addEventListener("change", (e) => patchLayout(id, { angle: parseFloat(e.target.value) || 0 }));
     wireNav(panel);
+}
+
+function navButtons() {
+    return `
+        <div class="detail-nav-actions" style="margin-left:auto;">
+            <button id="letterPrevBtn" title="Previous bubble">&#8592;</button>
+            <button id="letterNextBtn" title="Next bubble">&#8594;</button>
+        </div>`;
 }
 
 function wireNav(panel) {

@@ -61,7 +61,7 @@ def run_checks(check_network: bool = True) -> list[dict]:
                 add("error", "no_model", f"providers.{ACTIVE_PROVIDER}.model is empty.")
             if not filled:
                 add("error", "no_api_key",
-                    f"No api_key for '{ACTIVE_PROVIDER}' - translation will fail. Fill providers.{ACTIVE_PROVIDER}.keys in {SETTINGS_FILE} and restart.")
+                    f"No API key for '{ACTIVE_PROVIDER}' - translation will fail. Paste one in Settings > Translation & API keys (saved at once, no restart).")
             else:
                 labels = [k.get("label", "default") for k in filled]
                 if len(set(labels)) != len(labels):
@@ -69,7 +69,7 @@ def run_checks(check_network: bool = True) -> list[dict]:
                         "Two keys share the same label - rotation marks BOTH exhausted when one hits a rate limit.")
                 add("info", "keys_ok", f"{len(filled)} {ACTIVE_PROVIDER} key(s) configured.")
             if len(filled) < len(keys):
-                add("warn", "empty_key_slot", f"{len(keys) - len(filled)} key slot(s) in '{ACTIVE_PROVIDER}' have an empty api_key.")
+                add("warn", "empty_key_slot", f"{len(keys) - len(filled)} key slot(s) in '{ACTIVE_PROVIDER}' have no key - fill or remove them in Settings > Translation & API keys.")
 
             host = _PROVIDER_HOSTS.get(ACTIVE_PROVIDER)
             if check_network and host:

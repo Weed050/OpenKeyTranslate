@@ -162,6 +162,8 @@ async function init() {
     }
  
     el.processBtn.addEventListener("click", runProcess);
+    document.getElementById("promptPrevBtn").addEventListener("click", () => navigateToAdjacentPage(-1));
+    document.getElementById("promptNextBtn").addEventListener("click", () => navigateToAdjacentPage(1));
     document.getElementById("excludePromptBtn").addEventListener("click", excludeCurrentPage);
     document.getElementById("showRawBtn").addEventListener("click", () => openOrAlert(state.rawPath));
     document.getElementById("zoomInBtn").addEventListener("click", () => zoomBy(1.25));
@@ -175,7 +177,7 @@ async function init() {
     document.getElementById("addBubbleBtn").addEventListener("click", () => setDrawMode(state.drawMode === "add" ? false : "add"));
     document.getElementById("cleanAreaBtn").addEventListener("click", () => setDrawMode(state.drawMode === "clean" ? false : "clean"));
     document.getElementById("undoCleanBtn").addEventListener("click", (e) => undoCleanup(e.shiftKey));
-    document.getElementById("applyOrderBtn").addEventListener("click", applyAutoOrder);
+    document.getElementById("orderSelect").addEventListener("change", applyAutoOrder);
     el.imageCanvas.addEventListener("mousedown", onDrawStart);
     document.getElementById("prevPageBtn").addEventListener("click", () => goToAdjacentPage(-1));
     document.getElementById("nextPageBtn").addEventListener("click", () => goToAdjacentPage(1));
@@ -225,6 +227,8 @@ async function loadPage() {
     state.bubbles = data.bubbles;
     state.detectRotation = !!data.detect_rotation;
     state.cleanups = data.cleanups || [];
+    state.bubbleOrder = data.bubble_order || "ttb";
+    document.getElementById("orderSelect").value = state.bubbleOrder;
     renderCleanupButton();
     state.projectId = String(data.project_id);
     state.jsonPath = data.json_path;
@@ -380,6 +384,12 @@ function renderPageTools() {
         <button class="copy-btn" id="openJsonBtn" title="Reveal the translation JSON in the file explorer">Open JSON</button>
         <button class="copy-btn danger" id="excludePageBtn" title="Remove this page from the list without deleting the file (for stray/junk scans)">Delete page</button>
     `;
+    const more = document.getElementById("toolbarMore");
+    if (more && !more.dataset.wired) {           // close the More menu on a click outside it / after picking an entry
+        more.dataset.wired = "1";
+        document.addEventListener("click", (e) => { if (!more.contains(e.target)) more.open = false; });
+        more.querySelector(".toolbar-more-menu").addEventListener("click", (e) => { if (e.target.closest("button")) setTimeout(() => { more.open = false; }, 0); });
+    }
     document.getElementById("copyJsonPathBtn").addEventListener("click", async (e) => {
         await navigator.clipboard.writeText(state.jsonPath || "");
         const btn = e.target;
@@ -819,11 +829,13 @@ function renderBubbleDetail() {
     }
     if (state.selectedIndex === null) {
         el.bubbleDetail.classList.remove("hidden");
+        // same place for the arrows as with a bubble open (bottom of the panel): muscle memory finds them
         el.bubbleDetail.innerHTML = `
-            <div class="detail-actions" style="justify-content:flex-end;">
+            <p class="text-muted detail-empty">${state.bubbles.length ? "Pick a bubble in the list or on the page." : "No text on this page."}</p>
+            <div class="detail-actions detail-bottom" style="justify-content:flex-end;">
                 <div class="detail-nav-actions">
-                    <button id="prevBtn" title="Previous page">&#8592;</button>
-                    <button id="nextBtn" title="Next page">&#8594;</button>
+                    <button id="prevBtn" class="nav-crosses-page" title="Previous page">\u23EE</button>
+                    <button id="nextBtn" class="nav-crosses-page" title="Next page">\u23ED</button>
                 </div>
             </div>
         `;
@@ -844,6 +856,7 @@ function renderBubbleDetail() {
     const isSkipped = !!bubble.skip;
     const isEmpty = !isSkipped && !bubble.translation && !bubble.ai_translation;
     const textFixed = bubble.text_raw && bubble.text_raw !== bubble.text;
+    const canSplit = state.hasLines && (bubble.line_count || 0) >= 2;
     const skipWhy = { number: "only digits (page number?)", symbols: "only symbols / punctuation", manual: "skipped by you", empty: "empty text" }[bubble.skip_reason] || bubble.skip_reason || "";
  
     el.bubbleDetail.classList.remove("hidden");
@@ -853,14 +866,6 @@ function renderBubbleDetail() {
             <button id="deleteBubbleBtn" class="icon-btn danger" title="Delete this bubble from the page (use for OCR false positives)">Delete</button>
         </div>
  
-        ${isEmpty ? `
-        <div class="empty-warning">
-            AI returned no translation for this bubble. Check the backend
-            terminal for the error, or try "Retranslate" in the toolbar above.
-            Typing your own text here will still save it as a correction,
-            but it'll be recorded as written from scratch, not as an edit
-            of an AI draft.
-        </div>` : ""}
  
         <div>
             <div class="source-head">
@@ -881,35 +886,34 @@ function renderBubbleDetail() {
             </div>
         </div>
 
-        ${isSkipped ? `
-        <div class="skip-note">
-            <span>Skipped - ${escapeHtml(skipWhy)}. Not translated, original pixels stay on the page.</span>
-            <button id="unskipBtn" title="Translate this bubble anyway (its text will be erased from the image)">Translate this</button>
-        </div>` : `
         <div>
-            <label>Translated text</label>
-            <textarea id="translationInput" rows="4" lang="pl" spellcheck="${isSpellcheckEnabled()}">${escapeHtml(bubble.translation || "")}</textarea>
+            <label>Translated text${isSkipped ? ` <span class="bubble-tag warn" title="Not translated; the original pixels stay on the page">skipped - ${escapeHtml(skipWhy)}</span>` : ""}</label>
+            <textarea id="translationInput" rows="4" lang="pl" spellcheck="${isSpellcheckEnabled()}" ${isSkipped ? "disabled" : ""}
+                placeholder="${isSkipped ? "Skipped - press Translate this below to translate it" : isEmpty ? "The AI returned no translation for this bubble (see the backend log) - type your own (saved as written from scratch) or press Retranslate" : ""}">${escapeHtml(bubble.translation || "")}</textarea>
         </div>
         <div id="memoryUsedPanel" class="memory-used"></div>
- 
+
+        <!-- every button is always there, in the same place (disabled where it does not apply): muscle memory -->
         <div class="detail-tools">
-            <button id="resetBtn" title="Revert to the AI's original translation (does not save)">Reset to AI</button>
-            <button id="undoBtn" title="Revert to the value shown when this bubble was opened">Undo</button>
-            <button id="retranslateBubbleBtn" title="Translate only this bubble again (neighbours are sent as context; memory + glossary apply)">Retranslate</button>
+            <button id="resetBtn" ${isSkipped ? "disabled" : ""} title="Revert to the AI's original translation (does not save)">Reset to AI</button>
+            <button id="undoBtn" ${isSkipped ? "disabled" : ""} title="Revert to the value shown when this bubble was opened">Undo</button>
+            <button id="retranslateBubbleBtn" ${isSkipped ? "disabled" : ""} title="Translate only this bubble again (neighbours are sent as context; memory + glossary apply)">Retranslate</button>
             <button id="reocrBubbleBtn" title="Read this bubble again as ONE crop of its whole interior - finds lines the page pass missed. The previous text stays available under 'Use raw OCR'.">Re-OCR bubble</button>
             <button id="reocrAreaBtn" title="Draw the area yourself - for a bubble whose detected box misses a line (e.g. text below the box). That exact area is read.">Set area &amp; re-OCR</button>
-            ${state.selectedIndex > 0 ? '<button id="moveUpBtn" title="Move this bubble one place earlier in the reading order">Move up</button>' : ""}
-            ${state.selectedIndex < state.bubbles.length - 1 ? '<button id="moveDownBtn" title="Move this bubble one place later in the reading order">Move down</button>' : ""}
-            ${state.selectedIndex > 0 ? '<button id="mergePrevBtn" title="Join this bubble with the one above it (the OCR cut one speech bubble into pieces)">Merge with &uarr;</button>' : ""}
-            ${state.selectedIndex < state.bubbles.length - 1 ? '<button id="mergeNextBtn" title="Join this bubble with the one below it">Merge with &darr;</button>' : ""}
-            ${state.hasLines && (bubble.line_count || 0) >= 2 ? '<button id="splitBtn" title="The OCR glued two bubbles (or map labels) together: pick the lines of the new bubble on the page. The translation is divided too - no new translation unless you ask">Split...</button>' : ""}
-            <button id="skipBtn" title="Do not translate this bubble and put the original pixels back (page numbers, junk)">Skip</button>
-            <button id="spellcheckToggleBtn" class="${isSpellcheckEnabled() ? "primary" : ""}" title="Toggle Polish spellcheck">Spellcheck: ${isSpellcheckEnabled() ? "On" : "Off"}</button>
-        </div>`}
- 
-        <div class="detail-actions" style="align-items:center;">
-            ${isSkipped ? "" : '<button id="saveBtn" class="primary" title="Save this translation (Ctrl/Cmd+Enter also works while typing)">Save</button>'}
-            ${isSkipped || !state.storeApproved ? "" : '<button id="approveBtn" title="Store this UNCHANGED translation in the correction memory as an approved example (Settings: memory_store_approved). Moving on never does that.">Approve to memory</button>'}
+            <button id="moveUpBtn" ${isFirst ? "disabled" : ""} title="Move this bubble one place earlier in the reading order">Move up</button>
+            <button id="moveDownBtn" ${isLast ? "disabled" : ""} title="Move this bubble one place later in the reading order">Move down</button>
+            <button id="mergePrevBtn" ${isFirst ? "disabled" : ""} title="Join this bubble with the one above it (the OCR cut one speech bubble into pieces)">Merge with &uarr;</button>
+            <button id="mergeNextBtn" ${isLast ? "disabled" : ""} title="Join this bubble with the one below it">Merge with &darr;</button>
+            <button id="splitBtn" ${canSplit ? "" : "disabled"} title="${canSplit ? "The OCR glued two bubbles (or map labels) together: pick the lines of the new bubble on the page. The translation is divided too - no new translation unless you ask" : "Only for a bubble with at least two text lines"}">Split...</button>
+            ${isSkipped
+                ? '<button id="unskipBtn" class="primary" title="Translate this bubble anyway (its text will be erased from the image)">Translate this</button>'
+                : '<button id="skipBtn" title="Do not translate this bubble and put the original pixels back (page numbers, junk)">Skip</button>'}
+            <button id="spellcheckToggleBtn" ${isSkipped ? "disabled" : ""} class="${isSpellcheckEnabled() ? "primary" : ""}" title="Toggle Polish spellcheck">Spellcheck: ${isSpellcheckEnabled() ? "On" : "Off"}</button>
+        </div>
+
+        <div class="detail-actions detail-bottom" style="align-items:center;">
+            <button id="saveBtn" class="primary" ${isSkipped ? "disabled" : ""} title="Save this translation (Ctrl/Cmd+Enter also works while typing)">Save</button>
+            ${state.storeApproved ? `<button id="approveBtn" ${isSkipped ? "disabled" : ""} title="Store this UNCHANGED translation in the correction memory as an approved example (Settings: memory_store_approved). Moving on never does that.">Approve to memory</button>` : ""}
             <span id="saveInlineStatus" style="font-size:12px;"></span>
             <div class="detail-nav-actions" style="margin-left:auto;">
                 <button id="prevBtn" class="${isFirst ? "nav-crosses-page" : ""}"
@@ -919,7 +923,7 @@ function renderBubbleDetail() {
             </div>
         </div>
     `;
- 
+
     document.getElementById("deleteBubbleBtn").addEventListener("click", () => deleteBubble());
     document.getElementById("prevBtn").addEventListener("click", () => navigateBubble(-1));
     document.getElementById("nextBtn").addEventListener("click", () => navigateBubble(1));
@@ -934,8 +938,17 @@ function renderBubbleDetail() {
     document.getElementById("saveSourceBtn").addEventListener("click", () => saveSourceText(document.getElementById("sourceInput").value));
     document.getElementById("undoCleanupBtn")?.addEventListener("click", () => saveSourceText(bubble.text_raw));
 
+    // tools that also work on a skipped bubble (wrong box, glued / cut bubbles)
+    document.getElementById("reocrBubbleBtn").addEventListener("click", reocrCurrentBubble);
+    document.getElementById("reocrAreaBtn").addEventListener("click", () => setDrawMode("reocr", bubble.bubble_id));
+    document.getElementById("moveUpBtn").addEventListener("click", () => moveCurrentBubble(-1));
+    document.getElementById("moveDownBtn").addEventListener("click", () => moveCurrentBubble(1));
+    document.getElementById("mergePrevBtn").addEventListener("click", () => mergeCurrentBubble(-1));
+    document.getElementById("mergeNextBtn").addEventListener("click", () => mergeCurrentBubble(1));
+    document.getElementById("splitBtn").addEventListener("click", startSplit);
     if (isSkipped) {
         document.getElementById("unskipBtn").addEventListener("click", () => setSkip(false));
+        document.getElementById("memoryUsedPanel").innerHTML = '<div class="field-label text-muted">Not translated - the original pixels stay on the page.</div>';
         return;
     }
 
@@ -969,13 +982,6 @@ function renderBubbleDetail() {
         updateUnsaved();
     });
     document.getElementById("retranslateBubbleBtn").addEventListener("click", () => retranslateCurrentBubble());
-    document.getElementById("reocrBubbleBtn").addEventListener("click", reocrCurrentBubble);
-    document.getElementById("reocrAreaBtn").addEventListener("click", () => setDrawMode("reocr", bubble.bubble_id));
-    document.getElementById("moveUpBtn")?.addEventListener("click", () => moveCurrentBubble(-1));
-    document.getElementById("moveDownBtn")?.addEventListener("click", () => moveCurrentBubble(1));
-    document.getElementById("mergePrevBtn")?.addEventListener("click", () => mergeCurrentBubble(-1));
-    document.getElementById("mergeNextBtn")?.addEventListener("click", () => mergeCurrentBubble(1));
-    document.getElementById("splitBtn")?.addEventListener("click", startSplit);
     document.getElementById("skipBtn").addEventListener("click", () => setSkip(true));
     document.getElementById("saveBtn").addEventListener("click", () => saveCurrentBubble());
     document.getElementById("approveBtn")?.addEventListener("click", () => approveCurrentBubble());
@@ -1128,16 +1134,45 @@ async function moveCurrentBubble(direction) {
     }
 }
 
+const ORDER_NAMES = { ttb: "top to bottom", rtl: "right to left", ltr: "left to right" };
+
+/**
+ * The order select: a mode sorts this page at once (Undo in the message puts the previous order back); the last two
+ * entries apply the page's current mode to every processed page of the chapter / project (after a confirmation).
+ */
 async function applyAutoOrder() {
-    const mode = document.getElementById("orderSelect").value;
-    const names = { ttb: "top to bottom", rtl: "right to left (rows top to bottom)", ltr: "left to right (rows top to bottom)" };
-    if (!confirm(`Sort the bubbles of this page ${names[mode]}?\n\nThere is no panel detection, so check the numbers on the page afterwards and use Move up / Move down where needed. Translations are not changed.`)) return;
+    const select = document.getElementById("orderSelect");
+    const choice = select.value;
     const keep = state.selectedIndex === null ? null : state.bubbles[state.selectedIndex].bubble_id;
+    if (choice === "chapter" || choice === "project") {
+        select.value = state.bubbleOrder;
+        const where = choice === "chapter" ? "every processed page of this chapter" : "every processed page of the WHOLE project";
+        if (!confirm(`Sort ${where} ${ORDER_NAMES[state.bubbleOrder]}?\n\nManual Move up / down changes on those pages are replaced. Translations are not changed.`)) return;
+        try {
+            const { pages } = await api.pages.reorderBubbles(pageId, { auto: state.bubbleOrder, scope: choice });
+            await reloadBubbles(keep);
+            showToast(`Sorted ${pages} page(s) ${ORDER_NAMES[state.bubbleOrder]}`, 3000);
+        } catch (e) {
+            alert(`Sort failed: ${e.message}`);
+        }
+        return;
+    }
+    const previous = state.bubbles.map((b) => b.bubble_id);
+    const previousMode = state.bubbleOrder;
     try {
-        await api.pages.reorderBubbles(pageId, { auto: mode });
+        await api.pages.reorderBubbles(pageId, { auto: choice });
+        state.bubbleOrder = choice;
         await reloadBubbles(keep);
-        showToast("Bubbles sorted");
+        const changed = state.bubbles.some((b, i) => b.bubble_id !== previous[i]);
+        showToast(changed ? `Sorted ${ORDER_NAMES[choice]} - check the numbers on the page` : `Already ${ORDER_NAMES[choice]}`, 2500,
+            changed ? { label: "Undo", run: async () => {
+                await api.pages.reorderBubbles(pageId, { order: previous });
+                state.bubbleOrder = previousMode;
+                select.value = previousMode;
+                await reloadBubbles(keep);
+            } } : null);
     } catch (e) {
+        select.value = previousMode;
         alert(`Sort failed: ${e.message}`);
     }
 }
@@ -1309,7 +1344,7 @@ async function saveCurrentBubble() {
  
     const bubble = state.bubbles[state.selectedIndex];
     const textarea = document.getElementById("translationInput");
-    if (!textarea) return true; // skipped bubble: nothing to save
+    if (!textarea || textarea.disabled || bubble.skip) return true; // skipped bubble: nothing to save / confirm
     const newValue = textarea.value.trim();
 
     if (newValue === (bubble.translation || "")) {

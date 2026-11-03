@@ -20,7 +20,8 @@ from core.config import SCALE
 
 
 def save_ocr_json(out_dir: str, file_base_name: str, ocr_result: dict, pending_translation: bool = False,
-                  detect_rotation: bool | None = None, cleanups: list | None = None) -> str:
+                  detect_rotation: bool | None = None, cleanups: list | None = None,
+                  bubble_order: str | None = None) -> str:
     """
     Save OCR results (items, lines, bubbles with translations) to JSON.
 
@@ -93,6 +94,8 @@ def save_ocr_json(out_dir: str, file_base_name: str, ocr_result: dict, pending_t
         payload["detect_rotation"] = bool(detect_rotation)   # the page's own choice (Re-OCR dialog), see ocr_pipeline.PageOCR
     if cleanups:
         payload["cleanups"] = cleanups                       # manual "Clean area" rectangles (routers/pages.py add_cleanup)
+    if bubble_order:
+        payload["bubble_order"] = bubble_order               # reading order chosen in the editor (ttb / rtl / ltr)
 
     out_path = os.path.join(out_dir, f"{file_base_name}_ocr.json")
     with open(out_path, "w", encoding="utf-8") as f:
@@ -100,6 +103,39 @@ def save_ocr_json(out_dir: str, file_base_name: str, ocr_result: dict, pending_t
 
     print(f"[JSON] saved -> {out_path}")
     return out_path
+
+
+def bubble_reviewed(b: dict) -> bool:
+    """The user looked at this bubble: edited it (translation != AI draft) or accepted it unchanged (confirmed stamp)."""
+    text = (b.get("translation") or "").strip()
+    if not text:
+        return False
+    return text != (b.get("ai_translation") or "").strip() or b.get("confirmed_translation") == b.get("translation")
+
+
+_REVIEW_CACHE: dict[str, tuple[float, bool]] = {}
+
+
+def page_reviewed(json_path: str) -> bool:
+    """
+    Every bubble to translate on the page has been reviewed by the user (same rule as the editor's list markers and the
+    Lettering switch). A page without such bubbles (no text, only skipped numbers) counts as reviewed - nothing to check.
+    Cached by file mtime: the project list asks for hundreds of pages.
+    """
+    try:
+        mtime = os.path.getmtime(json_path)
+    except OSError:
+        return False
+    hit = _REVIEW_CACHE.get(json_path)
+    if hit and hit[0] == mtime:
+        return hit[1]
+    try:
+        data = load_page_json(json_path)
+        done = all(bubble_reviewed(b) for b in data.get("bubbles", []) if not b.get("skip"))
+    except Exception:
+        done = False
+    _REVIEW_CACHE[json_path] = (mtime, done)
+    return done
 
 
 def page_paths(page) -> dict:

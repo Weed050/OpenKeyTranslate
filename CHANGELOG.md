@@ -2,6 +2,32 @@
 
 All notable changes to OpenKeyTranslate. Versions follow `APP_VERSION` in `backend/core/config.py`.
 
+## [0.2.1] - 2026-11-03
+
+### Added
+- **Project list redesign**: one card per project with a three-colour progress bar (reviewed by you / processed by
+  the system only / not processed; `GET /projects/{id}/progress`), Resume / Open / Export buttons and the rare actions
+  (copy path, open folder, delete) in a "..." menu.
+- **Fonts**: Settings > Text & fonts lists the user's fonts (`<app root>/fonts`, upload / remove) and the system fonts,
+  marks fonts without Polish letters, and picks the default font by family name. Lettering mode can pick a font per
+  bubble (recently used first) with **bold** / *italic* (imitated when the family has no such file).
+- **Lettering**: vertical alignment (top / middle / bottom), "Fit to bubble", Alt + corner resizes evenly from the
+  centre.
+- **Move lines to another bubble** from the Split dialog, with their part of the translation (no new request).
+- **Bubble order**: picking an order sorts the page at once (Undo in the message), can be applied to the whole
+  chapter / project, is stored per page and kept by Re-OCR.
+- Settings > Translation & API keys has a quick start (where to get a free key); the "no API key" banner links there.
+- Help: separate Glossary chapter; arrows (previous / next page) on pages that are not processed yet.
+
+### Changed
+- Split: a one-sentence translation is cut at a comma or conjunction that matches the next source piece
+  (BUT -> ALE) instead of staying whole in the first part.
+- Bubble panel: every button keeps its place (disabled where it does not apply, e.g. on a skipped bubble); the
+  arrows sit at the bottom of the panel also when no bubble is open.
+- Editor toolbar: the main tools first, view and page tools in a "More" menu; the toolbar wraps instead of hiding
+  buttons off-screen.
+- Memory and Glossary pages use the same centred column as Settings.
+
 ## [0.2.0] - 2026-11-02
 
 ### Added

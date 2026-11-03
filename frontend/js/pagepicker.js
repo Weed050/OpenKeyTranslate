@@ -54,6 +54,13 @@ export async function showPagePicker() {
     applyView(localStorage.getItem(VIEW_STORAGE_KEY) || "grid");
 
     bindToolbar(byChapter);
+    // "Export…" on the project list lands here: open the export dialog straight away (once)
+    const url = new URL(window.location.href);
+    if (url.searchParams.get("export") === "1") {
+        url.searchParams.delete("export");
+        history.replaceState(null, "", url);
+        exportTranslatedPages();
+    }
 }
 
 /* ------------------------------ one chapter card ------------------------------ */

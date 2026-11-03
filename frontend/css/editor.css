@@ -27,10 +27,25 @@
   border-bottom: 1px solid var(--border);
   font-size: 12px;
   color: var(--text-muted);
-  overflow-x: auto;
+  flex-wrap: wrap;            /* a narrow window wraps to a 2nd row instead of hiding buttons off to the side */
+  row-gap: 6px;
   white-space: nowrap;
+  position: relative;
+  z-index: 20;
 }
 .image-toolbar > *{ flex-shrink: 0; }
+.toolbar-more{ position: relative; }
+.toolbar-more > summary{ list-style: none; cursor: pointer; }
+.toolbar-more > summary::-webkit-details-marker{ display: none; }
+.toolbar-more-menu{
+  position: absolute; right: 0; top: calc(100% + 4px); z-index: 50;
+  display: flex; flex-direction: column; gap: 4px; min-width: 180px; padding: 8px;
+  background: var(--bg-panel); border: 1px solid var(--border-strong); border-radius: var(--radius-sm);
+  box-shadow: 0 8px 24px rgba(0,0,0,.25);
+}
+.toolbar-more-menu button{ width: 100%; text-align: left; }
+.toolbar-more-menu hr{ width: 100%; border: 0; border-top: 1px solid var(--border); margin: 2px 0; }
+.toolbar-more-group{ display: flex; flex-direction: column; gap: 4px; }
  
 .image-viewport{
   flex: 1;
@@ -223,6 +238,9 @@
   line-height: 1.2;
   text-align: center;
 }
+.detail-bottom{ margin-top: auto; }      /* Save + arrows always at the bottom of the panel (also with no bubble open) */
+.detail-empty{ margin: 0; font-size: 13px; }
+.detail-tools button:disabled{ opacity: .45; }
 .detail-nav-actions{ display: flex; gap: 6px; }
 .detail-nav-actions button{ flex: 0 0 auto; padding: 7px 10px; }
 .detail-nav-actions button.nav-crosses-page{
@@ -255,6 +273,8 @@
   transition: opacity 0.25s;
 }
 .save-toast.show{ opacity: 1; }
+.save-toast.show.has-action{ pointer-events: auto; color: var(--text-primary); }
+.toast-action{ margin-left: 8px; padding: 2px 10px; font-size: 12px; }
  
 #editorLayout{
   width: 100%;
@@ -350,7 +370,7 @@
   pointer-events: none;
 }
 .bubble-outline.selected .bubble-index { background: var(--accent); color: var(--accent-text); }
-.toolbar-select { width: auto; height: 28px; padding: 0 6px; font-size: 12px; }
+.toolbar-select { width: 168px; height: 28px; padding: 0 6px; font-size: 12px; }   /* fixed: the long 'whole project' entry must not widen it */
 
 /* ---------- glossary suggestion after a saved correction (js/editor.js offerGlossarySuggestions) ---------- */
 .glossary-suggest{
@@ -554,3 +574,13 @@ body.lettering-mode .bubble-outline { display: none; }
 .lettering-size { display: inline-flex; align-items: center; gap: 4px; }
 .lettering-size input { width: 64px; padding: 3px 6px; }
 .lettering-size button { padding: 2px 9px; }
+
+/* arrows on an unprocessed page (process prompt) */
+.process-nav{ display: flex; gap: 8px; justify-content: center; margin-top: 14px; }
+
+/* Lettering panel: font select + B / I toggles */
+.lettering-font{ display: flex; gap: 4px; align-items: center; flex: 1; min-width: 0; }
+.lettering-font select{ flex: 1; min-width: 0; max-width: 190px; height: 30px; padding: 2px 6px; font-size: 12px; line-height: normal; }
+.lettering-font button{ width: 30px; padding: 4px 0; }
+.lettering-font button.selected{ background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
+.lettering-panel{ flex: 1; }          /* fills the panel: Fit / Reset + arrows sit at its bottom like in Translate mode */

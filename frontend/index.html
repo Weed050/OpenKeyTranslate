@@ -10,6 +10,7 @@
     <script src="js/theme.js"></script>
     <link rel="stylesheet" href="css/base.css">
     <link rel="stylesheet" href="css/layout.css">
+    <link rel="stylesheet" href="css/dashboard.css">
     <link rel="stylesheet" href="css/help.css">
     <script src="js/help.js" defer></script>
 </head>
@@ -36,17 +37,19 @@
             </div>
         </nav>
  
-        <main class="main-content center-content">
-            <div class="content-narrow">
-                <div class="page-header" style="justify-content:center;">
+        <main class="main-content">
+            <div class="dash-column">
+                <div class="page-header">
                     <h1>Projects</h1>
                 </div>
- 
+
                 <div id="projectList"></div>
- 
-                <div class="card" style="margin-top: 32px;">
+
+                <div class="dash-section-title">New project</div>
+                <div class="card create-card">
                     <h2>Create new project</h2>
-                    <div style="display:flex; flex-direction:column; gap:10px; max-width:420px;">
+                    <p class="text-muted">Pick the folder with the scans - one sub-folder per chapter (Chapter_1, Chapter_2, …). More chapters can be added later from the project page.</p>
+                    <div class="create-fields">
                         <div>
                             <label for="projectName">Project name</label>
                             <input type="text" id="projectName" placeholder="e.g. Bleach">

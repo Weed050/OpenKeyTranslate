@@ -1,107 +1,116 @@
 # OpenKeyTranslate
 
-A **Human-in-the-Loop (HITL)** manga translation pipeline, built as an engineering thesis project.
+A **Human-in-the-Loop (HITL)** manga / webtoon translation tool (English → Polish), built as an engineering thesis
+project. The program does the tedious work (reading the text, cleaning the page, putting the translation back), the
+translator decides, and the AI learns from every correction.
 
-> 🇵🇱 A Polish-language README is available at [`README-pl.md`](./README-pl.md).
+> 🇵🇱 A Polish-language README is available at [`README-pl.md`](./README-pl.md) (older; this file is the current one).
 
-**Project status: proof of concept.** The backend pipeline is being validated through a set of manual tests covering individual stages (OCR, inpainting, translation, correction memory), which also help identify which parts need the most work next. The frontend is currently a skeleton — a working shell, not a finished editor.
-
-Most existing automated manga translation tools are closed-source, black-box services (e.g. Mantra Engine) that give the reader/translator no way to correct or steer the output. OpenKeyTranslate takes a different approach: it automates the tedious, repetitive parts of the pipeline (text extraction, image cleaning) while keeping a human in the loop for the part AI still gets wrong — translation quality and nuance.
-
-Currently the pipeline only supports **English → Polish**, since that's the only language pair the author is fluent enough in to evaluate quality.
+**Status: working prototype, version 0.2.1** (see [`CHANGELOG.md`](./CHANGELOG.md)). The whole first chapter of a test
+series has been translated with it. It is still a thesis project: expect rough edges, and the README will be rewritten
+when the thesis is finished.
 
 ---
 
-## Core idea
+## What it does
 
-AI translation is not reliable enough to run unsupervised, especially for a language like Polish where grammar changes depending on the speaker's gender — something English doesn't encode at all. Instead of pretending the AI is good enough, OpenKeyTranslate treats it as a first draft:
+1. **OCR (local)** - PaddleOCR (PP-OCRv5, GPU or CPU) reads the English text; lines are grouped into bubbles in reading
+   order. Long webtoon strips are cut along blank bands. A second, careful reading rescues lines the first pass
+   rejected (stacked vertical letters, boxes cut too tight, tilted map labels).
+2. **Cleaning (local)** - only the letters are erased (glyph mask), white bubbles are filled with their own colour,
+   text on plain paper with the paper colour, everything else from its surroundings (OpenCV TELEA). Leftover traces
+   can be cleaned by hand ("Clean area").
+3. **Translation (cloud, your own key)** - the text of the whole page goes to an LLM in one request (neighbouring
+   bubbles are context). Groq or Gemini, several keys with automatic rotation on rate limits. **Only text leaves the
+   computer - never the page images.**
+4. **Review in the editor** - page + bubble list + bubble panel. Edit, accept, retranslate one bubble, re-read a
+   bubble, draw a missed one, merge (Shift+click) / split / move lines between bubbles, skip page numbers and noise.
+5. **Lettering** - a second editor mode: move, resize and rotate the text box of each bubble, font per bubble (your
+   own fonts or system fonts, bold / italic), alignment, outline. Tilted original text is lettered along its slant.
+6. **Export** - one page from the editor, or whole chapters from the project page: translated / clean / both,
+   PNG or JPG, loose files or ZIP.
+7. **Correction memory + glossary** - every correction is stored and embedded (all-MiniLM-L6-v2). For a similar new
+   line, the EN → PL pair goes into the prompt as an example; short repeated lines use an exact lane. Glossary terms
+   (names, invented words) are given to the model whenever they appear, and a missing term triggers a short
+   post-editing request. "Find terms with AI" proposes terms from your corrections.
+8. **Measurement** - every memory-assisted translation has a twin request with the identical payload minus the
+   memory (zero-shot). The Logs page shows both, what was injected and how it compares with your final version -
+   the data for the thesis question: *does the correction loop measurably improve the translation?*
 
-1. Text is extracted and the AI produces a translation.
-2. The user reviews and, if needed, corrects it in an image-editor-style interface.
-3. The correction is stored and reused as context for similar text in the future, so the system gradually "learns" the user's preferred phrasing without any fine-tuning.
-
-The thesis question this project is actually trying to answer is: **does a feedback loop like this measurably improve translation quality**, compared to plain zero-shot AI translation? That comparison — not a polished product — is the main academic goal.
+The memory design follows Moslem (2024), *Language Modelling Approaches to Adaptive Machine Translation*
+(PhD thesis, DCU, [arXiv:2401.14559](https://arxiv.org/abs/2401.14559)): similar approved translations and glossary
+terms in the prompt instead of fine-tuning, plus term post-editing. OKT applies it to Polish, comics with OCR text and
+a live correction loop.
 
 ---
 
 ## Design pillars
 
-- **Privacy & copyright first.** Manga pages are copyrighted images, not just text. Every step that touches the actual image — OCR, inpainting, visual context analysis — runs **100% locally**. Only extracted plain text is ever sent to an external API.
-- **BYOK (Bring Your Own Key).** The project doesn't bundle or pay for a translation service. You plug in your own LLM API key, which is where the project's name comes from. Currently wired up to Groq's API (LLaMA 3.3 70B Versatile); quality for Polish is mediocre since that model is trained primarily on English, so switching to Gemini is on the todo list.
-- **Runs on low-end hardware.** The goal is to eventually ship in both GPU and CPU-only variants, so translators without a dedicated GPU can still use it for free.
-- **Modular.** Components (OCR engine, vision model, translation backend) are meant to be swappable, so someone with access to a better model or paid service can plug it in instead of the defaults. This is currently just a design goal, not implemented yet.
+- **Privacy and copyright first.** Everything that touches the page image runs locally. Only extracted text is sent
+  to the translation API.
+- **BYOK (Bring Your Own Key).** No bundled or paid translation service: paste your own (free tier is enough) Groq or
+  Gemini key in Settings > Translation & API keys.
+- **Modest hardware.** Developed on a GTX 1050 Ti; runs on CPU too (slower OCR).
+- **The human stays in charge.** AI output is a draft; nothing is "final" until you accept or correct it, and the
+  project list shows what you have reviewed versus what was only processed by the system.
 
 ---
 
-## Pipeline (current state)
+## Quick start (Windows, Python 3.12)
 
-1. **Text detection & OCR (local):** PaddleOCR extracts English text from speech bubbles. It's currently run on the whole page rather than per-bubble, which is more resource-heavy than it needs to be (see Known Limitations).
-2. **Inpainting (local):** the detected text is erased from the image to produce a clean background, without touching the surrounding artwork.
-3. **AI translation (cloud, BYOK):** the extracted text is sent via API to an LLM for translation into Polish.
-4. **Manual correction (frontend):** the user reviews the AI's translation in a simple, Photoshop/GIMP-like editor overlaid on the cleaned image, and can edit or confirm it.
-5. **Correction memory:** confirmed user edits are stored, embedded, and used for similarity search — if a future text string is close enough to a previously corrected one, the old correction is injected into the prompt as a hint (e.g. *"the user previously translated X as Y — a similar line follows"*). This avoids naive 1:1 string matching.
+```bash
+git clone https://github.com/Weed050/OpenKeyTranslate.git
+cd OpenKeyTranslate/backend
+python -m venv .venv
+.venv\Scripts\activate
+pip install -r ../setup/requirements_cpu_only.txt     # or ../setup/req_gtx_1050ti_OKT.txt for an NVIDIA GPU
+python main.py                                         # API on http://127.0.0.1:8000
+```
 
-At the moment, only the backend/pipeline side of this is implemented in any depth. The frontend is a skeleton.
+Then open `frontend/index.html` through a local web server (e.g. VS Code Live Server on port 5500 - the API only
+accepts pages served from `localhost` / `127.0.0.1`). See `setup/pip_install_instruction.txt` for the GPU / CPU
+package details. The first run downloads the OCR and embedding models.
 
----
+1. **Settings > Translation & API keys**: follow the Quick start box (free key from Groq or Google AI Studio, paste,
+   Test connection).
+2. **Projects**: create a project from a folder with one sub-folder per chapter.
+3. Open the project, process pages, review them in the editor, switch to Lettering, export.
 
-## Where this differs from prior research (and why that matters)
-
-This project's approach to visual context is inspired by the paper *"Context-Informed Machine Translation of Manga using Multimodal Large Language Models"*, which found that:
-- feeding the model the inpainted (text-erased) image as context — instead of letting the LLM attempt OCR itself — improved results, since a dedicated OCR tool already handles extraction;
-- a context window of roughly one page (not more, not less) worked best.
-
-However, the paper's setup sent the actual image plus indexed, numbered text per bubble directly to a multimodal LLM. This project can't afford that, both in API cost and in the privacy/copyright constraints described above (no raw image ever leaves the machine). Instead, the plan is to send the LLM only:
-- the text to translate, and
-- a **textual description** of the visual scene (generated locally, likely via Moondream), as a stand-in for actual visual context — e.g. for inferring a speaker's gender.
-
-This is expected to perform noticeably worse than the original paper's image-based approach. It's an intentional tradeoff for privacy and cost, not an oversight — worth keeping in mind when judging output quality.
-
----
-
-## Known limitations / open problems
-
-- **OCR is resource-heavy** as currently implemented (whole-page OCR rather than per-bubble crops). Switching to bubble-detection-then-crop-then-OCR should help a lot, but is a significant rework, not a small patch.
-- **Vertical text is not supported yet** — the current OCR setup isn't built for it.
-- **Visual/gender context is not implemented yet.** Whether Moondream can reliably infer speaker gender from a manga panel is still an open question, not a validated result.
-- **Correction-memory retrieval** (deciding what counts as a "similar enough" text to reuse a past correction) is unsolved in practice — this is planned but the matching strategy isn't finalized.
-- **Translation quality is currently limited by the model.** LLaMA 3.3 70B Versatile is not well suited to Polish; this is a known gap, not a bug.
+User data (database, projects, fonts, settings, logs) lives in `%APPDATA%\OpenKeyTranslate`, outside the repository.
+Settings > Backup & moving packs it into one ZIP for another computer.
 
 ---
 
-## Roadmap
+## Known limitations
 
-- [ ] Visual context via Moondream (local), including experiments on speaker-gender detection
-- [ ] Bubble detection → crop → OCR, to reduce OCR resource usage
-- [ ] Custom font support, a bundled library of common comic fonts, and eventually automatic font matching
-- [ ] Correction-memory similarity search for the prompt-injection feedback loop
-- [ ] Vertical text support
-- [ ] Packaging the whole stack (FastAPI backend + SQLite + web frontend) into a single desktop app (Discord-style), so the end user never sees a terminal or a local server
-- [ ] Gemini as an alternative/better translation backend
-- [ ] Swappable modules for OCR/vision/translation (BYO-model, not just BYO-key)
-
----
-
-## Documentation & repo structure
-
-- [`docs/ARCHITECTURE_API.md`](./docs/ARCHITECTURE_API.md) — backend architecture and API documentation (Markdown).
-- **[View the API & Code Documentation (GitHub Pages)](https://weed050.github.io/OpenKeyTranslate/)**
-- Additional frontend/HTML documentation lives alongside the frontend code.
-- `docs/**` and `*.md` are marked `linguist-documentation` in `.gitattributes`, so GitHub's language stats reflect the actual backend/frontend code rather than being skewed by documentation files.
-- Most of `docs/` is intended to be published as project documentation (e.g. via GitHub Pages); `ARCHITECTURE_API.md` is kept internal for now and excluded from that.
+- Heuristics are tuned on black-and-white manga with white bubbles; colour webtoons, gradients and text over detailed
+  art need more work (a per-project style profile is an idea).
+- Text on screentone or artwork is filled with TELEA - smooth, without re-creating the texture. A learned inpainting
+  model (e.g. LaMa) as an optional engine is under consideration.
+- The OCR model reads English only; Korean / Japanese raws would need another recognition model, source language and
+  multilingual memory embeddings.
+- The speaker's gender (Polish verb endings) is not inferred from the image.
+- One series, one translator and one model so far: the evaluation sample is small.
+- Starting it still needs a terminal (backend) and a browser; a one-click desktop app is planned.
 
 ---
+
+## Documentation & repository
+
+- [`CHANGELOG.md`](./CHANGELOG.md) - what changed in each version.
+- [`docs/ARCHITECTURE_API.md`](./docs/ARCHITECTURE_API.md) - backend architecture and API.
+- **[API & code documentation (GitHub Pages)](https://weed050.github.io/OpenKeyTranslate/)** - generated with pdoc
+  through `backend/scripts/build_docs.py` (never plain `pdoc`: the script scans for secrets first).
+- `.githooks/pre-commit` blocks secrets and forbidden files - enable it with `git config core.hooksPath .githooks`.
 
 ## Tech stack
 
-- **Backend:** Python, FastAPI, SQLite
-- **Computer vision:** OpenCV, PaddleOCR (local OCR)
-- **Vision context (planned):** Moondream
-- **Translation:** LLM API, BYOK (currently Groq / LLaMA 3.3 70B Versatile)
-- **Frontend:** HTML5, CSS3, vanilla JS (currently a skeleton/editor shell)
+- **Backend:** Python 3.12, FastAPI, SQLite (SQLAlchemy)
+- **Vision:** PaddleOCR 3 (PP-OCRv5), OpenCV, Pillow
+- **Memory:** sentence-transformers (all-MiniLM-L6-v2)
+- **Translation:** Groq / Gemini APIs (BYOK)
+- **Frontend:** HTML, CSS, vanilla JavaScript modules (no build step)
 
----
+## License
 
-## Thesis objective
-
-The engineering-thesis goal is to measure whether a human-in-the-loop correction/feedback system actually improves AI translation quality over time, compared to plain zero-shot translation — with tests designed around that comparison, not around shipping a finished product.
+Apache License 2.0 - see [`LICENSE`](./LICENSE).

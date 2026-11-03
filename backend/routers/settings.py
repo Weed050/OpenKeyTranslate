@@ -296,8 +296,10 @@ async def update_ocr_options(payload: dict):
         current["typesetting_uppercase"] = bool(payload["typesetting_uppercase"])
     if "typesetting_font" in payload:
         font = str(payload["typesetting_font"] or "").strip()
-        if font and not os.path.isfile(font):
-            raise HTTPException(status_code=400, detail=f"Font file not found: {font}")
+        if font and not os.path.isfile(font):            # a family name from Settings > Fonts, or a file path
+            from services.font_service import find_family
+            if not find_family(font):
+                raise HTTPException(status_code=400, detail=f"Font not found (no such file or installed family): {font}")
         current["typesetting_font"] = font
     choices = {"inpaint_mode": ("glyph", "box"), "bubble_order": ("ttb", "rtl", "ltr")}
     for key, allowed in choices.items():

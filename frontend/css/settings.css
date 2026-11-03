@@ -12,6 +12,34 @@
 }
 .settings-cards { min-width: 0; }
 .settings-cards > .card { scroll-margin-top: var(--space-md); }
+/* the Save button of a card: clearly apart from the last field above it (the rows end with a border line) */
+.settings-cards .card > button.primary,
+.settings-cards .card .row + button.primary { margin-top: var(--space-lg); }
+
+/* Fonts card: the user's font files and the add / open / refresh buttons */
+.fonts-box { margin: var(--space-sm) 0 0; padding: var(--space-md); border: 1px solid var(--border); border-radius: var(--radius-sm); }
+.fonts-head { display: flex; flex-direction: column; gap: 2px; margin-bottom: var(--space-sm); }
+.user-font-list { display: flex; flex-direction: column; gap: 4px; margin-bottom: var(--space-sm); }
+.user-font { display: flex; align-items: center; gap: 10px; padding: 4px 0; border-bottom: 1px solid var(--border); }
+.user-font:last-child { border-bottom: none; }
+.user-font .font-sample { font-size: 18px; min-width: 180px; }
+.user-font .font-meta { flex: 1; font-size: 12px; }
+.font-warn { color: var(--warn); font-size: 12px; white-space: nowrap; }
+.fonts-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.fonts-note { font-size: 12px; margin: var(--space-sm) 0 0; }
+.fonts-note a { color: var(--accent); }
+
+/* Translation card: the three steps to a working key, before the details */
+.quick-start {
+  margin: 0 0 var(--space-md);
+  padding: var(--space-md) var(--space-md) var(--space-sm);
+  background: var(--accent-soft, var(--bg-panel-2));
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md, 10px);
+}
+.quick-start ol { margin: 6px 0 8px; padding-left: 20px; }
+.quick-start li { margin-bottom: 4px; }
+.quick-start a { color: var(--accent); }
 
 .settings-toc {
   position: sticky;

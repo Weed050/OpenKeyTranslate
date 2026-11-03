@@ -33,3 +33,5 @@
 .export-grid{ display: grid; grid-template-columns: 70px 1fr; gap: 10px var(--space-md); align-items: start; font-size: 13px; }
 .export-options{ display: flex; flex-wrap: wrap; align-items: center; gap: 6px 16px; }
 .export-options input[type="number"]{ padding: 3px 6px; }
+.split-target{ display: flex; align-items: center; gap: 8px; font-size: 13px; }
+.split-target select{ max-width: 340px; }

@@ -37,11 +37,19 @@ export function escapeHtml(text) {
     return div.innerHTML;
 }
 
-export function showToast(message, ms = 1800) {
+export function showToast(message, ms = 1800, action = null) {
     el.saveToast.textContent = message;
+    if (action) {                                   // {label, run}: one button in the message (e.g. Undo)
+        const btn = document.createElement("button");
+        btn.className = "toast-action";
+        btn.textContent = action.label;
+        btn.addEventListener("click", () => { el.saveToast.classList.remove("show"); action.run(); }, { once: true });
+        el.saveToast.append(" ", btn);
+    }
+    el.saveToast.classList.toggle("has-action", !!action);
     el.saveToast.classList.add("show");
     clearTimeout(showToast._t);
-    showToast._t = setTimeout(() => el.saveToast.classList.remove("show"), ms);
+    showToast._t = setTimeout(() => el.saveToast.classList.remove("show"), action ? Math.max(ms, 6000) : ms);
 }
 
 export async function openOrAlert(path) {

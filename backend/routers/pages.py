@@ -114,6 +114,8 @@ async def get_page(page_id: int, db: Session = Depends(get_db)):
         "detect_rotation": bool(ocr_data["detect_rotation"]) if "detect_rotation" in ocr_data
                            else bool(get_setting("ocr_detect_page_rotation", False)),
         "cleanups": ocr_data.get("cleanups", []),                       # manual "Clean area" rectangles (editor)
+        # reading order of this page: chosen in the editor, else the setting the OCR used
+        "bubble_order": ocr_data.get("bubble_order") or get_setting("bubble_order", "ttb"),
     }
 
 
@@ -629,6 +631,9 @@ def _process_page_pipeline(page_id: int, reocr: bool = False, translate: bool = 
 
         with OCR_LOCK:   # never two PaddleOCR runs at once (sync /process vs background worker)
             ocr_result = process_image(image, protected, detect_rotation=detect_rotation)
+        page_order = old_data.get("bubble_order")
+        if page_order in ("ttb", "rtl", "ltr") and page_order != get_setting("bubble_order", "ttb"):
+            ocr_result["bubbles"] = bubble_edit.auto_order(ocr_result["bubbles"], page_order)   # the page's own order survives Re-OCR
 
         old_bubbles = old_data.get("bubbles", [])
         carried = carry_over(old_bubbles, ocr_result["bubbles"]) if old_bubbles else set()
@@ -669,7 +674,7 @@ def _process_page_pipeline(page_id: int, reocr: bool = False, translate: bool = 
 
         os.makedirs(paths["out_dir"], exist_ok=True)
         save_ocr_json(paths["out_dir"], paths["file_base_name"], ocr_result, pending_translation=pending,
-                      detect_rotation=detect_rotation, cleanups=cleanups)
+                      detect_rotation=detect_rotation, cleanups=cleanups, bubble_order=page_order)
         write_image(paths["image"], inpaint(image, mask, flats))
 
         page.status = "processed"
@@ -832,11 +837,29 @@ def reorder_bubbles(page_id: int, payload: dict, db: Session = Depends(get_db)):
     """
     Change the order of the bubbles (the order the translator reads them and the LLM receives them):
     {"order": [bubble ids...]} for an explicit order or {"auto": "ttb" | "rtl" | "ltr"} (see bubble_edit.auto_order).
-    Ids are not renamed; nothing is re-translated or re-inpainted.
+    With "auto", "scope": "chapter" | "project" sorts every processed page of this page's chapter / project the same
+    way ({"pages": n}). Ids are not renamed; nothing is re-translated or re-inpainted.
     """
     page = db.query(Page).filter(Page.id == page_id).first()
     if not page:
         raise HTTPException(status_code=404, detail="Page not found")
+    scope = payload.get("scope")
+    if scope in ("chapter", "project"):
+        mode = payload.get("auto")
+        if mode not in ("ttb", "rtl", "ltr"):
+            raise HTTPException(status_code=400, detail="auto must be ttb, rtl or ltr")
+        chapters = page.chapter.project.chapters if scope == "project" else [page.chapter]
+        done = 0
+        for ch in chapters:
+            for p in ch.pages:
+                pp = page_paths(p)
+                if p.status != "processed" or not os.path.exists(pp["json"]):
+                    continue
+                data = load_page_json(pp["json"])
+                bubble_edit.reorder_bubbles(data, auto=mode)
+                write_page_json(pp["json"], data)
+                done += 1
+        return {"pages": done}
     paths = page_paths(page)
     if not os.path.exists(paths["json"]):
         raise HTTPException(status_code=404, detail="Page has not been OCR-processed yet")
@@ -899,10 +922,22 @@ def split_bubble(page_id: int, bubble_id: str, payload: dict, db: Session = Depe
     """
     Split a bubble in two: {"new_lines": [line ids of the NEW bubble], "preview": false}. No translation request - the
     existing translation is divided (bubble_edit.split_translation); "preview": true returns the pieces and changes nothing.
+    With "target": bubble_id the picked lines (and their part of the translation) go into that existing bubble instead.
     """
     new_lines = payload.get("new_lines")
     if not (isinstance(new_lines, list) and new_lines and all(isinstance(i, str) for i in new_lines)):
         raise HTTPException(status_code=400, detail="new_lines must be a non-empty list of line ids")
+    target = payload.get("target")                 # an existing bubble: MOVE the lines there instead of a new bubble
+    if target is not None:
+        if not isinstance(target, str):
+            raise HTTPException(status_code=400, detail="target must be a bubble id")
+        if payload.get("preview"):
+            _, _, ocr_data, _ = _edit_context(page_id, db)
+            try:
+                return bubble_edit.move_lines_preview(ocr_data, bubble_id, new_lines, target)
+            except bubble_edit.BubbleEditError as e:
+                raise HTTPException(status_code=e.status, detail=str(e))
+        return _run_bubble_edit(page_id, db, lambda data, image, prot: bubble_edit.move_lines(data, bubble_id, new_lines, target, image, ocr_region, prot))
     if payload.get("preview"):
         _, _, ocr_data, _ = _edit_context(page_id, db)
         try:

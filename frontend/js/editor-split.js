@@ -98,6 +98,7 @@ function renderSplitBar() {
 const METHOD_NOTE = {
     sentences: "The translation was divided by sentences.",
     proportional: "The sentences did not match one to one - the translation was divided by length. Check both parts.",
+    clauses: "One sentence for both parts - it was cut at a comma or conjunction (BUT -> ALE). Check both parts.",
     unsplit: "The translation could not be divided - it stays with the first part, the second is empty. Edit or retranslate it.",
 };
 
@@ -105,30 +106,23 @@ async function openSplitDialog() {
     if (!split) return;
     const newLines = [...split.picked];
     const bubbleId = split.bubbleId;
-    let preview;
-    try {
-        preview = await api.pages.splitPreview(pageId, bubbleId, newLines);
-    } catch (e) {
-        alert(`Split preview failed: ${e.message}`);
-        return;
-    }
-    const hasTranslation = preview.pieces.some((p) => (p.translation || "").trim());
+    // where the picked lines go: a new bubble, or an existing one (the OCR put a line into the wrong bubble)
+    const targets = state.bubbles
+        .map((b, i) => ({ b, i }))
+        .filter(({ b }) => b.bubble_id !== bubbleId && !b.skip);
     const dlg = document.createElement("dialog");
     dlg.className = "import-dialog merge-dialog";
     dlg.addEventListener("close", () => dlg.remove());
     dlg.innerHTML = `
-        <h2 style="margin:0;">Split into 2 bubbles</h2>
-        <div class="merge-pieces">
-            ${preview.pieces.map((p, i) => `
-                <div class="merge-piece">
-                    <span class="bubble-num">${i + 1}</span>
-                    <span class="merge-piece-text">${p.text ? escapeHtml(p.text) : '<span class="text-muted">(read again by OCR when split)</span>'}
-                        <br><span class="text-muted">${(p.translation || "").trim() ? escapeHtml(p.translation) : "(no translation)"}</span></span>
-                </div>`).join("")}
-        </div>
-        ${hasTranslation ? `<p class="text-muted" style="margin:0;">${METHOD_NOTE[preview.method] || ""}</p>` : ""}
-        ${preview.edited_source ? '<p class="import-error">You had edited the source text of this bubble - the parts use the OCR text of their lines.</p>' : ""}
-        <label class="checkbox-label" title="One translation request per part. Off: the divided translation is kept and you fix it by hand">
+        <h2 style="margin:0;">Split bubble</h2>
+        <label class="split-target">Move the picked lines to
+            <select id="splitTarget">
+                <option value="">a new bubble</option>
+                ${targets.map(({ b, i }) => `<option value="${escapeHtml(b.bubble_id)}">bubble ${i + 1}: ${escapeHtml((b.text || "").slice(0, 50))}</option>`).join("")}
+            </select>
+        </label>
+        <div id="splitBody"><p class="text-muted">Loading…</p></div>
+        <label class="checkbox-label" id="splitRetranslateRow" title="One translation request per part. Off: the divided translation is kept and you fix it by hand">
             <input type="checkbox" id="splitRetranslate"> Translate both parts again
         </label>
         <div class="import-footer">
@@ -136,21 +130,64 @@ async function openSplitDialog() {
             <button class="primary" data-act="ok">Split</button>
         </div>`;
     document.body.appendChild(dlg);
+    const targetSel = dlg.querySelector("#splitTarget");
+    const okBtn = dlg.querySelector('[data-act="ok"]');
+
+    const piece = (num, text, translation, reread) => `
+        <div class="merge-piece">
+            <span class="bubble-num">${num}</span>
+            <span class="merge-piece-text">${text ? escapeHtml(text) : reread ? '<span class="text-muted">(read again by OCR when split)</span>' : ""}
+                <br><span class="text-muted">${(translation || "").trim() ? escapeHtml(translation) : "(no translation)"}</span></span>
+        </div>`;
+
+    async function refresh() {
+        const target = targetSel.value || null;
+        const body = dlg.querySelector("#splitBody");
+        okBtn.disabled = true;
+        let preview;
+        try {
+            preview = await api.pages.splitPreview(pageId, bubbleId, newLines, target);
+        } catch (e) {
+            body.innerHTML = `<p class="import-error">${escapeHtml(e.message)}</p>`;
+            return;
+        }
+        const hasTranslation = preview.pieces.some((p) => (p.translation || "").trim());
+        const sourceNum = state.bubbles.findIndex((b) => b.bubble_id === bubbleId) + 1;
+        const targetNum = target ? state.bubbles.findIndex((b) => b.bubble_id === target) + 1 : null;
+        const moved = preview.pieces.find((p) => newLines.includes(p.line_ids[0]));
+        const stays = preview.pieces.find((p) => p !== moved);
+        body.innerHTML = target
+            ? `<div class="merge-pieces">
+                   ${piece(sourceNum, stays.text, stays.translation, stays.reread)}
+                   ${piece(targetNum, preview.target.text, preview.target.translation, false)}
+               </div>
+               <p class="text-muted" style="margin:0;">Bubble ${sourceNum} keeps the rest; bubble ${targetNum} gets the picked lines and their part of the translation, joined in reading order. No translation request.</p>`
+            : `<div class="merge-pieces">${preview.pieces.map((p, i) => piece(i + 1, p.text, p.translation, p.reread)).join("")}</div>`;
+        if (hasTranslation) body.insertAdjacentHTML("beforeend", `<p class="text-muted" style="margin:0;">${METHOD_NOTE[preview.method] || ""}</p>`);
+        if (preview.edited_source) body.insertAdjacentHTML("beforeend", '<p class="import-error">You had edited the source text of this bubble - the parts use the OCR text of their lines.</p>');
+        okBtn.textContent = target ? `Move to bubble ${targetNum}` : "Split";
+        dlg.querySelector("#splitRetranslateRow").classList.toggle("hidden", !!target);
+        okBtn.disabled = false;
+    }
+    targetSel.addEventListener("change", refresh);
+
     dlg.querySelector('[data-act="cancel"]').addEventListener("click", () => dlg.close());
-    dlg.querySelector('[data-act="ok"]').addEventListener("click", async (ev) => {
-        const retranslate = dlg.querySelector("#splitRetranslate").checked;
+    okBtn.addEventListener("click", async (ev) => {
+        const target = targetSel.value || null;
+        const retranslate = !target && dlg.querySelector("#splitRetranslate").checked;
         ev.target.disabled = true;
         try {
-            const result = await api.pages.splitBubble(pageId, bubbleId, newLines);
+            const result = await api.pages.splitBubble(pageId, bubbleId, newLines, target);
             dlg.close();
             cancelSplit();
-            await hooks.reload(result.kept);
-            showToast(retranslate ? "Bubble split - translating both parts..." : "Bubble split");
+            await hooks.reload(target ? result.target : result.kept);
+            showToast(target ? "Lines moved" : retranslate ? "Bubble split - translating both parts..." : "Bubble split");
             if (retranslate) await hooks.retranslateIds(result.bubbles.filter((b) => !b.skip).map((b) => b.bubble_id));
         } catch (e) {
             ev.target.disabled = false;
-            alert(`Split failed: ${e.message}`);
+            alert(`${target ? "Move" : "Split"} failed: ${e.message}`);
         }
     });
     dlg.showModal();
+    refresh();
 }

@@ -105,8 +105,17 @@
                 </div>
             </div>
 
-            <div class="card">
-                <h2>Translation (BYOK)</h2>
+            <div class="card" id="translation">
+                <h2 data-toc="Translation &amp; API keys">Translation &amp; API keys (BYOK)</h2>
+                <div class="quick-start">
+                    <b>Quick start</b>
+                    <ol>
+                        <li>Get a free key: <a href="https://console.groq.com/keys" target="_blank" rel="noopener">Groq</a> or <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">Google AI Studio (Gemini)</a>.</li>
+                        <li>Pick that provider in <i>Active provider</i> below and paste the key into the key row (<i>+ Add key</i> if there is none).</li>
+                        <li>Press <i>Test connection</i>. Done - the key is saved when you leave the field, no restart.</li>
+                    </ol>
+                    <span class="text-muted">Only the text of the bubbles is sent to the provider - the page images never leave this computer.</span>
+                </div>
                 <p class="text-muted">Your own API keys. Every change is saved as soon as you leave the field and applied immediately - no restart. Keys are never shown again in full.</p>
                 <div class="row">
                     <label style="display:flex; align-items:center; gap:6px; margin:0;">
@@ -253,11 +262,28 @@
                 <p class="text-muted" id="ocrOptionsStatus" style="margin-top:10px;"></p>
             </div>
 
-            <div class="card">
-                <h2>Text on the page (preview and export)</h2>
+            <div class="card" id="fonts">
+                <h2 data-toc="Text &amp; fonts">Text on the page &amp; fonts</h2>
                 <div class="row">
-                    <div class="text-muted">Font file (.ttf / .otf) with Polish letters. Empty = Arial / DejaVu / Liberation when found.</div>
-                    <input type="text" id="typesettingFontInput" style="max-width:340px;" spellcheck="false" placeholder="C:\\Windows\\Fonts\\arial.ttf">
+                    <div class="text-muted" title="Used for every bubble that has no font of its own (Lettering mode can pick one per bubble)">Default font of the translated text</div>
+                    <select id="typesettingFontInput" style="max-width:340px;"><option value="">Automatic (Arial / DejaVu / Liberation)</option></select>
+                </div>
+                <div class="fonts-box">
+                    <div class="fonts-head">
+                        <b>Your fonts</b>
+                        <span class="text-muted">Comic fonts you add here can be picked in Settings and in the editor's Lettering mode. Fonts installed in the system are listed too.</span>
+                    </div>
+                    <div id="userFontList" class="user-font-list"><span class="text-muted">Loading…</span></div>
+                    <div class="fonts-actions">
+                        <input type="file" id="fontFileInput" accept=".ttf,.otf,.ttc" multiple class="hidden">
+                        <button id="addFontBtn" title="Copy .ttf / .otf / .ttc files into the app's font folder">Add font files…</button>
+                        <button id="openFontFolderBtn" title="The app's font folder - files dropped in here work too (then press Refresh)">Open font folder</button>
+                        <button id="refreshFontsBtn" title="Scan the font folders again">Refresh</button>
+                        <span class="text-muted" id="fontStatus"></span>
+                    </div>
+                    <p class="text-muted fonts-note">Need a free comic font with Polish letters? E.g. <a href="https://fonts.google.com/specimen/Comic+Neue" target="_blank" rel="noopener">Comic Neue</a>,
+                        <a href="https://fonts.google.com/specimen/Bangers" target="_blank" rel="noopener">Bangers</a>, <a href="https://fonts.google.com/specimen/Patrick+Hand" target="_blank" rel="noopener">Patrick Hand</a>
+                        (Google Fonts, SIL Open Font License) - download, then <i>Add font files…</i>. Fonts marked <span class="font-warn">no Polish</span> show empty boxes for ą ę ł ń ó ś ź ż. Check the license of commercial comic fonts before exporting pages.</p>
                 </div>
                 <div class="row">
                     <label style="display:flex; align-items:center; gap:6px; margin:0;">
@@ -272,7 +298,7 @@
                 <h2>OCR: ignored text</h2>
                 <p class="text-muted">Bubbles whose text matches any of these regular expressions (one per line, case-insensitive, "contains" match) are dropped before translation - watermarks, site URLs, credits. Applies to pages processed from now on (no restart); use Re-OCR in the editor for pages already processed. Example: ^\W*\d+\W*$ also drops number-only bubbles.</p>
                 <textarea id="ignorePatternsInput" class="text-mono" rows="5" spellcheck="false"></textarea>
-                <button id="saveIgnorePatternsBtn" class="primary" style="margin-top:8px;">Save</button>
+                <button id="saveIgnorePatternsBtn" class="primary">Save</button>
                 <p class="text-muted" id="ignorePatternsStatus" style="margin-top:10px;"></p>
             </div>
  

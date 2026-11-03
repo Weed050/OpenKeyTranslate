@@ -99,7 +99,7 @@
                 ["Set area &amp; re-OCR", "Draw the area yourself when the detected box misses a line; exactly that area is read."],
                 ["Move up / Move down", "Changes the bubble's place in the reading order."],
                 ["Merge with &uarr; / &darr;", `Joins the bubble with its neighbour in the list. Any bubbles: ${key("Shift")}+click them on the page or in the list, then <b>Merge...</b> (preview with the order first).`],
-                ["Split...", "The OCR glued two bubbles (or map labels) together: click the lines of the new bubble on the page. The existing translation is divided by sentences - nothing is translated again unless you tick it; a part that could not be divided is tagged <b>check translation</b>."],
+                ["Split...", "The OCR glued two bubbles (or map labels) together: click the lines of the new bubble on the page. The existing translation is divided by sentences (one sentence: at a comma or conjunction, BUT &rarr; ALE) - nothing is translated again unless you tick it; a part that could not be divided cleanly is tagged <b>check translation</b>. <b>Move the picked lines to</b> an existing bubble instead: for a line the OCR put into the wrong bubble - it goes there with its part of the translation."],
                 ["Skip", "Do not translate this bubble and put the original pixels back (page numbers, junk)."],
                 ["Spellcheck", "Polish spellcheck in the text box, on / off."],
                 ["Save, &larr; / &rarr;", "See <b>Saving &amp; memory</b>. At the first / last bubble the arrows go to the previous / next page."],
@@ -115,10 +115,11 @@
                 ["Re-OCR", "OCR + cleaning again for this page. Translations of bubbles whose text did not change are kept. Tick <b>The whole page is rotated</b> in its dialog only for a scan lying sideways or upside down (sideways text inside a normal page does not need it)."],
                 ["Preview text", "Shows the page with the translation typeset into the bubbles (the clean page otherwise)."],
                 ["Add bubble", `Draw a rectangle over text the OCR missed; it is read and added as a new bubble. ${key("Esc")} cancels.`],
-                ["Order + Sort", "Reading order (top to bottom, right to left, left to right). Sort renumbers the bubbles; fix single ones with Move up / down."],
+                ["Order", "Reading order of the page (top to bottom, right to left, left to right): picking one renumbers the bubbles at once, Undo in the message. The last two entries use it for the whole chapter / project. Fix single bubbles with Move up / down. Re-OCR keeps the page's order."],
                 ["Rebuild image", "Rebuilds the clean image from the original (after deleting / skipping bubbles) - no OCR, no translation."],
                 ["Clean area / Undo clean", `Draw a rectangle over a leftover trace (pale letter ghost, smudge): painted with the plain colour around it, or filled from the surroundings on artwork. Kept by Rebuild image and Re-OCR. Undo clean removes the last one (${key("Shift")}+click: all).`],
-                ["&minus; / + / Fit width / Fit height", `Zoom (also ${key("Ctrl")}+scroll).`],
+                ["&minus; / +", `Zoom (also ${key("Ctrl")}+scroll).`],
+                ["More &#9662;", "Fit width / Fit height, Reset layout, and the page tools: copy the JSON path, open the folder, delete (exclude) the page."],
                 ["Reset layout", "Puts the panel sizes back to default."],
             ]),
         },
@@ -126,8 +127,10 @@
             id: "lettering", title: "Editor: Lettering mode",
             html: items([
                 ["Translate | Lettering", "The switch under the image, on the right (shortcut in Keyboard &amp; mouse). Lettering shows the page with the text, as an export writes it."],
-                ["Text boxes", "Every drawn bubble has a box. Click one to select it; drag to move, corners to resize (also when turned), the knob above it to turn it (Shift: free angle, otherwise 5° steps)."],
-                ["Panel", "Font size (auto = largest that fits, or a fixed size), alignment, rotation, white outline for text over artwork. Reset bubble = everything automatic again. Text that was diagonal in the original (map labels) is lettered along the same slant (\"auto\" next to the rotation); turning it to 0° keeps it level."],
+                ["Text boxes", "Every drawn bubble has a box. Click one to select it; drag to move, corners to resize (also when turned; hold Alt to grow evenly from the centre), the knob above it to turn it (Shift: free angle, otherwise 5° steps)."],
+                ["Font", "Per bubble: the font (recently used ones on top; add your own in Settings > Text &amp; fonts), <b>B</b> bold and <i>I</i> italic - imitated when the font has no bold / italic file. Default (Settings) = the default font of the project text."],
+                ["Fit to bubble", "Text area = the inside of the bubble again, centred horizontally and vertically, largest size that fits. Font, outline and angle stay."],
+                ["Panel", "Font size (auto = largest that fits, or a fixed size), horizontal and vertical alignment, rotation, white outline for text over artwork. Reset bubble = everything automatic again. Text that was diagonal in the original (map labels) is lettered along the same slant (\"auto\" next to the rotation); turning it to 0° keeps it level."],
                 ["Red box", "The text does not fit - make the box bigger or the font smaller."],
                 ["Next page", "In Lettering, a page with bubbles not reviewed yet (no edited / accepted marker) opens in Translate - reviewing comes first. In Translate nothing switches by itself."],
                 ["Export page", "Writes this page into the project folder, sub-folder exported - with the options of the last export on the pages list."],
@@ -157,29 +160,56 @@
             ]),
         },
         {
-            id: "memory", title: "Memory & glossary",
+            id: "memory", title: "Memory (corrections)",
             html: `
-                <h4>Corrections</h4>
+                <p>The <b>correction memory</b> remembers whole lines you fixed. When a new line is <b>similar</b> to a stored
+                one, the pair (English &rarr; your Polish) is shown to the AI as an example. It helps with style and
+                recurring phrases; for single names and words use the <b>Glossary</b> instead.</p>
                 ${items([
                     ["corrected / approved", "corrected = you changed the AI text; approved = you accepted it unchanged with Approve to memory."],
                     ["Click an entry", "Shows the details and where it was used as a hint; edit or delete it there."],
                     ["Find &amp; replace", "Changes a word in many stored translations at once (e.g. a name you changed your mind about). Preview first, untick what should stay."],
                     ["Export / Import JSON", "Backup or move the memory of a project."],
                     ["Re-embed memory", "Recomputes the search vectors of all entries (once, after an update)."],
-                ])}
-                <h4>Glossary</h4>
-                ${items([
-                    ["Terms", "Fixed term translations, always given to the AI when the English word appears (names, invented words)."],
-                    ["Scan corrections for suggestions", "Local and fast: spelling changes of names fixed in at least 2 corrections."],
-                    ["Find terms with AI", "One request to the provider: it reads your latest corrections and lists term changes in base form."],
                 ])}`,
+        },
+        {
+            id: "glossary", title: "Glossary (terms)",
+            html: `
+                <p>The <b>glossary</b> is a list of fixed term translations of one project: names, places, ranks, invented
+                words (WYVERN &rarr; WYWERNA, QUA-TOYNE &rarr; QUA-TOYNE). Unlike the memory it does not depend on the
+                whole line being similar: a term is used <b>every time its English word appears</b>.</p>
+                <h4>How a term is used</h4>
+                <ol class="help-steps">
+                    <li><b>Matching</b> the English line: whole word, any case, also plural / possessive (WYVERNS, WYVERN'S)
+                        and OCR line breaks (QUA- TOYNE). When terms overlap, the longer one wins (WYVERN KNIGHTS over WYVERN).</li>
+                    <li><b>In the request</b>: the matched terms go to the AI with the line, and it is told to use them and
+                        inflect them in Polish itself. So write the Polish term in its <b>base form</b> (WYWERNA, not WYWERNY).</li>
+                    <li><b>Check after translating</b> (Settings: glossary post-edit): if a term is missing from the translation
+                        (any inflected form counts), one more short request asks the AI to put it in. The fix is kept only
+                        when fewer terms are missing afterwards.</li>
+                </ol>
+                <h4>Adding terms</h4>
+                ${items([
+                    ["Add term", "Type the English and the Polish term on the Glossary tab of the Memory page."],
+                    ["&ldquo;Add to glossary?&rdquo; box", "Appears in the editor after a save when you fixed the same word the same way more than once. <b>Add</b> stores it (and offers to update the old form in the memory), <b>Not a term</b> hides it for good, &times; = not now (until the tab is closed)."],
+                    ["Scan corrections for suggestions", "Local and fast: spelling changes of names / transliterations fixed in at least 2 corrections."],
+                    ["Find terms with AI", "One request to the provider: it reads your latest corrections and lists the term changes in base form, also translated terms (DRAGOONS &rarr; JEŹDŹCY WYWERN). Terms that do not occur in the text are dropped. You accept or reject each one."],
+                    ["Export / Import JSON", "Backup, or start a new project (next volume, spin-off) with the terms of an old one."],
+                ])}
+                <h4>Glossary or memory?</h4>
+                ${items([
+                    ["Glossary", "One word or a short name that must always be translated the same way."],
+                    ["Memory", "A whole line, your style, a joke, a phrase - used only when a new line is similar."],
+                ])}
+                <p class="text-muted">Editor: the &ldquo;Used from memory&rdquo; panel under the text box lists the glossary terms the AI got for that bubble.</p>`,
         },
         {
             id: "settings", title: "Settings & logs",
             html: items([
                 ["Settings", "Every field saves itself when you leave it; leaving the page with unsaved input asks first. The list on the right jumps to a section."],
                 ["Appearance", "Color scheme (System / Light / Dark), separate theme colors for the light and the dark look, and how strongly they tint the surfaces. Stored in this browser only."],
-                ["Translation (BYOK)", "Your API keys, provider and model per key. Keys are never shown again in full."],
+                ["Translation &amp; API keys", "Paste your API key here (Quick start: free keys from Groq or Google AI Studio, then Test connection). Provider and model per key; keys are never shown again in full."],
                 ["Logs", "Every zero-shot vs memory-injected translation pair (the A/B experiment), with what was given to the AI. Read only."],
             ]),
         },

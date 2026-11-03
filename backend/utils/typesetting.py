@@ -145,6 +145,14 @@ def resolve_font_path() -> str:
     configured = (get_setting("typesetting_font", "") or "").strip()
     if configured and os.path.isfile(configured):
         return configured
+    if configured:                                   # a family name (Settings > Fonts), see services/font_service.py
+        try:
+            from services.font_service import resolve
+            path, _, _ = resolve(configured)
+            if path:
+                return path
+        except Exception as e:
+            print(f"[FONT] {configured!r}: {type(e).__name__}: {e} - using a system default")
     for name in _FONT_CANDIDATES:
         try:
             ImageFont.truetype(name, 12)
@@ -262,6 +270,7 @@ def fit_text(text: str, font_path: str, target_w: int, target_h: int, font_size:
 
 
 ALIGNS = ("center", "left", "right")
+VALIGNS = ("middle", "top", "bottom")
 STROKE_WIDTHS = {"none": 0, "thin": 2, "thick": 4}     # white outline around the letters (text over artwork)
 
 
@@ -291,7 +300,37 @@ def _clean_layout(layout) -> dict:
             out["angle"] = 0.0
     out["align"] = layout.get("align") if layout.get("align") in ALIGNS else "center"
     out["stroke"] = layout.get("stroke") if layout.get("stroke") in STROKE_WIDTHS else "none"
+    out["valign"] = layout.get("valign") if layout.get("valign") in VALIGNS else "middle"
+    if isinstance(layout.get("font"), str) and layout["font"].strip():
+        out["font"] = layout["font"].strip()
+    out["bold"] = layout.get("bold") is True
+    out["italic"] = layout.get("italic") is True
     return out
+
+
+_FAMILY_OF: dict[str, str] = {}
+
+
+def _font_for(layout: dict, default_path: str) -> tuple[str, bool, bool, str | None]:
+    """
+    (font file, fake_bold, fake_italic, family) of a bubble: its own font / style from Lettering, else the page default.
+    Bold / italic of a family without such a file are imitated by _draw_lines / draw_plan.
+    """
+    name, bold, italic = layout.get("font"), layout.get("bold", False), layout.get("italic", False)
+    if not (name or bold or italic):
+        return default_path, False, False, None
+    try:
+        from services.font_service import probe_font, resolve
+        if not name:                                  # B / I on the default font: find its family first
+            if default_path not in _FAMILY_OF:
+                info = probe_font(default_path) if os.path.isfile(default_path) else None
+                _FAMILY_OF[default_path] = info["family"] if info else ""
+            name = _FAMILY_OF[default_path]
+        path, fake_bold, fake_italic = resolve(name, bold, italic) if name else (None, bold, italic)
+    except Exception as e:
+        print(f"[FONT] {name!r}: {type(e).__name__}: {e}")
+        path, fake_bold, fake_italic = None, bold, italic
+    return (path or default_path), fake_bold, fake_italic, name or None
 
 
 def plan_bubble(image_original: np.ndarray, b: dict, img_w: int, img_h: int, font_path: str,
@@ -316,6 +355,7 @@ def plan_bubble(image_original: np.ndarray, b: dict, img_w: int, img_h: int, fon
     if area is None:
         return None
     x1, y1, x2, y2 = area
+    font_path, fake_bold, fake_italic, family = _font_for(layout, font_path)
     fit = fit_text(text, font_path, x2 - x1, y2 - y1, layout.get("font_size"))
     if fit is None:
         print(f"[BUBBLE SKIP] bubble_id={b.get('bubble_id')}: area too small ({x2 - x1}x{y2 - y1}px) - text not drawn")
@@ -326,7 +366,9 @@ def plan_bubble(image_original: np.ndarray, b: dict, img_w: int, img_h: int, fon
     angle = layout["angle"] if "angle" in layout else (tilt[4] if tilt else 0.0)
     return {"bubble_id": b.get("bubble_id"), "box": area, "manual_box": "box" in layout,
             "manual_size": "font_size" in layout, "angle": angle, "manual_angle": "angle" in layout,
-            "align": layout.get("align", "center"), "stroke": layout.get("stroke", "none"), **fit}
+            "align": layout.get("align", "center"), "stroke": layout.get("stroke", "none"),
+            "valign": layout.get("valign", "middle"), "font_name": family, "bold": layout.get("bold", False),
+            "italic": layout.get("italic", False), "fake_bold": fake_bold, "fake_italic": fake_italic, **fit}
 
 
 def tilted_area(rect, img_w: int, img_h: int):
@@ -343,9 +385,17 @@ def tilted_area(rect, img_w: int, img_h: int):
 def _draw_lines(draw, plan: dict, x1: int, y1: int, w: int, h: int) -> None:
     """The plan's lines in the w x h area at (x1, y1): vertically centred, aligned as the plan says."""
     stroke = STROKE_WIDTHS.get(plan["stroke"], 0)
+    # imitated bold: an outline in the text colour (none below 14 px - one pixel there already fills the letters in)
+    bold_w = max(1, round(plan["size"] / 24)) if plan.get("fake_bold") and plan["size"] >= 14 else 0
     # automatic size: as before Lettering (an overflowing block starts at the top); a fixed size the user chose is
-    # centred on the area even when it overflows, so the text grows evenly up and down
-    y = y1 + ((h - plan["total_h"]) // 2 if plan["manual_size"] else max(0, (h - plan["total_h"]) // 2))
+    # centred on the area even when it overflows, so the text grows evenly up and down. Top / bottom from Lettering.
+    valign = plan.get("valign", "middle")
+    if valign == "top":
+        y = y1
+    elif valign == "bottom":
+        y = y1 + h - plan["total_h"] if plan["manual_size"] else y1 + max(0, h - plan["total_h"])
+    else:
+        y = y1 + ((h - plan["total_h"]) // 2 if plan["manual_size"] else max(0, (h - plan["total_h"]) // 2))
     for line in plan["lines"]:
         bbox = plan["font"].getbbox(line)
         line_w = bbox[2] - bbox[0]
@@ -355,8 +405,10 @@ def _draw_lines(draw, plan: dict, x1: int, y1: int, w: int, h: int) -> None:
             x = x1 + w - line_w
         else:
             x = x1 + max(0, (w - line_w) // 2)
+        if stroke and bold_w:                       # white outline first, the thickened letters on top of it
+            draw.text((x, y), line, fill=(0, 0, 0), font=plan["font"], stroke_width=stroke + bold_w, stroke_fill=(255, 255, 255))
         draw.text((x, y), line, fill=(0, 0, 0), font=plan["font"],
-                  stroke_width=stroke, stroke_fill=(255, 255, 255) if stroke else None)
+                  stroke_width=bold_w or stroke, stroke_fill=(0, 0, 0) if bold_w else ((255, 255, 255) if stroke else None))
         y += plan["line_h"] + plan["gap"]
 
 
@@ -364,13 +416,17 @@ def draw_plan(pil_img: Image.Image, plan: dict) -> None:
     """Draw one planned bubble onto the page. A rotated one is drawn on a transparent layer, turned and pasted."""
     x1, y1, x2, y2 = plan["box"]
     w, h = x2 - x1, y2 - y1
-    if not plan["angle"]:
+    if not plan["angle"] and not plan.get("fake_italic"):
         _draw_lines(ImageDraw.Draw(pil_img), plan, x1, y1, w, h)
         return
     pad = max(w, h) // 2 + plan["size"]                 # room for overflow and the outline before turning
     layer = Image.new("RGBA", (w + 2 * pad, h + 2 * pad), (0, 0, 0, 0))
     _draw_lines(ImageDraw.Draw(layer), plan, pad, pad, w, h)
-    layer = layer.rotate(-plan["angle"], resample=Image.BICUBIC, expand=True)   # positive angle = clockwise (as CSS)
+    if plan.get("fake_italic"):                         # slant the letters 12 degrees around the middle line
+        k = 0.21
+        layer = layer.transform(layer.size, Image.AFFINE, (1, k, -k * layer.height / 2, 0, 1, 0), resample=Image.BICUBIC)
+    if plan["angle"]:
+        layer = layer.rotate(-plan["angle"], resample=Image.BICUBIC, expand=True)   # positive angle = clockwise (as CSS)
     cx, cy = (x1 + x2) / 2, (y1 + y2) / 2
     pil_img.paste(layer, (int(round(cx - layer.width / 2)), int(round(cy - layer.height / 2))), layer)
 
