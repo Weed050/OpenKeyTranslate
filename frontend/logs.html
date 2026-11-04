@@ -5,36 +5,109 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>OpenKeyTranslate - Translation logs</title>
+    <link rel="icon" href="img/okt-logo.svg" type="image/svg+xml">
+    <link rel="alternate icon" href="img/okt.ico">
+    <title>OpenKeyTranslate - Translation history</title>
     <link rel="stylesheet" href="css/tokens.css">
     <script src="js/theme.js"></script>
     <link rel="stylesheet" href="css/base.css">
     <link rel="stylesheet" href="css/layout.css">
+    <link rel="stylesheet" href="css/help.css">
+    <script src="js/help.js" defer></script>
     <style>
-        .logs-table-wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: var(--radius); }
-        table.logs-table { width: 100%; border-collapse: collapse; font-size: 12px; min-width: 900px; }
+        /* The table always fills its card: only the columns of the current view are built (js/logs.js COLUMNS) - the
+           old way hid a column with display:none, and table-layout: fixed still kept its width as an empty band.
+           overflow: clip (not auto) keeps the rounded corners WITHOUT making the wrapper a scroll box, so the header
+           (and the day / chapter row under it) stick to the top of the window while scrolling.
+           What sticks is a whole band: the filter bar (full width, page background) with the column names right under
+           it - a lone header row floating over the rows looked detached. --band-h = height of the filter band
+           (js/logs.js watchBand). */
+        .logs-table-wrap { overflow: clip; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg-panel); }
+        table.logs-table { width: 100%; border-collapse: separate; border-spacing: 0; font-size: 12.5px; table-layout: fixed; }
         table.logs-table th {
-            text-align: left; font-weight: 500; color: var(--text-muted);
-            padding: 8px 12px; border-bottom: 1px solid var(--border);
-            position: sticky; top: 0; background: var(--bg-panel);
+            text-align: left; font-weight: 600; font-size: 11px; color: var(--text-muted); text-transform: uppercase;
+            letter-spacing: .04em; padding: 0 10px; height: 34px; border-bottom: 1px solid var(--border-strong);
+            position: sticky; top: var(--band-h, 0px); z-index: 3; background: var(--bg-panel); white-space: nowrap;
+            overflow: hidden; text-overflow: ellipsis; box-shadow: 0 6px 8px -7px var(--shadow);
         }
-        table.logs-table td { padding: 8px 12px; border-bottom: 1px solid var(--border); vertical-align: top; color: var(--text-secondary); }
-        table.logs-table tr:last-child td { border-bottom: none; }
-        .inj summary { cursor: pointer; color: var(--text-secondary); }
-        .inj-body { margin-top: 6px; display: flex; flex-direction: column; gap: 6px; min-width: 260px; }
-        .inj-label { color: var(--text-muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.03em; }
-        .inj-ex { padding: 4px 6px; border-left: 2px solid var(--border-strong); background: var(--bg-panel-2); border-radius: 3px; }
+        /* the band: filters stuck to the top, across the whole content width (over the page padding) */
+        .logs-band { position: sticky; top: 0; z-index: 6; background: var(--bg-page);
+                     margin: 0 calc(-1 * var(--space-lg)); padding: 10px var(--space-lg); }
+        .logs-band.stuck { border-bottom: 1px solid var(--border); }
+        /* the scrolling page keeps its top padding, so a sticky band stops that far below the window edge and rows
+           showed through the gap above it: while stuck, the band paints the page background over that gap too */
+        .logs-band.stuck::before { content: ""; position: absolute; left: 0; right: 0; bottom: 100%;
+                                   height: var(--band-gap, var(--space-lg)); background: var(--bg-page); }
+        .logs-band .logs-filter { margin: 0; }
+        .logs-band .band-title { display: none; font-weight: 600; font-size: 13px; color: var(--text-primary); margin-right: 4px; }
+        .logs-band.stuck .band-title { display: inline; }
+        .logs-band .band-count { display: none; }
+        .logs-band.stuck .band-count { display: inline-flex; }
+        table.logs-table th.sortable { cursor: pointer; user-select: none; }
+        table.logs-table th.sortable:hover { color: var(--text-primary); }
+        table.logs-table th.sorted { color: var(--text-primary); }
+        table.logs-table th .arrow { margin-left: 4px; color: var(--accent); }
+        /* a faint arrow on hover tells a sortable column from a plain one before anything is clicked */
+        table.logs-table th.sortable:not(.sorted):hover::after { content: "▾"; margin-left: 4px; opacity: .45; }
+        table.logs-table td { padding: 9px 10px; border-bottom: 1px solid var(--border); vertical-align: top;
+                              color: var(--text-primary); line-height: 1.45; overflow-wrap: anywhere; }
+        /* subtle column dividers */
+        table.logs-table th + th, table.logs-table tr.log-row td + td { border-left: 1px solid color-mix(in srgb, var(--border) 65%, transparent); }
+        table.logs-table tbody tr.log-row:hover td { background: var(--bg-hover); }
+        table.logs-table tbody tr:last-child td { border-bottom: none; }
+        .cell-meta { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
+        .cell-meta:empty { display: none; }
+        .cell-none { color: var(--text-muted); }
+        .logs-time { white-space: nowrap; font-variant-numeric: tabular-nums; color: var(--text-muted) !important; }
+        .logs-date { font-size: 11px; }
+        /* Where: chapter on top, page + bubble number under it, "Open" as a small link on the right */
+        .logs-where { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 1px 8px; align-items: baseline; }
+        .logs-where .w-chapter { font-weight: 600; overflow-wrap: anywhere; }
+        .logs-where .w-page { grid-column: 1; color: var(--text-secondary); font-size: 12px; font-variant-numeric: tabular-nums; }
+        .logs-where .w-open { grid-column: 2; grid-row: 1 / span 2; align-self: center; font-size: 11.5px; white-space: nowrap;
+                              padding: 2px 7px; border: 1px solid var(--border); border-radius: var(--radius-sm); text-decoration: none; }
+        .logs-where .w-open:hover { border-color: var(--accent); }
+
+        /* hints: a short summary line, the details as small labelled cards */
+        .inj summary { cursor: pointer; color: var(--text-secondary); list-style: none; }
+        .inj summary::-webkit-details-marker { display: none; }
+        .inj summary::before { content: "▸"; display: inline-block; width: 12px; color: var(--text-muted); transition: transform .15s; }
+        .inj[open] summary::before { transform: rotate(90deg); }
+        .inj summary.inj-empty { color: var(--text-muted); }
+        .inj-body { margin-top: 8px; display: flex; flex-direction: column; gap: 8px; }
+        .inj-label { color: var(--text-muted); font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 3px; }
+        .inj-ex { padding: 6px 8px; border-left: 3px solid var(--border-strong); background: var(--bg-panel-2); border-radius: 4px;
+                  display: grid; grid-template-columns: 26px 1fr; gap: 2px 6px; font-size: 12px; }
         .inj-ex.corrected { border-left-color: var(--accent); }
-        .inj-rejected { color: var(--danger); text-decoration: line-through; }
+        .inj-ex .k { color: var(--text-muted); font-size: 10.5px; font-weight: 600; padding-top: 1px; }
+        .inj-ex .ex-meta { grid-column: 1 / -1; color: var(--text-muted); font-size: 11px; margin-bottom: 2px; }
         .inj-missing { color: var(--warn); }
-        .logs-filter { display: flex; gap: 8px; align-items: center; margin: 10px 0; }
+        .inj-meta { color: var(--text-muted); font-size: 11px; }
+        .logs-filter { display: flex; gap: 8px; align-items: center; margin: 10px 0; flex-wrap: wrap; }
+        .logs-filter select { width: auto; max-width: 240px; }              /* base.css makes selects 100 % wide */
+        .logs-filter input[type="text"] { width: 220px; }
+        .logs-filter .research-switch { margin-left: auto; display: inline-flex; align-items: center; gap: 6px; }
+        /* group row (a day, or a chapter when sorted by Where) = a toggle: click to fold it (remembered in this tab).
+           Its own band across the whole table, sticky right under the header. */
+        tr.logs-group td { position: sticky; top: calc(var(--band-h, 0px) + 34px); z-index: 2; background: var(--bg-panel-2); color: var(--text-secondary);
+                           font-size: 11.5px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em;
+                           padding: 8px 10px; cursor: pointer; user-select: none;
+                           border-top: 1px solid var(--border-strong); border-bottom: 1px solid var(--border-strong); }
+        tr.logs-group:first-child td { border-top: none; }
+        tr.logs-group td:hover { color: var(--text-primary); }
+        tr.logs-group .chev { display: inline-block; width: 14px; transition: transform .15s; }
+        tr.logs-group:not(.folded) .chev { transform: rotate(90deg); }
+        tr.logs-group .group-count { font-weight: 400; text-transform: none; letter-spacing: 0; color: var(--text-muted); margin-left: 8px; }
+        .logs-more { display: flex; align-items: center; gap: 10px; margin-top: 10px; }
+        .logs-more select { width: auto; }
+        .logs-more .text-muted { font-size: 12px; }
     </style>
 </head>
 <body>
  
     <div class="app-shell">
         <nav class="sidebar">
-            <div class="sidebar-brand">OpenKeyTranslate</div>
+            <div class="sidebar-brand"><img src="img/okt-logo.svg" alt="" class="brand-icon">OpenKeyTranslate</div>
             <div class="sidebar-section">
                 <div class="sidebar-label">Active</div>
                 <div id="sidebarActive"></div>
@@ -52,20 +125,26 @@
  
         <main class="main-content">
             <div class="page-header">
-                <h1>Translation logs</h1>
+                <h1>Translation history</h1>
                 <div style="display:flex; align-items:center; gap:8px;">
                     <button id="exportLogsBtn">Export JSON</button>
                     <span class="badge" id="countBadge"></span>
                 </div>
             </div>
-            <p class="text-muted">Every zero-shot vs. memory-injected pair the correction-memory experiment is evaluated from. Read-only - never fed back into translation.</p>
+            <p class="text-muted" id="logsIntro"></p>
  
             <div id="noProject" class="hidden text-muted">Open a project from the sidebar first.</div>
             <div class="card hidden" id="logsSummary" style="font-size:12px; display:flex; gap:20px; flex-wrap:wrap;"></div>
+            <div class="logs-band-sentinel" id="logsBandSentinel"></div>
+            <div class="logs-band" id="logsBand">
             <div class="logs-filter">
-                <span class="text-muted">Show</span>
+                <span class="band-title">History</span>
+                <input type="text" id="logsSearchInput" placeholder="Search text or page..." spellcheck="false">
+                <select id="logsChapterSelect"><option value="">All chapters</option></select>
                 <select id="logsFilterSelect">
                     <option value="all">All bubbles</option>
+                    <option value="changed">Changed by you</option>
+                    <option value="unreviewed">Not reviewed yet</option>
                     <option value="memory">With memory (any lane)</option>
                     <option value="fuzzy">Memory: fuzzy examples</option>
                     <option value="exact">Memory: exact phrase</option>
@@ -73,21 +152,30 @@
                     <option value="glossary">With glossary terms</option>
                     <option value="postedit">Terminology post-edited</option>
                 </select>
+                <button type="button" id="foldAllBtn" title="Fold or unfold every day">Fold all days</button>
+                <label class="research-switch" title="Thesis columns: zero-shot vs memory-injected output (A/B), memory lane, similarity, API key and the experiment summary">
+                    <input type="checkbox" id="researchToggle"> Research view</label>
+                <span class="badge band-count" id="bandCount"></span>
+            </div>
             </div>
  
             <div class="logs-table-wrap">
                 <table class="logs-table">
-                    <thead>
-                        <tr>
-                            <th>Source (EN)</th>
-                            <th>Zero-shot</th>
-                            <th>Memory-injected</th>
-                            <th>Diff vs. final correction</th>
-                            <th>Injected / what happened</th>
-                        </tr>
-                    </thead>
+                    <colgroup id="logsCols"></colgroup>
+                    <thead><tr id="logsHead"></tr></thead>
                     <tbody id="logsBody"></tbody>
                 </table>
+            </div>
+            <div class="logs-more">
+                <button id="logsMore" class="hidden"></button>
+                <label class="text-muted" for="logsPageSize">Rows at a time</label>
+                <select id="logsPageSize" title="How many bubbles are drawn at once - the filters, sorting and summary always use all of them">
+                    <option value="50">50</option>
+                    <option value="100">100</option>
+                    <option value="250">250</option>
+                    <option value="0">all</option>
+                </select>
+                <span class="text-muted" id="logsShownNote"></span>
             </div>
         </main>
     </div>

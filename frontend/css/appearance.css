@@ -1,0 +1,156 @@
+/* frontend/css/appearance.css
+   Settings > Appearance: small color scheme cards (System / Light / Dark) with a tiny mock-up of the app, one row of
+   square palette tiles for the LIGHT look and one for the DARK look, and the surface tint switch. Every preview element
+   carries data-theme / data-palette itself, so all colors below come from css/tokens.css for THAT scheme + palette -
+   no color is repeated here. Selection outlines sit on the outer button (no data-* there), so they use the page's
+   own accent, not the previewed palette's. */
+
+.appearance-row {
+  display: grid;
+  grid-template-columns: 170px minmax(0, 1fr);
+  gap: var(--space-md);
+  align-items: start;
+  padding: var(--space-sm) 0;
+  border-top: 1px solid var(--border);
+}
+.appearance-row:first-of-type { border-top: none; }
+.appearance-row-label { padding-top: 4px; font-size: 13px; color: var(--text-primary); }
+.appearance-row-label small { display: block; margin-top: 2px; font-size: 11px; color: var(--text-muted); }
+
+/* ---------- color scheme ---------- */
+
+.scheme-grid { display: flex; flex-wrap: wrap; gap: var(--space-sm); }
+
+.scheme-card, .palette-tile {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 6px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  text-align: center;
+}
+.scheme-card:hover, .palette-tile:hover { background: var(--bg-hover); }
+.scheme-card:active, .palette-tile:active { transform: none; }
+.scheme-card.selected, .palette-tile.selected { border-color: var(--accent); background: var(--accent-soft); }
+.scheme-card:focus-visible, .palette-tile:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.scheme-label { font-size: 12px; color: var(--text-primary); line-height: 1.2; }
+.palette-label { font-size: 11px; color: var(--text-primary); line-height: 1.2; }
+
+.scheme-preview {
+  position: relative;
+  display: block;
+  width: 128px;
+  aspect-ratio: 16 / 9;
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+/* System: left half light, right half dark */
+.scheme-preview.split .mock:last-child { position: absolute; inset: 0; clip-path: inset(0 0 0 50%); }
+
+/* the mock-up: sidebar | main column | floating card - all in the tokens of its own data-theme / data-palette */
+.mock {
+  display: flex;
+  gap: 6%;
+  height: 100%;
+  padding: 5% 5% 5% 0;
+  background: var(--bg-page);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+.mock i { display: block; border-radius: 99px; }
+.mock-side {
+  width: 22%;
+  display: flex;
+  flex-direction: column;
+  gap: 10%;
+  padding: 6% 4%;
+  margin: -5% 0;
+  background: var(--bg-panel);
+  border-right: 1px solid var(--border);
+}
+.mock-side i { height: 10%; background: var(--border); }
+.mock-side i:first-child { background: var(--accent); opacity: 0.6; }
+.mock-main { flex: 1; display: flex; flex-direction: column; gap: 9%; padding-top: 4%; }
+.mock-pill { height: 12%; width: 38%; align-self: flex-end; background: var(--accent); opacity: 0.85; }
+.mock-line { height: 7%; width: 75%; background: var(--border-strong); }
+.mock-line.short { width: 50%; }
+.mock-input {
+  margin-top: auto;
+  height: 22%;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  padding: 0 5%;
+  background: var(--bg-input);
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+}
+.mock-dot { width: 5px; height: 5px; background: var(--warn); }
+.mock-card {
+  width: 22%;
+  display: flex;
+  flex-direction: column;
+  gap: 12%;
+  padding: 6%;
+  height: 62%;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  box-shadow: var(--card-shadow);
+}
+.mock-card i { height: 8%; background: var(--border-strong); }
+.mock-card i:nth-child(1) { background: var(--success); width: 60%; }
+.mock-card i:nth-child(2) { background: var(--accent); width: 80%; }
+.mock-card i:nth-child(3) { background: var(--warn); width: 50%; }
+
+/* ---------- palette tiles (one grid for light, one for dark) ---------- */
+
+.palette-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(56px, 1fr));
+  gap: 4px;
+}
+/* a square: the page color, a panel in the corner and the accent - the three things a palette changes */
+.palette-swatch {
+  position: relative;
+  display: block;
+  width: 40px;
+  height: 40px;
+  overflow: hidden;
+  background: var(--bg-page);
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+}
+.palette-swatch::before {
+  content: "";
+  position: absolute;
+  left: 34%;
+  top: 34%;
+  right: -1px;
+  bottom: -1px;
+  background: var(--bg-panel);
+  border-top: 1px solid var(--border);
+  border-left: 1px solid var(--border);
+  border-top-left-radius: 4px;
+}
+.palette-swatch::after {
+  content: "";
+  position: absolute;
+  left: 48%;
+  top: 52%;
+  width: 36%;
+  height: 16%;
+  background: var(--accent);
+  border-radius: 2px;
+}
+
+/* surface tint uses the shared .segmented switch (css/base.css) */
+.appearance-note { margin: 6px 0 0; font-size: 11px; color: var(--text-muted); }
+
+@media (max-width: 720px) {
+  .appearance-row { grid-template-columns: 1fr; gap: var(--space-xs); }
+}

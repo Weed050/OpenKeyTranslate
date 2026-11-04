@@ -56,7 +56,7 @@ def _key(text: str) -> str:
 
 def carry_over(old_bubbles: list[dict], new_bubbles: list[dict]) -> set[str]:
     """
-    Re-OCR: copy translation / ai_translation / manual skip / edited source text from OLD bubbles to NEW bubbles
+    Re-OCR: copy translation / ai_translation / the review stamp (confirmed_*) / manual skip / edited source text from OLD bubbles to NEW bubbles
     whose text is the same (case-, punctuation- and whitespace-insensitive; matched against old text AND text_raw).
     Each old bubble is used at most once. Returns the new bubble_ids that need no (re)translation.
     """
@@ -73,6 +73,13 @@ def carry_over(old_bubbles: list[dict], new_bubbles: list[dict]) -> set[str]:
                 if (ob.get("translation") or "").strip():
                     nb["translation"] = ob["translation"]
                     nb["ai_translation"] = ob.get("ai_translation", ob["translation"])
+                    if ob.get("confirmed_at") and ob.get("confirmed_translation") == ob["translation"]:
+                        # the "reviewed" stamp (editor marker "accepted", evaluation) belongs to this text: keep it
+                        nb["confirmed_translation"], nb["confirmed_at"] = ob["confirmed_translation"], ob["confirmed_at"]
+                        if ob.get("confirmed_via"):
+                            nb["confirmed_via"] = ob["confirmed_via"]   # "page" = accepted with the whole page
+                if ob.get("layout"):
+                    nb["layout"] = ob["layout"]             # Lettering placement of the same text stays
                 carried.add(nb["bubble_id"])
                 pool.pop(i)
                 break

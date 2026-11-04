@@ -1,39 +1,67 @@
-# cpu only version
+OpenKeyTranslate - installation (Windows 10/11, Python 3.12)
+=============================================================
+
+Everything below runs in the backend folder:
+
+    cd OpenKeyTranslate\backend
+    python -m venv .venv
+    .venv\Scripts\activate
+
+Nothing in the code has to be edited any more for CPU or GPU: the OCR picks the device itself
+(Settings > OCR engine: Device "Automatic", or force CPU / GPU there; restart the backend after a change).
 
 
-# in backend/services/ocr_pipeline.py change: device='gpu' -> device='cpu'
+A) Computer WITHOUT an NVIDIA graphics card (laptop, integrated graphics)
+------------------------------------------------------------------------
 
-# uncomment in ocr_pipeline.py: 
-# import os
-# os.environ['OMP_NUM_THREADS'] = '3'   # 3 - is mine, choose what suits your case
-# os.environ['FLAGS_allocator_strategy'] = 'naive_best_fit'
-# os.environ['FLAGS_fraction_of_gpu_memory_to_use'] = '0'
-# os.environ['KMP_DUPLICATE_LIB_OK'] = 'TRUE'
+    pip install torch==2.14.0 --index-url https://download.pytorch.org/whl/cpu
+    pip install -r ..\setup\requirements_cpu_only.txt
 
-# execute commands in ./backend
-
-pip uninstall paddlepaddle-gpu torch -y
-pip install torch==2.14.0 --index-url https://download.pytorch.org/whl/cpu
-pip install -r requirements_cpu_only.txt
+On the CPU the OCR uses the "mobile" text detection model by default (Settings > OCR engine >
+Text detection model: Automatic). It is about 3x faster than "server" and does not crash on tall pages.
+Expect ~20 s per page on a desktop i7, more on a laptop.
 
 
+B) Computer WITH an NVIDIA graphics card (CUDA 11.8 build, tested on a GTX 1050 Ti)
+-----------------------------------------------------------------------------------
+
+    pip install paddlepaddle-gpu==3.0.0 -i https://www.paddlepaddle.org.cn/packages/stable/cu118/
+    pip install -r ..\setup\req_gtx_1050ti_OKT.txt
 
 
-# cpu and gpu version
+Switching an existing installation between A and B
+---------------------------------------------------
 
-# comment in ocr_pipeline.py: 
-# import os
-# os.environ['OMP_NUM_THREADS'] = '3'
-# os.environ['FLAGS_allocator_strategy'] = 'naive_best_fit'
-# os.environ['FLAGS_fraction_of_gpu_memory_to_use'] = '0'
-# os.environ['KMP_DUPLICATE_LIB_OK'] = 'TRUE'
+    pip uninstall -y paddlepaddle paddlepaddle-gpu torch
+    ... then the commands of A or B.
 
-# in backend/services/ocr_pipeline.py change: device='cpu' -> device='gpu'
+Only ONE OpenCV package may be installed. If both are there (older requirement files installed both):
 
-
-# execute commands in ./backend
-
-pip uninstall paddlepaddle torch -y
-pip install -r requirements_cpu_n_gpu.txt
+    pip uninstall -y opencv-python opencv-contrib-python
+    pip install opencv-contrib-python==4.10.0.84
 
 
+Start
+-----
+
+    python main.py                 # API on http://127.0.0.1:8000
+    then open frontend/index.html through a local web server (e.g. VS Code Live Server)
+
+
+The OCR crashes / the backend disappears ("exit code -1073741819", "0xC0000005")
+-------------------------------------------------------------------------------
+
+1. Stop the backend and run the self-test - every step in its own process, so a crash is found and named:
+
+       python scripts\ocr_selftest.py
+
+   It prints what works, what crashed and what to change; Settings > OCR engine shows its last report.
+2. The backend also writes the place of a native crash to <app data>\logs\crash.log, and the next start
+   shows a warning about it.
+3. Known so far (2026-11): Paddle 3.0 on the CPU crashes in the "server" detection model on pages taller
+   than ~1300 px without oneDNN; Paddle 3.3 cannot use oneDNN at all ("ConvertPirAttribute2RuntimeAttribute
+   not support"). The "mobile" detection model works with both.
+
+A blue screen (BSOD) is never caused by Python code - it is a driver, the RAM, overheating or the disk.
+Check its stop code in Event Viewer (Windows Logs > System) before running the OCR again; fewer CPU
+threads (Settings > OCR engine, e.g. 2) keep a laptop cooler.

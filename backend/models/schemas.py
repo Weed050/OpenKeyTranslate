@@ -52,12 +52,33 @@ class CorrectionSchema(BaseModel):
     """
     Payload for confirming a user-approved translation for a single bubble.
 
-    Sent by the frontend editor whenever the user edits or explicitly
-    approves a bubble's translation - both count as a correction for memory
-    purposes, since even an unedited approval confirms the AI's proposal
-    was already correct.
+    Sent by the frontend editor when the user saves an edit, when they move on from an unchanged bubble (a plain
+    "reviewed" confirmation, approve=False) and when they explicitly approve an unchanged translation into memory
+    (approve=True). An edit always becomes a "corrected" memory entry; an unchanged translation becomes an "approved"
+    entry ONLY with approve=True AND memory_store_approved on - moving on used to store AI text in memory silently.
     """
 
     source_text: str
     ai_translation: Optional[str] = None
     final_translation: str
+    approve: bool = False
+
+
+class CorrectionEditSchema(BaseModel):
+    """Inline edit of a stored memory entry's final translation (Memory page)."""
+
+    final_translation: str
+
+
+class MemoryReplaceSchema(BaseModel):
+    """
+    Find & replace over a project's stored final translations (services/memory_service.replace_in_memory).
+    mode "word" = whole words; "prefix" = words starting with `find` (the term + its inflected forms).
+    apply=False returns a preview; ids limits the change to the entries left ticked in that preview.
+    """
+
+    find: str
+    replace: str
+    mode: str = "word"
+    ids: Optional[List[int]] = None
+    apply: bool = False

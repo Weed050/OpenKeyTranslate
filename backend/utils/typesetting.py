@@ -24,7 +24,7 @@ import cv2
 import numpy as np
 import os
 from core.config import TYPESETTING_PADDING_RATIO, get_setting
-from utils.bubble_interior import detect_bubble_interior   # one shared flood-fill implementation (also used by inpainting)
+from utils.bubble_interior import find_interior   # one shared flood-fill implementation (also used by inpainting)
 import pyphen
 
 
@@ -145,6 +145,14 @@ def resolve_font_path() -> str:
     configured = (get_setting("typesetting_font", "") or "").strip()
     if configured and os.path.isfile(configured):
         return configured
+    if configured:                                   # a family name (Settings > Fonts), see services/font_service.py
+        try:
+            from services.font_service import resolve
+            path, _, _ = resolve(configured)
+            if path:
+                return path
+        except Exception as e:
+            print(f"[FONT] {configured!r}: {type(e).__name__}: {e} - using a system default")
     for name in _FONT_CANDIDATES:
         try:
             ImageFont.truetype(name, 12)
@@ -152,6 +160,451 @@ def resolve_font_path() -> str:
         except OSError:
             continue
     return "arial.ttf"        # unchanged last resort: the loader below falls back to the default font
+
+
+def auto_text_area(image_original: np.ndarray, b: dict, img_w: int, img_h: int, to_original_coords=lambda box: box):
+    """
+    Where the translation goes when the user has not placed it (Lettering): the bubble interior found by the shared
+    flood fill, 10 % in from its edges, or - without an interior - the OCR box grown a little; then the uniform
+    TYPESETTING_PADDING_RATIO margin and clamping to the canvas. (x1, y1, x2, y2) or None (mostly outside the page).
+    """
+    return auto_text_shape(image_original, b, img_w, img_h, to_original_coords)[0]
+
+
+SHAPE_MARGIN = 0.07         # shape fit: letters keep this share of the bubble's smaller side away from the outline
+SHAPE_MIN_SIZE = 11         # below this the shape fit gives up and the rectangle (with syllable splitting) is used
+
+
+def _shape_rows(interior, margin_px: int):
+    """
+    Per image row of the bubble: the widest run of inside pixels after shrinking the inside by margin_px -
+    (y0, lefts, rights) in image coordinates, or None. An oval gives short rows at the top and bottom, long ones in
+    the middle: the text can be as wide as the bubble where the bubble is wide.
+    """
+    hull = interior.hull
+    if margin_px > 0:
+        k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * margin_px + 1, 2 * margin_px + 1))
+        hull = cv2.erode(hull, k)
+    inside = hull > 0
+    rows = np.flatnonzero(inside.any(axis=1))
+    if len(rows) < 10:
+        return None
+    lefts, rights = [], []
+    for r in range(rows[0], rows[-1] + 1):
+        line = np.concatenate(([False], inside[r], [False]))
+        edges = np.flatnonzero(np.diff(line.astype(np.int8)))
+        starts, ends = edges[::2], edges[1::2]
+        if not len(starts):
+            lefts.append(0)
+            rights.append(0)
+            continue
+        i = int(np.argmax(ends - starts))
+        lefts.append(int(starts[i]))
+        rights.append(int(ends[i]))
+    ox, oy = interior.origin
+    return oy + int(rows[0]), np.array(lefts) + ox, np.array(rights) + ox
+
+
+def auto_text_shape(image_original: np.ndarray, b: dict, img_w: int, img_h: int, to_original_coords=lambda box: box):
+    """auto_text_area() plus the bubble's shape: (area, shape). shape = (y0, lefts, rights) per row (see _shape_rows) or
+    None (no interior found - the OCR box is used)."""
+    orig_box = to_original_coords(b["box_coords"])
+    xs = [p[0] for p in orig_box]
+    ys = [p[1] for p in orig_box]
+    cx, cy = int(sum(xs) / len(xs)), int(sum(ys) / len(ys))
+    ocr_bbox = (int(min(xs)), int(min(ys)), int(max(xs)), int(max(ys)))
+    why: list = []
+    interior = find_interior(image_original, (cx, cy), ocr_bbox, why=why)
+    if interior is None:
+        print(f"[BUBBLE GUARD] {why[0] if why else 'rejected'} - falling back to the OCR bounding box.")
+        bbox, shape = None, None
+    else:
+        bbox = interior.bbox
+        side = min(bbox[2] - bbox[0], bbox[3] - bbox[1])
+        shape = _shape_rows(interior, max(3, int(side * SHAPE_MARGIN)))
+
+    if bbox:
+        bx1, by1, bx2, by2 = bbox
+        mx = int((bx2 - bx1) * 0.10)
+        my = int((by2 - by1) * 0.10)
+        x1, y1, x2, y2 = bx1 + mx, by1 + my, bx2 - mx, by2 - my
+    else:
+        x1, x2 = ocr_bbox[0], ocr_bbox[2]
+        y1, y2 = ocr_bbox[1], ocr_bbox[3]
+        w, h = x2 - x1, y2 - y1
+        x1 -= int(w * 0.175)
+        x2 += int(w * 0.175)
+        y1 -= int(h * 0.20)
+        y2 += int(h * 0.20)
+
+    # Uniform margin - the same rule for both paths, a single knob for tuning
+    pad_x = int((x2 - x1) * TYPESETTING_PADDING_RATIO)
+    pad_y = int((y2 - y1) * TYPESETTING_PADDING_RATIO)
+    clamped = _clamp_bbox(x1 + pad_x, y1 + pad_y, x2 - pad_x, y2 - pad_y, img_w, img_h)
+    if clamped is None:
+        print(f"[BUBBLE CLAMP FAIL] bubble_id={b.get('bubble_id')}: text area is mostly outside the canvas - not drawn")
+    return clamped, shape
+
+
+def fit_text_shape(text: str, font_path: str, shape) -> dict | None:
+    """
+    Like fit_text, but every line gets the width the bubble has at that line's height (shape from _shape_rows), the
+    block centred vertically in the shape - the classic lettering of an oval bubble: short lines at the top and the
+    bottom, long ones in the middle. The largest size from 40 px down where the words fit WITHOUT splitting a word;
+    None when nothing fits down to SHAPE_MIN_SIZE (the caller keeps the rectangle). Extra keys: "box" (the shape's
+    bounding box), "slots" [(dx, width)] per line and "top" (dy of the first line), both relative to "box".
+    """
+    words = text.split()
+    if not words:
+        return None
+    y0, lefts, rights = shape
+    widths = rights - lefts
+    used = np.flatnonzero(widths > 0)
+    if len(used) < 10:
+        return None
+    H = int(used[-1]) + 1
+    box = (int(lefts[used].min()), y0, int(rights[used].max()), y0 + H)
+    for size in range(40, SHAPE_MIN_SIZE - 1, -2):
+        font = _load_font(font_path, size)
+        word_w = [font.getbbox(w)[2] - font.getbbox(w)[0] for w in words]
+        line_h, gap, _ = _block_metrics(font, size, 1)
+        max_n = (H + gap) // (line_h + gap)
+        for n in range(1, min(max_n, len(words)) + 1):
+            total = n * line_h + (n - 1) * gap
+            top = (H - total) // 2
+            slots = []
+            for i in range(n):
+                r1 = top + i * (line_h + gap)
+                lo, hi = int(lefts[r1:r1 + line_h].max()), int(rights[r1:r1 + line_h].min())
+                slots.append((lo, max(0, hi - lo)))
+            lines, k = [], 0
+            for lo, w in slots:
+                cur = []
+                while k < len(words):
+                    test = " ".join(cur + [words[k]])
+                    tw = font.getbbox(test)[2] - font.getbbox(test)[0] if cur else word_w[k]
+                    if tw > w:
+                        break
+                    cur.append(words[k])
+                    k += 1
+                lines.append(" ".join(cur))
+            if k == len(words) and all(lines):
+                return {"lines": lines, "font": font, "line_h": line_h, "gap": gap, "total_h": total, "size": size,
+                        "overflow": False, "box": box, "slots": [(lo - box[0], w) for lo, w in slots], "top": top}
+    return None
+
+
+def _load_font(font_path: str, size: int):
+    try:
+        return ImageFont.truetype(font_path, size)
+    except IOError:
+        return ImageFont.load_default()
+
+
+def _block_metrics(font, font_size: int, n_lines: int, min_gap: int = 0):
+    sample_bbox = font.getbbox("Ay_gżł")
+    line_h = sample_bbox[3] - sample_bbox[1]
+    gap = max(min_gap, int(font_size * 0.15))
+    return line_h, gap, (n_lines * line_h) + ((n_lines - 1) * gap)
+
+
+def fit_text(text: str, font_path: str, target_w: int, target_h: int, font_size: int | None = None) -> dict | None:
+    """
+    Lines + font for `text` in a target_w x target_h area: {"lines", "font", "line_h", "gap", "total_h", "size",
+    "overflow"}. font_size None = automatic: the largest size from 40 px down whose word wrap fits (smaller sizes with
+    words split at Polish syllables as the fallback). A fixed font_size (Lettering) is used as it is, even when the
+    block is taller than the area ("overflow": True - the editor shows it).
+    """
+    words = text.split()
+    if not words or target_w <= 10 or target_h <= 10:
+        return None
+
+    if font_size:
+        font = _load_font(font_path, int(font_size))
+        lines = _wrap_text_with_splitting(words, font, target_w)
+        line_h, gap, total_h = _block_metrics(font, int(font_size), len(lines), min_gap=1)
+        return {"lines": lines, "font": font, "line_h": line_h, "gap": gap, "total_h": total_h,
+                "size": int(font_size), "overflow": total_h > target_h}
+
+    size = 40                       # Starting, large font size
+    while size > 8:                 # Algorithm for adjusting size and breaking lines
+        font = _load_font(font_path, size)
+        lines, current, too_long = [], [], False
+        for word in words:
+            if font.getbbox(word)[2] - font.getbbox(word)[0] > target_w:
+                too_long = True     # a single word wider than the whole area: smaller font
+                break
+            test_line = " ".join(current + [word]) if current else word
+            if font.getbbox(test_line)[2] - font.getbbox(test_line)[0] <= target_w:
+                current.append(word)
+            elif current:
+                lines.append(" ".join(current))
+                current = [word]
+            else:
+                lines.append(word)
+                current = []
+        if not too_long:
+            if current:
+                lines.append(" ".join(current))
+            line_h, gap, total_h = _block_metrics(font, size, len(lines))
+            if total_h <= target_h:
+                return {"lines": lines, "font": font, "line_h": line_h, "gap": gap, "total_h": total_h,
+                        "size": size, "overflow": False}
+        size -= 2
+
+    # Fallback branch: word wrapping with syllable splitting, from the minimum readable size down
+    min_font_size, absolute_min = 11, 7
+    size = min_font_size
+    while True:
+        font = _load_font(font_path, size)
+        lines = _wrap_text_with_splitting(words, font, target_w)
+        line_h, gap, total_h = _block_metrics(font, size, len(lines), min_gap=1)
+        if total_h <= target_h or size <= absolute_min:
+            return {"lines": lines, "font": font, "line_h": line_h, "gap": gap, "total_h": total_h,
+                    "size": size, "overflow": total_h > target_h}
+        size -= 1
+
+
+ALIGNS = ("center", "left", "right")
+VALIGNS = ("middle", "top", "bottom")
+STROKE_WIDTHS = {"none": 0, "thin": 2, "thick": 4}     # outline around the letters (text over artwork), at 24 px text
+STROKE_PER_PX = {"none": 0, "thin": 0.08, "thick": 0.16}   # ... and growing with the text: thick = 1/6 of the size
+TEXT_COLORS = ("black", "white")                       # the letters; the outline is always the other colour
+_RGB = {"black": (0, 0, 0), "white": (255, 255, 255)}
+
+
+def stroke_width(stroke: str, size: int) -> int:
+    """Outline width in px for this text size: the old fixed 2 / 4 px at small sizes, proportional above (a 4 px outline
+    on 40 px letters was hard to see)."""
+    if not STROKE_WIDTHS.get(stroke):
+        return 0
+    return max(STROKE_WIDTHS[stroke], round(size * STROKE_PER_PX[stroke]))
+
+
+def _clean_layout(layout) -> dict:
+    """The user's Lettering choices of a bubble (page JSON "layout"), validated; {} = everything automatic."""
+    if not isinstance(layout, dict):
+        return {}
+    out = {}
+    box = layout.get("box")
+    if isinstance(box, (list, tuple)) and len(box) == 4:
+        try:
+            x1, y1, x2, y2 = (int(round(float(v))) for v in box)
+            out["box"] = (min(x1, x2), min(y1, y2), max(x1, x2), max(y1, y2))
+        except (TypeError, ValueError):
+            pass
+    try:
+        if layout.get("font_size"):
+            out["font_size"] = max(6, min(300, int(layout["font_size"])))
+    except (TypeError, ValueError):
+        pass
+    if "angle" in layout:            # absent = automatic (level, or the slant of tilted original text)
+        try:
+            out["angle"] = float(layout.get("angle") or 0) % 360
+            if out["angle"] > 180:
+                out["angle"] -= 360
+        except (TypeError, ValueError):
+            out["angle"] = 0.0
+    out["align"] = layout.get("align") if layout.get("align") in ALIGNS else "center"
+    out["stroke"] = layout.get("stroke") if layout.get("stroke") in STROKE_WIDTHS else "none"
+    out["valign"] = layout.get("valign") if layout.get("valign") in VALIGNS else "middle"
+    out["color"] = layout.get("color") if layout.get("color") in TEXT_COLORS else "black"
+    if isinstance(layout.get("font"), str) and layout["font"].strip():
+        out["font"] = layout["font"].strip()
+    out["bold"] = layout.get("bold") is True
+    out["italic"] = layout.get("italic") is True
+    return out
+
+
+_FAMILY_OF: dict[str, str] = {}
+
+
+def _font_for(layout: dict, default_path: str) -> tuple[str, bool, bool, str | None]:
+    """
+    (font file, fake_bold, fake_italic, family) of a bubble: its own font / style from Lettering, else the page default.
+    Bold / italic of a family without such a file are imitated by _draw_lines / draw_plan.
+    """
+    name, bold, italic = layout.get("font"), layout.get("bold", False), layout.get("italic", False)
+    if not (name or bold or italic):
+        return default_path, False, False, None
+    try:
+        from services.font_service import probe_font, resolve
+        if not name:                                  # B / I on the default font: find its family first
+            if default_path not in _FAMILY_OF:
+                info = probe_font(default_path) if os.path.isfile(default_path) else None
+                _FAMILY_OF[default_path] = info["family"] if info else ""
+            name = _FAMILY_OF[default_path]
+        path, fake_bold, fake_italic = resolve(name, bold, italic) if name else (None, bold, italic)
+    except Exception as e:
+        print(f"[FONT] {name!r}: {type(e).__name__}: {e}")
+        path, fake_bold, fake_italic = None, bold, italic
+    return (path or default_path), fake_bold, fake_italic, name or None
+
+
+def plan_bubble(image_original: np.ndarray, b: dict, img_w: int, img_h: int, font_path: str,
+                to_original_coords=lambda box: box, auto_area=None, auto_shape=None) -> dict | None:
+    """
+    Everything needed to draw one bubble's text: area, lines, font, alignment, angle, outline. The area is the user's
+    Lettering box when there is one (b["layout"]["box"]), else auto_text_area(). None = nothing to draw.
+    """
+    text = (b.get("translation") or b["text"]).strip()
+    if get_setting("typesetting_uppercase", True):
+        text = text.upper()          # manga lettering is upper case; switch off for sentence-case lettering
+    layout = _clean_layout(b.get("layout"))
+    tilt = b.get("text_rect")                       # tilted original text (map label): [cx, cy, w, h, angle]
+    shape = None
+    if "box" in layout:
+        area = _clamp_bbox(*layout["box"], img_w, img_h, min_size=8)
+    elif auto_area is not None:
+        area, shape = auto_area, auto_shape
+    elif tilt:
+        area = tilted_area(tilt, img_w, img_h)
+    else:
+        area, shape = auto_text_shape(image_original, b, img_w, img_h, to_original_coords)
+    if area is None:
+        return None
+    x1, y1, x2, y2 = area
+    font_path, fake_bold, fake_italic, family = _font_for(layout, font_path)
+    fit = fit_text(text, font_path, x2 - x1, y2 - y1, layout.get("font_size"))
+    # oval bubble: lines as wide as the bubble at their height - used only when the size is automatic, the text is
+    # level and centred vertically, and the result is LARGER than the rectangle's (never a smaller text)
+    if (shape is not None and fit is not None and get_setting("typesetting_shape_fit", True)
+            and "font_size" not in layout and not layout.get("angle") and layout.get("valign", "middle") == "middle"):
+        shaped = fit_text_shape(text, font_path, shape)
+        if shaped and (fit["overflow"] or shaped["size"] > fit["size"]):
+            fit, area = shaped, (_clamp_bbox(*shaped["box"], img_w, img_h, min_size=8) or area)
+            x1, y1, x2, y2 = area
+    if fit is None:
+        print(f"[BUBBLE SKIP] bubble_id={b.get('bubble_id')}: area too small ({x2 - x1}x{y2 - y1}px) - text not drawn")
+        return None
+    if fit["overflow"]:
+        print(f"[BUBBLE OVERFLOW] bubble_id={b.get('bubble_id')}: text does not fit at {fit['size']}px "
+              f"({fit['total_h']}px > {y2 - y1}px). Text: {text!r}")
+    angle = layout["angle"] if "angle" in layout else (tilt[4] if tilt else 0.0)
+    return {"bubble_id": b.get("bubble_id"), "box": area, "manual_box": "box" in layout,
+            "manual_size": "font_size" in layout, "angle": angle, "manual_angle": "angle" in layout,
+            "slots": fit.get("slots"), "top": fit.get("top"),
+            "align": layout.get("align", "center"), "stroke": layout.get("stroke", "none"),
+            "valign": layout.get("valign", "middle"), "color": layout.get("color", "black"), "font_name": family, "bold": layout.get("bold", False),
+            "italic": layout.get("italic", False), "fake_bold": fake_bold, "fake_italic": fake_italic, **fit}
+
+
+def tilted_area(rect, img_w: int, img_h: int):
+    """
+    Text area of tilted original text: the level box around the text's own centre, a little longer and taller than
+    the text - a label stays one line unless the translation is much longer (then two, smaller) - drawn turned by the
+    text's angle, so the translation follows the slant.
+    """
+    cx, cy, w, h = rect[:4]
+    w, h = w * 1.15 + 6, max(h * 1.3, h + 6)
+    return _clamp_bbox(int(cx - w / 2), int(cy - h / 2), int(cx + w / 2), int(cy + h / 2), img_w, img_h, min_size=8)
+
+
+def _draw_lines(draw, plan: dict, x1: int, y1: int, w: int, h: int) -> None:
+    """The plan's lines in the w x h area at (x1, y1): vertically centred, aligned as the plan says."""
+    stroke = stroke_width(plan["stroke"], plan["size"])
+    ink = _RGB[plan.get("color", "black")]
+    edge = _RGB["white" if plan.get("color", "black") == "black" else "black"]
+    # imitated bold: an outline in the text colour (none below 14 px - one pixel there already fills the letters in)
+    bold_w = max(1, round(plan["size"] / 24)) if plan.get("fake_bold") and plan["size"] >= 14 else 0
+    # automatic size: as before Lettering (an overflowing block starts at the top); a fixed size the user chose is
+    # centred on the area even when it overflows, so the text grows evenly up and down. Top / bottom from Lettering.
+    valign = plan.get("valign", "middle")
+    slots = plan.get("slots")
+    if slots:                                       # shape fit: every line in its own width, the block placed by fit
+        y = y1 + plan["top"]
+    elif valign == "top":
+        y = y1
+    elif valign == "bottom":
+        y = y1 + h - plan["total_h"] if plan["manual_size"] else y1 + max(0, h - plan["total_h"])
+    else:
+        y = y1 + ((h - plan["total_h"]) // 2 if plan["manual_size"] else max(0, (h - plan["total_h"]) // 2))
+    for i, line in enumerate(plan["lines"]):
+        bbox = plan["font"].getbbox(line)
+        line_w = bbox[2] - bbox[0]
+        lx, lw = (x1 + slots[i][0], slots[i][1]) if slots else (x1, w)
+        if plan["align"] == "left":
+            x = lx
+        elif plan["align"] == "right":
+            x = lx + lw - line_w
+        else:
+            x = lx + max(0, (lw - line_w) // 2)
+        if stroke and bold_w:                       # the outline first, the thickened letters on top of it
+            draw.text((x, y), line, fill=ink, font=plan["font"], stroke_width=stroke + bold_w, stroke_fill=edge)
+        draw.text((x, y), line, fill=ink, font=plan["font"],
+                  stroke_width=bold_w or stroke, stroke_fill=ink if bold_w else (edge if stroke else None))
+        y += plan["line_h"] + plan["gap"]
+
+
+def draw_plan(pil_img: Image.Image, plan: dict) -> None:
+    """Draw one planned bubble onto the page. A rotated one is drawn on a transparent layer, turned and pasted."""
+    x1, y1, x2, y2 = plan["box"]
+    w, h = x2 - x1, y2 - y1
+    if not plan["angle"] and not plan.get("fake_italic"):
+        _draw_lines(ImageDraw.Draw(pil_img), plan, x1, y1, w, h)
+        return
+    pad = max(w, h) // 2 + plan["size"]                 # room for overflow and the outline before turning
+    layer = Image.new("RGBA", (w + 2 * pad, h + 2 * pad), (0, 0, 0, 0))
+    _draw_lines(ImageDraw.Draw(layer), plan, pad, pad, w, h)
+    if plan.get("fake_italic"):                         # slant the letters 12 degrees around the middle line
+        k = 0.21
+        layer = layer.transform(layer.size, Image.AFFINE, (1, k, -k * layer.height / 2, 0, 1, 0), resample=Image.BICUBIC)
+    if plan["angle"]:
+        layer = layer.rotate(-plan["angle"], resample=Image.BICUBIC, expand=True)   # positive angle = clockwise (as CSS)
+    cx, cy = (x1 + x2) / 2, (y1 + y2) / 2
+    pil_img.paste(layer, (int(round(cx - layer.width / 2)), int(round(cy - layer.height / 2))), layer)
+
+
+def _overlap_of_smaller(a, b) -> float:
+    """Share of the smaller of two boxes that the other one covers (two connected bubbles: often 0.4-1.0)."""
+    w = max(0, min(a[2], b[2]) - max(a[0], b[0]))
+    h = max(0, min(a[3], b[3]) - max(a[1], b[1]))
+    smaller = min((a[2] - a[0]) * (a[3] - a[1]), (b[2] - b[0]) * (b[3] - b[1]))
+    return w * h / smaller if smaller > 0 else 0.0
+
+
+SHARED_AREA_OVERLAP = 0.3       # automatic text areas overlapping this much: the bubbles share one outline
+
+
+def _own_part(b: dict, shared, img_w: int, img_h: int, to_original_coords):
+    """The part of a shared text area around this bubble's own text: its OCR box grown a little, inside the shared area."""
+    box = to_original_coords(b["box_coords"])
+    xs, ys = [p[0] for p in box], [p[1] for p in box]
+    x1, y1, x2, y2 = min(xs), min(ys), max(xs), max(ys)
+    gx, gy = (x2 - x1) * 0.25, (y2 - y1) * 0.20
+    part = (int(max(x1 - gx, shared[0])), int(max(y1 - gy, shared[1])), int(min(x2 + gx, shared[2])), int(min(y2 + gy, shared[3])))
+    if part[2] - part[0] < 15 or part[3] - part[1] < 15:          # the text sticks out of the shared area: its own box
+        part = (int(x1 - gx), int(y1 - gy), int(x2 + gx), int(y2 + gy))
+    return _clamp_bbox(*part, img_w, img_h)
+
+
+def plan_page(image_clean: np.ndarray, image_original: np.ndarray, bubbles: List[dict], to_original_coords=lambda box: box) -> list:
+    """
+    Plans of every bubble of the page (no drawing) - also what the editor's Lettering mode shows as text areas.
+    Two bubbles in ONE outline (connected bubbles: the flood fill finds the same interior for both) used to get the
+    same (or a largely overlapping) automatic area, so their texts were drawn on top of each other (Chapter_1/page_034,
+    page_035). Bubbles whose automatic areas cover >= 30 % of the smaller one now each get the part around their own text.
+    """
+    img_h, img_w = image_clean.shape[:2]
+    font_path = resolve_font_path()
+    autos, shapes = {}, {}
+    for i, b in enumerate(bubbles):
+        if "box" not in _clean_layout(b.get("layout")) and not b.get("text_rect"):
+            autos[i], shapes[i] = auto_text_shape(image_original, b, img_w, img_h, to_original_coords)
+    keys = [i for i in autos if autos[i] is not None]
+    shared = {i for i in keys for j in keys if i != j and _overlap_of_smaller(autos[i], autos[j]) >= SHARED_AREA_OVERLAP}
+    for i in shared:
+        autos[i] = _own_part(bubbles[i], autos[i], img_w, img_h, to_original_coords)
+        shapes[i] = None                                              # a part of a shared outline: the rectangle
+    plans = []
+    for i, b in enumerate(bubbles):
+        if i in autos and autos[i] is None:
+            continue                                                  # mostly outside the page: not drawn
+        plan = plan_bubble(image_original, b, img_w, img_h, font_path, to_original_coords, auto_area=autos.get(i),
+                           auto_shape=shapes.get(i))
+        if plan is not None:
+            plans.append(plan)
+    return plans
 
 
 def draw_translated_text_on_clean_image(
@@ -165,187 +618,12 @@ def draw_translated_text_on_clean_image(
 
     Provides full, native support for Polish diacritic characters (ą, ć, ę, ł, ń, ó, ś, ź, ż),
     enforces UPPERCASE formatting typical for manga lettering, and strictly respects
-    the detected bubble boundaries (bounding box guard).
+    the detected bubble boundaries (bounding box guard). A bubble's "layout" (editor Lettering mode) overrides the
+    area, font size, alignment, angle and outline; without it the result is the same as before Lettering existed.
     """
-    img_rgb = cv2.cvtColor(image_clean, cv2.COLOR_BGR2RGB)
-    img_h, img_w = image_clean.shape[:2]
-    pil_img = Image.fromarray(img_rgb)
-    draw = ImageDraw.Draw(pil_img)
-
-    font_path = resolve_font_path()
-
-    for b in bubbles:
-        text = (b.get("translation") or b["text"]).strip()
-        if get_setting("typesetting_uppercase", True):
-            text = text.upper()          # manga lettering is upper case; switch off for sentence-case lettering
-        orig_box = to_original_coords(b["box_coords"])
-        xs = [p[0] for p in orig_box]
-        ys = [p[1] for p in orig_box]
-        cx, cy = int(sum(xs) / len(xs)), int(sum(ys) / len(ys))
-
-        ocr_bbox = (int(min(xs)), int(min(ys)), int(max(xs)), int(max(ys)))
-        print(f"[BUBBLE RAW] bubble_id={b.get('bubble_id')}: ocr_bbox={ocr_bbox}, "
-              f"seed=({cx},{cy}), canvas={img_w}x{img_h}")
-        mask, bbox = detect_bubble_interior(image_original, (cx, cy), ocr_bbox)
-
-        if bbox:
-            bx1, by1, bx2, by2 = bbox
-
-            print(f"[BUBBLE FLOOD RESULT] bubble_id={b.get('bubble_id')}: "
-                  f"floodfill bbox=({bx1},{by1},{bx2},{by2}) size={bx2 - bx1}x{by2 - by1}, "
-                  f"ocr_bbox_size={ocr_bbox[2] - ocr_bbox[0]}x{ocr_bbox[3] - ocr_bbox[1]}")
-
-            mx = int((bx2 - bx1) * 0.10)
-            my = int((by2 - by1) * 0.10)
-            x1, y1, x2, y2 = bx1 + mx, by1 + my, bx2 - mx, by2 - my
-        else:
-            x1, x2 = ocr_bbox[0], ocr_bbox[2]
-            y1, y2 = ocr_bbox[1], ocr_bbox[3]
-            w, h = x2 - x1, y2 - y1
-            x1 -= int(w * 0.175)
-            x2 += int(w * 0.175)
-            y1 -= int(h * 0.20)
-            y2 += int(h * 0.20)
-
-        # Uniform margin — the same rule for both paths, a single knob for tuning
-        pad_x = int((x2 - x1) * TYPESETTING_PADDING_RATIO)
-        pad_y = int((y2 - y1) * TYPESETTING_PADDING_RATIO)
-        x1 += pad_x
-        x2 -= pad_x
-        y1 += pad_y
-        y2 -= pad_y
-
-        # Enforce boundary clamping for both branches (flood-fill success or fallback expansion)
-        raw_x1, raw_y1, raw_x2, raw_y2 = x1, y1, x2, y2
-        clamped = _clamp_bbox(x1, y1, x2, y2, img_w, img_h)
-
-        if clamped is None:
-            print(f"[BUBBLE CLAMP FAIL] bubble_id={b.get('bubble_id')}: "
-                  f"bbox ({raw_x1},{raw_y1},{raw_x2},{raw_y2}) is mostly outside the canvas "
-                  f"{img_w}x{img_h} - skipping this bubble entirely: {text!r}")
-            continue
-
-        x1, y1, x2, y2 = clamped
-
-        if (x1, y1, x2, y2) != (raw_x1, raw_y1, raw_x2, raw_y2):
-            print(f"[BUBBLE CLAMP] bubble_id={b.get('bubble_id')}: "
-                  f"({raw_x1},{raw_y1},{raw_x2},{raw_y2}) -> ({x1},{y1},{x2},{y2}) "
-                  f"[canvas {img_w}x{img_h}]")
-
-        target_w, target_h = x2 - x1, y2 - y1
-        draw_x1, draw_y1 = x1, y1
-
-        if target_w <= 10 or target_h <= 10:
-            print(f"[BUBBLE SKIP] bubble_id={b.get('bubble_id')}: too small after clamping "
-                  f"({target_w}x{target_h}px) — text will NOT be drawn: {text!r}")
-            continue
-
-        words = text.split()
-        if not words:
-            continue
-
-        font_size = 40  # Starting, large font size
-        min_font_size = 11  # Lowest readable font size before giving up wrapping
-        success = False
-        final_lines = []
-        final_font = None
-        final_line_h = 0
-        final_gap = 0
-
-        # Algorithm for adjusting size and breaking lines
-        while font_size > 8:
-            try:
-                font = ImageFont.truetype(font_path, font_size)
-            except IOError:
-                font = ImageFont.load_default()
-
-            lines = []
-            current_line = []
-            word_too_long = False
-
-            # Try wrapping text for the current font_size
-            for word in words:
-                # Check if a single word isn't wider than the whole bubble!
-                word_w = font.getbbox(word)[2] - font.getbbox(word)[0]
-                if word_w > target_w:
-                    word_too_long = True
-                    break  # We must use a smaller font because this word overflows!
-
-                test_line = " ".join(current_line + [word]) if current_line else word
-                line_w = font.getbbox(test_line)[2] - font.getbbox(test_line)[0]
-
-                if line_w <= target_w:
-                    current_line.append(word)
-                else:
-                    if current_line:
-                        lines.append(" ".join(current_line))
-                        current_line = [word]
-                    else:
-                        lines.append(word)
-                        current_line = []
-
-            if word_too_long:
-                font_size -= 2
-                continue  # If any word breaks the box, decrease font and restart the loop
-
-            if current_line:
-                lines.append(" ".join(current_line))
-
-            sample_bbox = font.getbbox("Ay_gżł")
-            line_h = sample_bbox[3] - sample_bbox[1]
-            gap = int(font_size * 0.15)
-            total_text_h = (len(lines) * line_h) + ((len(lines) - 1) * gap)
-
-            # Check if it fits vertically
-            if total_text_h <= target_h:
-                final_lines = lines
-                final_font = font
-                final_line_h = line_h
-                final_gap = gap
-                success = True
-                break
-
-            font_size -= 2  # If it doesn't fit vertically, decrease and restart
-
-        # Fallback branch: Word wrapping using minimum readable font size
-        ABSOLUTE_MIN_FONT_SIZE = 7
-
-        if not success:
-            font_size = min_font_size
-            while True:
-                try:
-                    final_font = ImageFont.truetype(font_path, font_size)
-                except IOError:
-                    final_font = ImageFont.load_default()
-
-                final_lines = _wrap_text_with_splitting(words, final_font, target_w)
-
-                sample_bbox = final_font.getbbox("Ay_gżł")
-                final_line_h = sample_bbox[3] - sample_bbox[1]
-                final_gap = max(1, int(font_size * 0.15))
-                total_text_h = (len(final_lines) * final_line_h) + ((len(final_lines) - 1) * final_gap)
-
-                if total_text_h <= target_h or font_size <= ABSOLUTE_MIN_FONT_SIZE:
-                    if total_text_h > target_h:
-                        print(f"[BUBBLE OVERFLOW] bubble_id={b.get('bubble_id')}: text does not fit "
-                              f"even at {font_size}px ({total_text_h}px > {target_h}px bubble height). "
-                              f"Text: {text!r}")
-                    break
-
-                font_size -= 1
-
-        # Drawing vertically centered text using expanded coordinates
-        y_offset = draw_y1 + max(0, (target_h - total_text_h) // 2)
-
-        for line in final_lines:
-            bbox = final_font.getbbox(line)
-            line_w = bbox[2] - bbox[0]
-            # Horizontal centering within the expanded box
-            x_offset = draw_x1 + max(0, (target_w - line_w) // 2)
-
-            draw.text((x_offset, y_offset), line, fill=(0, 0, 0), font=final_font)
-            y_offset += final_line_h + final_gap
-
+    pil_img = Image.fromarray(cv2.cvtColor(image_clean, cv2.COLOR_BGR2RGB))
+    for plan in plan_page(image_clean, image_original, bubbles, to_original_coords):
+        draw_plan(pil_img, plan)
     return cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
 
 

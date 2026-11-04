@@ -32,7 +32,7 @@ from sqlalchemy.orm import Session
 from core.database import get_db, SessionLocal
 from core.config import get_setting
 from models.models import Project, Page
-from services.ocr_pipeline import process_image, ocr_region, to_original_coords
+from services.ocr_pipeline import process_image, ocr_region, page_rotation, to_original_coords
 from services.translation_service import translate_bubbles
 from services.page_export import save_ocr_json, page_paths, load_page_json, write_page_json
 from services.inpaint_service import reinpaint_from_json, targets_from_result, apply_info
@@ -72,6 +72,13 @@ async def list_pages(project_id: int, include_excluded: bool = False, db: Sessio
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
 
+    # work stage + export state of every page: one rule for the list, the chapter bars and the project cards
+    from services.page_progress import page_progress, load_export_log
+    export_log = load_export_log(project)
+
+    def progress(page, chapter) -> dict:
+        return page_progress(page, chapter, project, export_log)
+
     return [
         {
             "page_id": page.id,
@@ -81,11 +88,38 @@ async def list_pages(project_id: int, include_excluded: bool = False, db: Sessio
             "order": page.order,
             "status": page.status,
             "error": LAST_ERRORS.get(page.id) if page.status == "failed" else None,
+            **progress(page, chapter),
         }
         for chapter in project.chapters
         for page in chapter.pages
         if include_excluded or page.status != "excluded"
     ]
+
+
+@router.get("/{page_id}/ocr-debug")
+async def get_page_ocr_debug(page_id: int, db: Session = Depends(get_db)):
+    """
+    The editor's OCR debug view (Settings > Editor): every reading the OCR kept (score, slice, "rescued" = second-chance
+    reading), the merged text lines, and - for pages OCR'd since 2026-11-04 - what it saw but did not use: readings under
+    the text threshold, readings / lines / bubbles a later step removed (with the reason) and the slice cuts.
+    Read only, original image coordinates.
+    """
+    from core.config import TEXT_THRESHOLD
+    page = db.query(Page).filter(Page.id == page_id).first()
+    if not page:
+        raise HTTPException(status_code=404, detail="Page not found")
+    paths = page_paths(page)
+    if not os.path.exists(paths["json"]):
+        raise HTTPException(status_code=404, detail="Page not processed yet")
+    with open(paths["json"], "r", encoding="utf-8") as f:
+        data = json.load(f)
+    return {
+        "items": data.get("items", []),
+        "lines": [{"box": l.get("box"), "text": l.get("text", ""), "bubble_id": l.get("bubble_id")}
+                  for l in data.get("lines", [])],
+        "debug": data.get("ocr_debug"),
+        "threshold": (data.get("ocr_debug") or {}).get("threshold", TEXT_THRESHOLD),
+    }
 
 
 @router.get("/{page_id}")
@@ -110,6 +144,14 @@ async def get_page(page_id: int, db: Session = Depends(get_db)):
         "page_folder": paths["out_dir"],   # editor.js reads data.page_folder ("Open folder" button was a silent no-op)
         "has_lines": ocr_data.get("lines") is not None,                # False for pages processed before line data was saved
         "pending_translation": bool(ocr_data.get("pending_translation")),  # prefetched page: translate when opened (fresh memory)
+        # whole-page orientation step: the page's own choice (Re-OCR dialog) or, when it never made one, the setting
+        "detect_rotation": bool(ocr_data["detect_rotation"]) if "detect_rotation" in ocr_data
+                           else bool(get_setting("ocr_detect_page_rotation", False)),
+        "cleanups": ocr_data.get("cleanups", []),                       # manual "Clean area" rectangles (editor)
+        # reading order of this page: chosen in the editor, else the setting the OCR used
+        "bubble_order": ocr_data.get("bubble_order") or get_setting("bubble_order", "ttb"),
+        # the user marked the bubbles of this page (boxes, order, cleaning, lettering) as checked (POST /review)
+        "layout_checked_at": ocr_data.get("layout_checked_at"),
     }
 
 
@@ -153,6 +195,115 @@ def render_page_png(page_id: int, download: bool = False, db: Session = Depends(
         raise HTTPException(status_code=500, detail="Could not encode the rendered page")
     headers = {"Content-Disposition": f'attachment; filename="{paths["file_base_name"]}_translated.png"'} if download else {}
     return Response(content=buf.tobytes(), media_type="image/png", headers=headers)
+
+
+def _rendered_page(page_id: int, db: Session):
+    page = db.query(Page).filter(Page.id == page_id).first()
+    if not page:
+        raise HTTPException(status_code=404, detail="Page not found")
+    paths = page_paths(page)
+    if not os.path.exists(paths["json"]):
+        raise HTTPException(status_code=404, detail="Page has not been OCR-processed yet")
+    return page, paths
+
+
+@router.get("/{page_id}/layout")
+def page_text_layout(page_id: int, db: Session = Depends(get_db)):
+    """
+    Lettering mode: where every drawn bubble's text sits now (automatic area or the user's box), with the font size in
+    use and whether it overflows - [{bubble_id, box, manual_box, manual_size, font_size, angle, align, stroke, overflow}].
+    """
+    from services.render_service import page_layout
+    _, paths = _rendered_page(page_id, db)
+    try:
+        return {"bubbles": page_layout(paths)}
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Inpainted image not found - run the pipeline first")
+    except ImageLoadError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+
+
+@router.patch("/{page_id}/bubbles/{bubble_id}/layout")
+def set_bubble_layout(page_id: int, bubble_id: str, payload: dict, db: Session = Depends(get_db)):
+    """
+    Lettering mode: {"box": [x1, y1, x2, y2] | null, "font_size": n | null, "angle": deg, "align": ..., "stroke": ...,
+    "reset": true} - see bubble_edit.set_layout. Only the rendering changes (no OCR, no translation, no cleaning).
+    Returns the bubble's layout and its new placement (as GET /layout).
+    """
+    from services.render_service import page_layout
+    _, paths = _rendered_page(page_id, db)
+    ocr_data = load_page_json(paths["json"])
+    try:
+        result = bubble_edit.set_layout(ocr_data, bubble_id, payload or {})
+    except bubble_edit.BubbleEditError as e:
+        raise HTTPException(status_code=e.status, detail=str(e))
+    write_page_json(paths["json"], ocr_data)
+    try:
+        placed = next((p for p in page_layout(paths, ocr_data) if p["bubble_id"] == bubble_id), None)
+    except (FileNotFoundError, ImageLoadError):
+        placed = None
+    return {**result, "placement": placed}
+
+
+@router.post("/{page_id}/export")
+def export_page(page_id: int, payload: dict | None = Body(default=None), db: Session = Depends(get_db)):
+    """
+    The editor's "Export page": {"content": "translated" | "clean" | "both", "format": "png" | "jpg", "quality": 92}
+    -> files in <project folder>/exported/<chapter>/ (the same place the project page's export uses by default).
+    """
+    from services.render_service import export_one_page, EXPORT_CONTENT, EXPORT_FORMATS
+    page, _ = _rendered_page(page_id, db)
+    payload = payload or {}
+    content, fmt = payload.get("content", "translated"), payload.get("format", "png")
+    if content not in EXPORT_CONTENT or fmt not in EXPORT_FORMATS:
+        raise HTTPException(status_code=400, detail=f"content must be one of {EXPORT_CONTENT}, format one of {EXPORT_FORMATS}")
+    try:
+        files = export_one_page(page, content, fmt, int(payload.get("quality", 92)))
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Inpainted image not found - run the pipeline first")
+    except (ImageLoadError, ValueError) as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    return {"files": files, "folder": os.path.dirname(files[0]) if files else None}
+
+
+@router.post("/{page_id}/review")
+def review_page_endpoint(page_id: int, payload: dict | None = Body(default=None), db: Session = Depends(get_db)):
+    """
+    Page-level review from the editor: {"layout": true | false (bubbles checked / not), "accept": true (stamp every
+    unreviewed translated bubble as accepted, confirmed_via = "page"), "unaccept": [bubble ids] (undo of an accept)}.
+    Any key may be left out. -> {"accepted", "unaccepted", "layout_checked_at"} (services/page_export.review_page).
+    """
+    from services.page_export import review_page
+    page = db.query(Page).filter(Page.id == page_id).first()
+    if not page:
+        raise HTTPException(status_code=404, detail="Page not found")
+    paths = page_paths(page)
+    if not os.path.exists(paths["json"]):
+        raise HTTPException(status_code=404, detail="Page has not been OCR-processed yet")
+    payload = payload or {}
+    layout = payload.get("layout")
+    unaccept = payload.get("unaccept") or []
+    if (layout is not None and not isinstance(layout, bool)) or not isinstance(unaccept, list):
+        raise HTTPException(status_code=400, detail="layout must be true / false, unaccept a list of bubble ids")
+    return review_page(paths["json"], layout=layout, accept=bool(payload.get("accept")), unaccept=[str(u) for u in unaccept])
+
+
+@router.get("/{page_id}/exported")
+def exported_file(page_id: int, db: Session = Depends(get_db)):
+    """The page's last export (<project>/exported/<chapter>/<page>.png|jpg) as an image - "View export" in the editor."""
+    from fastapi.responses import FileResponse
+    from services.render_service import default_export_root
+    page = db.query(Page).filter(Page.id == page_id).first()
+    if not page:
+        raise HTTPException(status_code=404, detail="Page not found")
+    folder = os.path.join(default_export_root(page.chapter.project), page.chapter.number)
+    stem = os.path.splitext(page.file_name)[0]
+    found = [f for f in (os.path.join(folder, f"{stem}.{ext}") for ext in ("png", "jpg")) if os.path.exists(f)]
+    if not found:
+        raise HTTPException(status_code=404, detail="This page has not been exported yet")
+    newest = max(found, key=os.path.getmtime)
+    return FileResponse(newest, media_type="image/png" if newest.endswith(".png") else "image/jpeg",
+                        headers={"Cache-Control": "no-store"})
 
 
 @router.delete("/{page_id}/bubbles/{bubble_id}")
@@ -305,6 +456,7 @@ def retranslate_page(page_id: int, overwrite_edited: bool = False, db: Session =
     for b in ocr_data["bubbles"]:
         if b["bubble_id"] in translation_by_id:
             b["translation"] = b["ai_translation"] = translation_by_id[b["bubble_id"]]
+            b.pop("split_check", None)
     ocr_data.pop("pending_translation", None)
     write_page_json(paths["json"], ocr_data)
 
@@ -353,6 +505,7 @@ def retranslate_bubble(page_id: int, bubble_id: str, db: Session = Depends(get_d
 
     new_translation = translated[0].get("translation", "")
     target["translation"] = target["ai_translation"] = new_translation
+    target.pop("split_check", None)                 # a fresh translation of this piece: nothing left to check
     write_page_json(paths["json"], ocr_data)
     return {"message": "Bubble retranslated", "translation": new_translation, "ai_translation": new_translation}
 
@@ -435,6 +588,67 @@ def reinpaint_page(page_id: int, db: Session = Depends(get_db)):
     return {"message": "Clean image rebuilt"}
 
 
+def _edit_cleanups(page_id: int, db: Session, change) -> dict:
+    """Load the page JSON, apply `change(cleanups_list)`, rebuild the clean image, save. Shared by add / undo / clear."""
+    page = db.query(Page).filter(Page.id == page_id).first()
+    if not page:
+        raise HTTPException(status_code=404, detail="Page not found")
+    paths = page_paths(page)
+    if not os.path.exists(paths["json"]):
+        raise HTTPException(status_code=404, detail="Page has not been OCR-processed yet")
+    if not _claim(page_id):
+        raise HTTPException(status_code=409, detail="This page is being processed - wait for it to finish.")
+    try:
+        ocr_data = load_page_json(paths["json"])
+        cleanups = list(ocr_data.get("cleanups") or [])
+        change(cleanups)
+        ocr_data["cleanups"] = cleanups
+        if not cleanups:
+            ocr_data.pop("cleanups")
+        if not reinpaint_from_json(paths, ocr_data):
+            raise HTTPException(status_code=409, detail="This page was processed before line data was saved - use Re-OCR once.")
+        write_page_json(paths["json"], ocr_data)
+        return {"cleanups": cleanups}
+    except ImageLoadError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Raw image not found")
+    finally:
+        _release(page_id)
+
+
+@router.post("/{page_id}/cleanups")
+def add_cleanup(page_id: int, payload: dict, db: Session = Depends(get_db)):
+    """
+    "Clean area" in the editor: {"box": [x1, y1, x2, y2]} (image coordinates) - a leftover trace the automatic cleaning
+    missed. Stored in the page JSON ("cleanups"), so Rebuild image and Re-OCR keep it; painted flat when its border is
+    one plain colour, else filled from the surroundings (utils.inpainting._add_cleanups).
+    """
+    box = payload.get("box")
+    if not (isinstance(box, (list, tuple)) and len(box) == 4):
+        raise HTTPException(status_code=400, detail="box must be [x1, y1, x2, y2]")
+    try:
+        box = [round(float(v), 1) for v in box]
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="box must hold 4 numbers")
+    if abs(box[2] - box[0]) < 3 or abs(box[3] - box[1]) < 3:
+        raise HTTPException(status_code=400, detail="The selected area is too small.")
+    return _edit_cleanups(page_id, db, lambda cl: cl.append({"box": box}))
+
+
+@router.delete("/{page_id}/cleanups")
+def remove_cleanups(page_id: int, all: bool = False, db: Session = Depends(get_db)):
+    """Undo the last "Clean area" of the page (?all=true: remove every one of them)."""
+    def change(cl):
+        if not cl:
+            raise HTTPException(status_code=404, detail="This page has no cleaned areas")
+        if all:
+            cl.clear()
+        else:
+            cl.pop()
+    return _edit_cleanups(page_id, db, change)
+
+
 _SYNC_RUNNING: set[int] = set()
 _SYNC_LOCK = threading.Lock()
 
@@ -453,7 +667,7 @@ def _release(page_id: int) -> None:
         _SYNC_RUNNING.discard(page_id)
 
 
-def _process_page_pipeline(page_id: int, reocr: bool = False, translate: bool = True) -> dict:
+def _process_page_pipeline(page_id: int, reocr: bool = False, translate: bool = True, detect_rotation: bool | None = None) -> dict:
     """
     Runs the full OCR -> translate -> inpaint pipeline for one page and persists results. Opens its OWN DB session -
     required to be safe from a background thread. Sets page.status along the way ("processing" -> "processed",
@@ -465,6 +679,8 @@ def _process_page_pipeline(page_id: int, reocr: bool = False, translate: bool = 
     translate=False  OCR + inpainting only; the JSON is flagged pending_translation and the editor translates when the
                  page is OPENED - with all corrections made since (prefetch used to translate immediately, i.e.
                  BEFORE the user had corrected the previous page, which defeats the correction-memory idea).
+    detect_rotation  the page's own choice for PaddleOCR's whole-image orientation step (Re-OCR dialog), stored in the
+                 page JSON; None = keep the choice an earlier Re-OCR stored, or use the setting ocr_detect_page_rotation.
     """
     db = SessionLocal()
     previous_status = None
@@ -485,12 +701,17 @@ def _process_page_pipeline(page_id: int, reocr: bool = False, translate: bool = 
         project_id = page.chapter.project_id
         protected = [t.source_term for t in load_glossary(project_id, db)]   # names the text cleanup must not touch
 
-        with OCR_LOCK:   # never two PaddleOCR runs at once (sync /process vs background worker)
-            ocr_result = process_image(image, protected)
+        old_data = load_page_json(paths["json"]) if reocr and os.path.exists(paths["json"]) else {}
+        if detect_rotation is None and "detect_rotation" in old_data:
+            detect_rotation = bool(old_data["detect_rotation"])
 
-        old_bubbles = []
-        if reocr and os.path.exists(paths["json"]):
-            old_bubbles = load_page_json(paths["json"]).get("bubbles", [])
+        with OCR_LOCK:   # never two PaddleOCR runs at once (sync /process vs background worker)
+            ocr_result = process_image(image, protected, detect_rotation=detect_rotation)
+        page_order = old_data.get("bubble_order")
+        if page_order in ("ttb", "rtl", "ltr") and page_order != get_setting("bubble_order", "ttb"):
+            ocr_result["bubbles"] = bubble_edit.auto_order(ocr_result["bubbles"], page_order)   # the page's own order survives Re-OCR
+
+        old_bubbles = old_data.get("bubbles", [])
         carried = carry_over(old_bubbles, ocr_result["bubbles"]) if old_bubbles else set()
 
         # A translation failure (no internet / DNS, exhausted keys, API outage) must NOT throw away minutes of GPU
@@ -518,15 +739,18 @@ def _process_page_pipeline(page_id: int, reocr: bool = False, translate: bool = 
         # yields each bubble's interior_box / missed_text flag (shown in the editor). It is fail-safe: on any error the
         # plain box mask is used.
         boxes, bubble_targets = targets_from_result(ocr_result, to_original_coords)
+        cleanups = old_data.get("cleanups") or []             # manual "Clean area" rectangles survive a Re-OCR
         try:
-            mask, info, flats = build_erase_mask(image, boxes, bubble_targets, use_interior=get_setting("inpaint_use_interior", True))
+            mask, info, flats = build_erase_mask(image, boxes, bubble_targets, use_interior=get_setting("inpaint_use_interior", True),
+                                                 cleanups=cleanups)
             apply_info(ocr_result["bubbles"], info)
         except Exception as e:
             print(f"[PIPELINE] page {page_id}: interior analysis failed ({type(e).__name__}: {e}) - erasing OCR boxes only")
-            mask, _, flats = build_erase_mask(image, boxes, None, use_interior=False, mode="box")
+            mask, _, flats = build_erase_mask(image, boxes, None, use_interior=False, mode="box", cleanups=cleanups)
 
         os.makedirs(paths["out_dir"], exist_ok=True)
-        save_ocr_json(paths["out_dir"], paths["file_base_name"], ocr_result, pending_translation=pending)
+        save_ocr_json(paths["out_dir"], paths["file_base_name"], ocr_result, pending_translation=pending,
+                      detect_rotation=detect_rotation, cleanups=cleanups, bubble_order=page_order)
         write_image(paths["image"], inpaint(image, mask, flats))
 
         page.status = "processed"
@@ -584,16 +808,18 @@ def process_page(page_id: int, db: Session = Depends(get_db)):
 
 
 @router.post("/{page_id}/reocr")
-def reocr_page(page_id: int, db: Session = Depends(get_db)):
+def reocr_page(page_id: int, payload: dict | None = Body(default=None), db: Session = Depends(get_db)):
     """
     Run OCR + inpainting AGAIN on an already processed page (changed ignore patterns / text-cleanup options, bad OCR,
     old page without line data). Translations and manual edits of bubbles whose text is unchanged are carried over;
     new / changed bubbles are translated. Blocks until done.
+    Optional {"detect_rotation": true | false}: the whole page scan is (not) rotated - see ocr_pipeline.PageOCR.
     """
     page = db.query(Page).filter(Page.id == page_id).first()
     if not page:
         raise HTTPException(status_code=404, detail="Page not found")
-    result = _run_sync(page_id, reocr=True)
+    detect = (payload or {}).get("detect_rotation")
+    result = _run_sync(page_id, reocr=True, detect_rotation=None if detect is None else bool(detect))
     msg = f"Re-OCR done: {result['bubble_count']} bubble(s), {result['carried_over']} kept their translation"
     if result.get("translation_error"):
         msg += " - BUT translating the new ones failed (use Retranslate)."
@@ -653,7 +879,7 @@ def _run_bubble_edit(page_id: int, db: Session, operation):
         except ImageLoadError as e:
             raise HTTPException(status_code=422, detail=str(e))
         try:
-            with OCR_LOCK:
+            with OCR_LOCK, page_rotation(ocr_data.get("detect_rotation")):   # bubble re-reads follow the page's choice
                 result = operation(ocr_data, image, protected)
         except bubble_edit.BubbleEditError as e:
             raise HTTPException(status_code=e.status, detail=str(e))
@@ -687,11 +913,29 @@ def reorder_bubbles(page_id: int, payload: dict, db: Session = Depends(get_db)):
     """
     Change the order of the bubbles (the order the translator reads them and the LLM receives them):
     {"order": [bubble ids...]} for an explicit order or {"auto": "ttb" | "rtl" | "ltr"} (see bubble_edit.auto_order).
-    Ids are not renamed; nothing is re-translated or re-inpainted.
+    With "auto", "scope": "chapter" | "project" sorts every processed page of this page's chapter / project the same
+    way ({"pages": n}). Ids are not renamed; nothing is re-translated or re-inpainted.
     """
     page = db.query(Page).filter(Page.id == page_id).first()
     if not page:
         raise HTTPException(status_code=404, detail="Page not found")
+    scope = payload.get("scope")
+    if scope in ("chapter", "project"):
+        mode = payload.get("auto")
+        if mode not in ("ttb", "rtl", "ltr"):
+            raise HTTPException(status_code=400, detail="auto must be ttb, rtl or ltr")
+        chapters = page.chapter.project.chapters if scope == "project" else [page.chapter]
+        done = 0
+        for ch in chapters:
+            for p in ch.pages:
+                pp = page_paths(p)
+                if p.status != "processed" or not os.path.exists(pp["json"]):
+                    continue
+                data = load_page_json(pp["json"])
+                bubble_edit.reorder_bubbles(data, auto=mode)
+                write_page_json(pp["json"], data)
+                done += 1
+        return {"pages": done}
     paths = page_paths(page)
     if not os.path.exists(paths["json"]):
         raise HTTPException(status_code=404, detail="Page has not been OCR-processed yet")
@@ -715,11 +959,68 @@ def add_bubble(page_id: int, payload: dict, db: Session = Depends(get_db)):
 
 @router.post("/{page_id}/bubbles/{bubble_id}/merge")
 def merge_bubble(page_id: int, bubble_id: str, payload: dict, db: Session = Depends(get_db)):
-    """Merge bubble {"with": other_id} into this one (one speech bubble the OCR cut into pieces)."""
+    """
+    Merge bubbles into this one (one speech bubble the OCR cut into pieces):
+      {"with": other_id | [other ids...], "order": [all ids, optional], "preview": false}
+    The joined text follows the reading-order setting unless "order" gives it explicitly. "preview": true returns
+    {order, text, translation, covered} and changes nothing (the editor's merge dialog).
+    """
     other = payload.get("with")
-    if not other:
-        raise HTTPException(status_code=400, detail="'with' (the other bubble_id) is required")
-    return _run_bubble_edit(page_id, db, lambda data, image, prot: bubble_edit.merge_bubbles(data, bubble_id, str(other), image))
+    others = [str(o) for o in other] if isinstance(other, list) else ([str(other)] if other else [])
+    if not others:
+        raise HTTPException(status_code=400, detail="'with' (the other bubble_id or a list of ids) is required")
+    order = payload.get("order")
+    if order is not None and not (isinstance(order, list) and all(isinstance(i, str) for i in order)):
+        raise HTTPException(status_code=400, detail="order must be a list of bubble ids")
+    if payload.get("preview"):
+        _, _, ocr_data, _ = _edit_context(page_id, db)
+        try:
+            return bubble_edit.merge_preview(ocr_data, bubble_id, others, order)
+        except bubble_edit.BubbleEditError as e:
+            raise HTTPException(status_code=e.status, detail=str(e))
+    return _run_bubble_edit(page_id, db, lambda data, image, prot: bubble_edit.merge_bubbles(data, bubble_id, others, image, order))
+
+
+@router.get("/{page_id}/bubbles/{bubble_id}/lines")
+def bubble_lines(page_id: int, bubble_id: str, db: Session = Depends(get_db)):
+    """The bubble's text lines [{line_id, box, text}] in reading order - the editor's Split mode draws and picks them."""
+    _, _, ocr_data, _ = _edit_context(page_id, db)
+    if ocr_data.get("lines") is None:
+        raise HTTPException(status_code=409, detail="This page was processed before line data was saved - use Re-OCR once.")
+    try:
+        return {"lines": bubble_edit.bubble_lines(ocr_data, bubble_id)}
+    except bubble_edit.BubbleEditError as e:
+        raise HTTPException(status_code=e.status, detail=str(e))
+
+
+@router.post("/{page_id}/bubbles/{bubble_id}/split")
+def split_bubble(page_id: int, bubble_id: str, payload: dict, db: Session = Depends(get_db)):
+    """
+    Split a bubble in two: {"new_lines": [line ids of the NEW bubble], "preview": false}. No translation request - the
+    existing translation is divided (bubble_edit.split_translation); "preview": true returns the pieces and changes nothing.
+    With "target": bubble_id the picked lines (and their part of the translation) go into that existing bubble instead.
+    """
+    new_lines = payload.get("new_lines")
+    if not (isinstance(new_lines, list) and new_lines and all(isinstance(i, str) for i in new_lines)):
+        raise HTTPException(status_code=400, detail="new_lines must be a non-empty list of line ids")
+    target = payload.get("target")                 # an existing bubble: MOVE the lines there instead of a new bubble
+    if target is not None:
+        if not isinstance(target, str):
+            raise HTTPException(status_code=400, detail="target must be a bubble id")
+        if payload.get("preview"):
+            _, _, ocr_data, _ = _edit_context(page_id, db)
+            try:
+                return bubble_edit.move_lines_preview(ocr_data, bubble_id, new_lines, target)
+            except bubble_edit.BubbleEditError as e:
+                raise HTTPException(status_code=e.status, detail=str(e))
+        return _run_bubble_edit(page_id, db, lambda data, image, prot: bubble_edit.move_lines(data, bubble_id, new_lines, target, image, ocr_region, prot))
+    if payload.get("preview"):
+        _, _, ocr_data, _ = _edit_context(page_id, db)
+        try:
+            return bubble_edit.split_preview(ocr_data, bubble_id, new_lines)
+        except bubble_edit.BubbleEditError as e:
+            raise HTTPException(status_code=e.status, detail=str(e))
+    return _run_bubble_edit(page_id, db, lambda data, image, prot: bubble_edit.split_bubble(data, bubble_id, new_lines, image, ocr_region, prot))
 
 
 @router.get("/{page_id}/status")

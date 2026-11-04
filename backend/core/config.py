@@ -14,10 +14,9 @@ Handles loading, migrating, and exposing application settings,
 system paths, and pipeline constants.
 """
 
-# Define the project directory structure and configuration file path
+# Define the project directory structure
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 ROOT_DIR = os.path.dirname(BASE_DIR)
-SETTINGS_FILE = os.path.join(os.path.dirname(ROOT_DIR), "settings.json")
 
 # Set by scripts/build_docs.py. pdoc prints the VALUE of every module-level variable into the HTML, and the docs are
 # public (GitHub Pages) - a docs build once published a Groq key this way. In this mode settings.json is never read.
@@ -25,7 +24,7 @@ _DOCS_BUILD = bool(os.environ.get("OKT_DOCS_BUILD"))
 
 # Bump manually on release. Stamped into every log file header (see
 # core/app_logging.py) so a bug report's log always says which version produced it.
-APP_VERSION = "0.1.1"
+APP_VERSION = "0.3.0"
 
 
 def get_default_app_root():
@@ -37,6 +36,16 @@ def get_default_app_root():
     if os.name == 'nt':
         return os.path.join(os.environ.get('APPDATA'), app_name)
     return os.path.join(os.path.expanduser('~'), f".{app_name.lower()}")
+
+
+# settings.json (API keys!) lives in the per-user app data folder, NOT in the project folder: next to the code it was
+# one `git add -f` or one generated file away from a public repository. OKT_SETTINGS_FILE overrides the location.
+# Fixed location on purpose - it cannot follow app_root_dir, because that value is stored IN this file.
+SETTINGS_FILE = os.environ.get("OKT_SETTINGS_FILE") or os.path.join(get_default_app_root(), "settings.json")
+"""@private Path of the user's settings file (contains the Windows user name)."""
+# Before 2026-10-28 the file lived in the project folder; _move_legacy_settings() moves it once.
+LEGACY_SETTINGS_FILE = os.path.join(os.path.dirname(ROOT_DIR), "settings.json")
+"""@private Old location of settings.json (project folder)."""
 
 
 # Default fallback settings and schema definition
@@ -51,8 +60,11 @@ DEFAULT_SETTINGS = {
     "ocr_text_threshold": 0.85,
     "ocr_soft_tolerance" : 0.15,
     "ocr_scale": 1.0,
-    "ocr_slice_h_ratio": 0.1,
-    "ocr_overlap_ratio": 0.15,
+    "ocr_slice_h_ratio": 0.1,      # unused (old slicing heuristics) - see ocr_slice_max_h
+    "ocr_overlap_ratio": 0.15,     # unused
+    # Images up to this height (px, after ocr_scale) are OCR'd in ONE pass; taller ones (webtoons) are sliced, cut in blank
+    # bands between panels (services/ocr_pipeline.get_overlap_size). PaddleOCR 3 shrinks only images over 4000 px.
+    "ocr_slice_max_h": 2000,
     "ocr_iou_thresh": 0.5,
 
     # Deduplication Settings
@@ -67,14 +79,13 @@ DEFAULT_SETTINGS = {
     "ocr_marker_margin_y": 40,
     "ocr_marker_score_threshold": 0.4,
 
-    # External APIs and Services (translation providers - see services/providers/)
-    # active_provider selects which entry below is used. Each provider holds
-    # a *pool* of keys (see _migrate_provider_keys below for the one-time
-    # upgrade from the old single-key shape) - GroqProvider / GeminiProvider
-    # rotate through them automatically on a rate limit, so quota from
-    # multiple accounts/keys can be pooled without manual key-swapping.
-    # Add a new provider by giving it its own entry here plus a class in
-    # services/providers/.
+    # External APIs and Services (translation providers - see services/providers/__init__.py)
+    # Every key lives under its provider (keys[] with label / api_key / optional model, base_url, enabled - see
+    # _migrate_provider_keys below for the one-time upgrade from the old single-key shape). Translation uses ONE pool
+    # of keys across providers, in the order of "key_order" (written by the Settings page, which also sets
+    # active_provider = "pool"); the pool rotates on rate limits, so quota from several accounts / providers backs
+    # each other up. An older active_provider value ("groq" / "gemini") still means "only that provider's keys".
+    # Add a new provider: a client module in services/providers/ + an entry here and in PROVIDERS_INFO.
     "translation_on": True,
     "active_provider": "groq",
     "providers": {
@@ -86,6 +97,12 @@ DEFAULT_SETTINGS = {
             "model": "gemini-2.5-flash",
             "keys": [{"label": "default", "api_key": ""}],
         },
+        # any OpenAI-compatible chat API (OpenRouter, Mistral, DeepSeek, Ollama, LM Studio); key may be empty locally.
+        # The server address is stored PER KEY (keys[].base_url), never here - see routers/settings.py.
+        "openai_compat": {
+            "model": "",
+            "keys": [],
+        },
     },
     "translation_temperature": 0.4,
     "translation_max_tokens": 4096,
@@ -95,7 +112,8 @@ DEFAULT_SETTINGS = {
     #   correction to be injected as a hint. Treat as an open research
     #   parameter, not a fixed constant - similarity_score is logged for
     #   every match so this can be tuned after the fact against real data.
-    "memory_similarity_threshold": 0.80,
+    #   0.67 together with the lexical gate below (memory_lexical_min) - 0.80 alone missed most real matches.
+    "memory_similarity_threshold": 0.67,
     # How many similar past corrections are sent to the LLM as style hints per bubble.
     "memory_top_k": 3,
     # Local sentence-transformers model used to embed English source text.
@@ -115,9 +133,10 @@ DEFAULT_SETTINGS = {
     # Share of translation runs (pages) that get the hint-free counterfactual pass when A/B logging is on.
     # 1.0 = every run (doubles requests for pages with a memory match), 0.3 = ~every third page - saves free-tier quota.
     "memory_ab_sample_rate": 1.0,
-    # Store translations the user ACCEPTED unchanged as kind="approved" translation-memory entries (corrections stay
-    # kind="corrected" and are ranked first). More material to retrieve from = memory fires far more often.
-    "memory_store_approved": True,
+    # Allow storing translations the user accepted unchanged as kind="approved" memory entries - only through the
+    # explicit "Approve to memory" button in the editor, never by just moving on. Off: approved entries are the
+    # model's own text fed back to it as examples (and the study measures the effect of the user's CORRECTIONS).
+    "memory_store_approved": False,
     # Second, lexical gate for the embedding lane (content-word Jaccard overlap, 0-100): a candidate must clear BOTH
     # the cosine threshold and this - unless its cosine is >= memory_strong_similarity. Rejects "same topic,
     # different line" matches that MiniLM scores ~0.7 (measured: useful matches 30-75, noise 0-20). 0 = off.
@@ -150,9 +169,14 @@ DEFAULT_SETTINGS = {
     # OCR runtime (see core/ocr_runtime.py): replaces hand-editing services/ocr_pipeline.py to switch CPU <-> GPU.
     "ocr_device": "auto",          # auto | cpu | gpu
     "ocr_cpu_threads": 0,          # 0 = library default
+    "ocr_det_model": "auto",       # auto | server | mobile - text detection network (auto: server on GPU, mobile on CPU)
     "ocr_mkldnn": False,           # oneDNN acceleration (CPU only); off by default - it crashes on some Paddle/CPU combos
     "ocr_env_flags": {},           # extra env vars applied before paddle is imported, e.g. {"FLAGS_enable_pir_api": "0"}
     "models_dir": "",              # "" = library default caches; a folder = HuggingFace + PaddleX caches live inside it
+    # PaddleOCR's whole-image orientation classifier (0/90/180/270). OFF: on upright manga it turned 12 of 67 slices of
+    # 26 test pages (garbage like "SIHI" for "THIS", lost lines). Sideways text INSIDE a page does not need it (tall lines
+    # are turned and 0/180-checked per line). A single sideways page: editor Re-OCR -> "the whole page is rotated".
+    "ocr_detect_page_rotation": False,
 
     # Bubble geometry (utils/bubble_interior.py - one flood-fill detector for inpainting, typesetting and refine)
     "inpaint_mode": "glyph",       # "glyph" = erase whole letters + flat-fill white bubbles; "box" = the old rectangle + TELEA
@@ -177,6 +201,7 @@ DEFAULT_SETTINGS = {
     "typesetting_padding_ratio": 0.08,
     "typesetting_font": "",          # path to a .ttf/.otf with Polish letters; "" = Arial / DejaVu / Liberation if found
     "typesetting_uppercase": True,
+    "typesetting_shape_fit": True,     # oval bubbles: each line as wide as the bubble at its height (utils/typesetting.py)
 }
 
 
@@ -251,6 +276,11 @@ def get_setting(key: str, default=None):
 
 
 def get_active_model_name() -> str:
+    """Model of the first key of the translation pool (fallback name for logs; each call records its own model)."""
+    from services.providers import pool_entries, unusable_reason     # lazy: providers import this module
+    usable = [e for e in pool_entries() if not unusable_reason(e)]
+    if usable:
+        return usable[0]["model"]
     provider = get_setting("active_provider", "groq")
     return (get_setting("providers", {}) or {}).get(provider, {}).get("model", provider)
 
@@ -260,6 +290,7 @@ def save_settings(data: dict) -> None:
     Atomic write: temp file -> fsync -> os.replace, after copying the previous file to settings.json.bak.
     A crash mid-write can no longer leave a half-written settings.json (= lost API keys).
     """
+    os.makedirs(os.path.dirname(SETTINGS_FILE), exist_ok=True)     # app data folder may not exist yet (fresh install)
     tmp_path = SETTINGS_FILE + ".tmp"
     with open(tmp_path, "w", encoding="utf-8") as file:
         json.dump(data, file, indent=4, ensure_ascii=False)
@@ -276,6 +307,40 @@ def _read_json(path: str) -> dict:
         return json.load(file)
 
 
+def _move_legacy_settings() -> None:
+    """
+    One-time move of settings.json out of the project folder (LEGACY_SETTINGS_FILE) into SETTINGS_FILE. A NEW file
+    is written: this version's defaults + every value of the old file (API keys included). The old file and its
+    .bak / .tmp are then moved next to the new one as legacy_settings.json*.bak - no key stays inside the repository
+    folder. Does nothing when the new file already exists or there is no old one.
+    """
+    if os.path.abspath(SETTINGS_FILE) == os.path.abspath(LEGACY_SETTINGS_FILE):
+        return
+    if os.path.exists(SETTINGS_FILE) or not os.path.exists(LEGACY_SETTINGS_FILE):
+        return
+    try:
+        old = _read_json(LEGACY_SETTINGS_FILE)
+    except (json.JSONDecodeError, OSError) as e:
+        print(f"[CONFIG] settings.json in the project folder is unreadable ({e}) - not moved; fix or delete "
+              f"{LEGACY_SETTINGS_FILE}")
+        return
+    new = copy.deepcopy(old)
+    _migrate_provider_keys(new)        # BEFORE _deep_fill: it would add an empty default key pool and the old key is lost
+    _deep_fill(new, DEFAULT_SETTINGS)
+    target_dir = os.path.dirname(SETTINGS_FILE)
+    os.makedirs(target_dir, exist_ok=True)
+    save_settings(new)
+    for suffix in ("", ".bak", ".tmp"):
+        src = LEGACY_SETTINGS_FILE + suffix
+        if os.path.exists(src):
+            try:
+                shutil.move(src, os.path.join(target_dir, f"legacy_settings.json{suffix}.bak"))
+            except OSError as e:
+                print(f"[CONFIG] WARNING could not move {src} out of the project folder ({e}) - delete it by hand")
+    print(f"[CONFIG] settings.json moved out of the project folder to {SETTINGS_FILE} "
+          f"(previous file kept there as legacy_settings.json.bak)")
+
+
 def load_settings():
     """
     Load settings from the JSON file.
@@ -287,12 +352,14 @@ def load_settings():
     - Unreadable / corrupt file: falls back to settings.json.bak, otherwise stops with a clear error
       (it does NOT silently replace your keys with an empty template).
     - Docs build (OKT_DOCS_BUILD): defaults only, data folder in a throwaway temp directory, nothing read or written.
+    - Old location (project folder): moved once to the user app data folder first (_move_legacy_settings).
     """
     if _DOCS_BUILD:
         docs_settings = copy.deepcopy(DEFAULT_SETTINGS)
         docs_settings["app_root_dir"] = os.path.join(tempfile.gettempdir(), "okt_docs_build")
         return docs_settings
 
+    _move_legacy_settings()
     if not os.path.exists(SETTINGS_FILE):
         save_settings(copy.deepcopy(DEFAULT_SETTINGS))
         return copy.deepcopy(DEFAULT_SETTINGS)
@@ -308,8 +375,10 @@ def load_settings():
         current_settings = _read_json(backup)
         save_settings(current_settings)
 
-    updated = _deep_fill(current_settings, DEFAULT_SETTINGS)
-    if _migrate_provider_keys(current_settings):
+    # key shape first: _deep_fill would otherwise add the default (empty) key pool next to an old single api_key,
+    # and the migration then sees a pool and leaves the real key behind
+    updated = _migrate_provider_keys(current_settings)
+    if _deep_fill(current_settings, DEFAULT_SETTINGS):
         updated = True
 
     if updated:
@@ -368,7 +437,7 @@ TRANSLATION_TEMPERATURE = settings.get("translation_temperature", 0.4)
 TRANSLATION_MAX_TOKENS = settings.get("translation_max_tokens", 4096)
 
 # Correction Memory
-MEMORY_SIMILARITY_THRESHOLD = settings.get("memory_similarity_threshold", 0.80)
+MEMORY_SIMILARITY_THRESHOLD = settings.get("memory_similarity_threshold", 0.67)
 MEMORY_TOP_K = settings.get("memory_top_k", 3)
 MEMORY_EMBEDDING_MODEL = settings.get("memory_embedding_model", "all-MiniLM-L6-v2")
 MEMORY_MIN_WORDS = settings.get("memory_min_words", 3)

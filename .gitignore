@@ -10,6 +10,9 @@ settings.json.tmp
 api_key*.txt
 *.pem
 *.key
+# zaszyfrowane archiwa (np. settings_json_vault.7z) - szyfrowanie nie chroni przed atakiem offline na hasło
+*.7z
+*.rar
 
 # Dane użytkownika: baza, logi, kopie zapasowe (tłumaczenia, ścieżki, w kopiach także ustawienia)
 *.db

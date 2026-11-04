@@ -24,8 +24,10 @@ Core features:
 """
 
 from utils.text_utils import _SINGLE_CHAR_WHITELIST
+from utils.ocr_rescue import TILT_MIN_DEG, is_tilted, poly_angle
 from collections import Counter
 from statistics import median
+import math
 import string
 
 # --- VERTICAL STREAMS DETECTION CONFIGURATION ---
@@ -382,16 +384,38 @@ def build_text_lines(items, image_width=None):
         stream_counter = Counter(i["stream_id"] for i in line if i.get("stream_id") is not None)
         line_stream_id = stream_counter.most_common(1)[0][0] if stream_counter else None
 
-        grouped_lines.append({
+        entry = {
             "line_id": f"line_{line_idx}",
             "word_ids": word_ids,
             "text": merged_text,
             "score": avg_score,
             "box": merged_box,
             "stream_id": line_stream_id,
-        })
+        }
+        # Slant of a tilted line (map labels, signs): only stored when tilted, so level pages keep the old JSON.
+        # Its box is then the slanted quad around the words (inpainting erases inside the slant, not the whole
+        # axis-aligned square of map around a diagonal label); grouping only uses its min / max, as before.
+        tilt = median(poly_angle(i["box"]) for i in line)
+        if is_tilted(tilt):
+            entry["angle"] = round(tilt, 1)
+            entry["box"] = _slanted_quad([p for i in line for p in i["box"]], tilt)
+        grouped_lines.append(entry)
 
     return grouped_lines
+
+
+def _slanted_quad(points, angle: float) -> list:
+    """Smallest box at this slant around the points, corners TL, TR, BR, BL of the text (first -> second = top edge)."""
+    pts = [(float(p[0]), float(p[1])) for p in points]
+    cx = sum(p[0] for p in pts) / len(pts)
+    cy = sum(p[1] for p in pts) / len(pts)
+    a = math.radians(angle)
+    ca, sa = math.cos(a), math.sin(a)
+    us = [(x - cx) * ca + (y - cy) * sa for x, y in pts]          # along the text
+    vs = [-(x - cx) * sa + (y - cy) * ca for x, y in pts]         # across it (down)
+    u0, u1, v0, v1 = min(us), max(us), min(vs), max(vs)
+    return [[round(cx + u * ca - v * sa, 1), round(cy + u * sa + v * ca, 1)]
+            for u, v in ((u0, v0), (u1, v0), (u1, v1), (u0, v1))]
 
 
 def _group_stats(b_group):
@@ -570,6 +594,11 @@ def group_lines_into_bubbles(grouped_lines, x_overlap_thresh=0.35, y_dist_mult=1
 
             # GUARD RAIL: confirmed, different vertical stream → hard reject
             if (l_stream is not None and b_stream is not None and l_stream != b_stream):
+                continue
+
+            # GUARD RAIL: a tilted line is its own text (map label, sign) - it never joins level lines or lines
+            # of another slant, even when its tall axis-aligned box reaches them
+            if abs(line.get("angle", 0.0) - b_group[0].get("angle", 0.0)) > TILT_MIN_DEG:
                 continue
 
             b_stats = _group_stats(b_group)

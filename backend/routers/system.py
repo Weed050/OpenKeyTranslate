@@ -25,7 +25,7 @@ class OpenPathRequest(BaseModel):
 
 class ExportRequest(BaseModel):
     path: str
-    include_secrets: bool = True      # API keys in settings.json + the .env file
+    include_secrets: bool = False     # API keys in settings.json + the .env file - opt-in: a zip gets copied around
     include_models: bool = False      # HuggingFace / PaddleX caches (big, but the new PC then needs no download)
     include_logs: bool = False
 
@@ -70,6 +70,27 @@ async def open_path(payload: OpenPathRequest):
     return {"message": "Opened"}
 
 
+@router.get("/ocr-runtime")
+async def ocr_runtime_info():
+    """
+    What the OCR of THIS run uses (device, detection model, oneDNN, threads, Paddle build) and the last report of
+    scripts/ocr_selftest.py (logs/ocr_selftest.json) - Settings > OCR engine.
+    """
+    import json
+    from core.config import APP_ROOT_DIR
+    from core.ocr_runtime import RUNTIME, installed_paddle
+    report = None
+    path = os.path.join(APP_ROOT_DIR, "logs", "ocr_selftest.json")
+    try:
+        with open(path, encoding="utf-8") as f:
+            report = json.load(f)
+    except (OSError, ValueError):
+        pass
+    loaded = RUNTIME.get("device") is not None
+    return {"loaded": loaded, "runtime": dict(RUNTIME) if loaded else None, "paddle": "%s %s" % installed_paddle(),
+            "selftest": report}
+
+
 @router.get("/health")
 async def health():
     """Config/connectivity self-check (see core/startup_checks.py) - the frontend shows a banner for error/warn."""
@@ -88,6 +109,27 @@ async def health():
     for i, line in enumerate(LAST_REPORT.get("warnings", [])[:5]):
         issues.append({"level": "warn", "code": f"reconcile_{i}", "message": f"Disk vs DB: {line} (page list -> Rescan folders)"})
     return {"issues": issues}
+
+
+@router.get("/storage")
+def storage():
+    """Settings > Storage & uninstall: every place the app keeps data, with sizes (services/storage_service.py)."""
+    from services.storage_service import storage_report
+    return storage_report()
+
+
+class StorageDeleteRequest(BaseModel):
+    id: str
+
+
+@router.post("/storage/delete")
+def storage_delete(payload: StorageDeleteRequest):
+    """Delete one item of /system/storage that comes back by itself (caches, logs, spare copies) - never the work."""
+    from services.storage_service import delete_item
+    try:
+        return delete_item(payload.id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 @router.get("/tail-log")

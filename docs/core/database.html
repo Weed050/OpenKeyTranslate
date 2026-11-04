@@ -31,9 +31,6 @@
             <h2>API Documentation</h2>
                 <ul class="memberlist">
             <li>
-                    <a class="variable" href="#db_url_path">db_url_path</a>
-            </li>
-            <li>
                     <a class="variable" href="#SQLALCHEMY_DATABASE_URL">SQLALCHEMY_DATABASE_URL</a>
             </li>
             <li>
@@ -41,6 +38,9 @@
             </li>
             <li>
                     <a class="variable" href="#SessionLocal">SessionLocal</a>
+            </li>
+            <li>
+                    <a class="function" href="#migrate_schema">migrate_schema</a>
             </li>
             <li>
                     <a class="function" href="#init_db">init_db</a>
@@ -71,66 +71,96 @@
 
                         <div class="pdoc-code codehilite"><pre><span></span><span id="L-1"><a href="#L-1"><span class="linenos"> 1</span></a><span class="c1"># backend/core/database.py</span>
 </span><span id="L-2"><a href="#L-2"><span class="linenos"> 2</span></a>
-</span><span id="L-3"><a href="#L-3"><span class="linenos"> 3</span></a><span class="kn">from</span><span class="w"> </span><span class="nn">sqlalchemy</span><span class="w"> </span><span class="kn">import</span> <span class="n">create_engine</span>
-</span><span id="L-4"><a href="#L-4"><span class="linenos"> 4</span></a><span class="kn">from</span><span class="w"> </span><span class="nn">sqlalchemy.orm</span><span class="w"> </span><span class="kn">import</span> <span class="n">sessionmaker</span>
-</span><span id="L-5"><a href="#L-5"><span class="linenos"> 5</span></a><span class="kn">from</span><span class="w"> </span><span class="nn">models.models</span><span class="w"> </span><span class="kn">import</span> <span class="n">Base</span>
-</span><span id="L-6"><a href="#L-6"><span class="linenos"> 6</span></a><span class="kn">from</span><span class="w"> </span><span class="nn">core.config</span><span class="w"> </span><span class="kn">import</span> <span class="n">DATABASE_PATH</span>
-</span><span id="L-7"><a href="#L-7"><span class="linenos"> 7</span></a>
-</span><span id="L-8"><a href="#L-8"><span class="linenos"> 8</span></a><span class="sd">&quot;&quot;&quot;</span>
-</span><span id="L-9"><a href="#L-9"><span class="linenos"> 9</span></a><span class="sd">Database configuration and session management module.</span>
-</span><span id="L-10"><a href="#L-10"><span class="linenos">10</span></a>
-</span><span id="L-11"><a href="#L-11"><span class="linenos">11</span></a><span class="sd">Sets up the SQLAlchemy engine, configures the session factory, </span>
-</span><span id="L-12"><a href="#L-12"><span class="linenos">12</span></a><span class="sd">and provides a dependency for database session lifecycles.</span>
-</span><span id="L-13"><a href="#L-13"><span class="linenos">13</span></a><span class="sd">&quot;&quot;&quot;</span>
-</span><span id="L-14"><a href="#L-14"><span class="linenos">14</span></a>
-</span><span id="L-15"><a href="#L-15"><span class="linenos">15</span></a><span class="c1"># Format the path to ensure SQLite compatibility across different OS platforms</span>
-</span><span id="L-16"><a href="#L-16"><span class="linenos">16</span></a><span class="n">db_url_path</span> <span class="o">=</span> <span class="n">DATABASE_PATH</span><span class="o">.</span><span class="n">replace</span><span class="p">(</span><span class="s1">&#39;</span><span class="se">\\</span><span class="s1">&#39;</span><span class="p">,</span> <span class="s1">&#39;/&#39;</span><span class="p">)</span>
-</span><span id="L-17"><a href="#L-17"><span class="linenos">17</span></a><span class="n">SQLALCHEMY_DATABASE_URL</span> <span class="o">=</span> <span class="sa">f</span><span class="s2">&quot;sqlite:///./</span><span class="si">{</span><span class="n">db_url_path</span><span class="si">}</span><span class="s2">&quot;</span>
-</span><span id="L-18"><a href="#L-18"><span class="linenos">18</span></a>
-</span><span id="L-19"><a href="#L-19"><span class="linenos">19</span></a><span class="c1"># Initialize the database engine</span>
-</span><span id="L-20"><a href="#L-20"><span class="linenos">20</span></a><span class="c1"># &#39;check_same_thread: False&#39; is required for SQLite in multithreaded applications</span>
-</span><span id="L-21"><a href="#L-21"><span class="linenos">21</span></a><span class="n">engine</span> <span class="o">=</span> <span class="n">create_engine</span><span class="p">(</span>
-</span><span id="L-22"><a href="#L-22"><span class="linenos">22</span></a>    <span class="n">SQLALCHEMY_DATABASE_URL</span><span class="p">,</span> <span class="n">connect_args</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;check_same_thread&quot;</span><span class="p">:</span><span class="kc">False</span><span class="p">}</span>
-</span><span id="L-23"><a href="#L-23"><span class="linenos">23</span></a><span class="p">)</span>
-</span><span id="L-24"><a href="#L-24"><span class="linenos">24</span></a>
-</span><span id="L-25"><a href="#L-25"><span class="linenos">25</span></a><span class="c1"># Session factory for generating clean database sessions</span>
-</span><span id="L-26"><a href="#L-26"><span class="linenos">26</span></a><span class="n">SessionLocal</span> <span class="o">=</span> <span class="n">sessionmaker</span><span class="p">(</span><span class="n">autocommit</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span> <span class="n">autoflush</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span> <span class="n">bind</span><span class="o">=</span><span class="n">engine</span><span class="p">)</span>
+</span><span id="L-3"><a href="#L-3"><span class="linenos"> 3</span></a><span class="kn">from</span><span class="w"> </span><span class="nn">sqlalchemy</span><span class="w"> </span><span class="kn">import</span> <span class="n">create_engine</span><span class="p">,</span> <span class="n">event</span>
+</span><span id="L-4"><a href="#L-4"><span class="linenos"> 4</span></a><span class="kn">from</span><span class="w"> </span><span class="nn">sqlalchemy.engine</span><span class="w"> </span><span class="kn">import</span> <span class="n">URL</span>
+</span><span id="L-5"><a href="#L-5"><span class="linenos"> 5</span></a><span class="kn">from</span><span class="w"> </span><span class="nn">sqlalchemy.orm</span><span class="w"> </span><span class="kn">import</span> <span class="n">sessionmaker</span>
+</span><span id="L-6"><a href="#L-6"><span class="linenos"> 6</span></a><span class="kn">from</span><span class="w"> </span><span class="nn">models.models</span><span class="w"> </span><span class="kn">import</span> <span class="n">Base</span>
+</span><span id="L-7"><a href="#L-7"><span class="linenos"> 7</span></a><span class="kn">from</span><span class="w"> </span><span class="nn">core.config</span><span class="w"> </span><span class="kn">import</span> <span class="n">DATABASE_PATH</span>
+</span><span id="L-8"><a href="#L-8"><span class="linenos"> 8</span></a>
+</span><span id="L-9"><a href="#L-9"><span class="linenos"> 9</span></a><span class="sd">&quot;&quot;&quot;</span>
+</span><span id="L-10"><a href="#L-10"><span class="linenos">10</span></a><span class="sd">Database configuration and session management module.</span>
+</span><span id="L-11"><a href="#L-11"><span class="linenos">11</span></a>
+</span><span id="L-12"><a href="#L-12"><span class="linenos">12</span></a><span class="sd">Sets up the SQLAlchemy engine, configures the session factory, </span>
+</span><span id="L-13"><a href="#L-13"><span class="linenos">13</span></a><span class="sd">and provides a dependency for database session lifecycles.</span>
+</span><span id="L-14"><a href="#L-14"><span class="linenos">14</span></a><span class="sd">&quot;&quot;&quot;</span>
+</span><span id="L-15"><a href="#L-15"><span class="linenos">15</span></a>
+</span><span id="L-16"><a href="#L-16"><span class="linenos">16</span></a><span class="c1"># URL.create() builds a correct sqlite URL for any absolute path. The old f&quot;sqlite:///./{path}&quot; only worked on</span>
+</span><span id="L-17"><a href="#L-17"><span class="linenos">17</span></a><span class="c1"># Windows by accident (ntpath.normpath drops the &quot;./&quot;); on Linux/macOS it became a RELATIVE path under the current</span>
+</span><span id="L-18"><a href="#L-18"><span class="linenos">18</span></a><span class="c1"># directory (&quot;unable to open database file&quot;) - reproduced by the test-suite.</span>
+</span><span id="L-19"><a href="#L-19"><span class="linenos">19</span></a><span class="n">SQLALCHEMY_DATABASE_URL</span> <span class="o">=</span> <span class="n">URL</span><span class="o">.</span><span class="n">create</span><span class="p">(</span><span class="s2">&quot;sqlite&quot;</span><span class="p">,</span> <span class="n">database</span><span class="o">=</span><span class="n">DATABASE_PATH</span><span class="p">)</span>
+</span><span id="L-20"><a href="#L-20"><span class="linenos">20</span></a>
+</span><span id="L-21"><a href="#L-21"><span class="linenos">21</span></a><span class="c1"># Initialize the database engine</span>
+</span><span id="L-22"><a href="#L-22"><span class="linenos">22</span></a><span class="c1"># &#39;check_same_thread: False&#39; is required for SQLite in multithreaded applications</span>
+</span><span id="L-23"><a href="#L-23"><span class="linenos">23</span></a><span class="n">engine</span> <span class="o">=</span> <span class="n">create_engine</span><span class="p">(</span>
+</span><span id="L-24"><a href="#L-24"><span class="linenos">24</span></a>    <span class="n">SQLALCHEMY_DATABASE_URL</span><span class="p">,</span> <span class="n">connect_args</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;check_same_thread&quot;</span><span class="p">:</span> <span class="kc">False</span><span class="p">,</span> <span class="s2">&quot;timeout&quot;</span><span class="p">:</span> <span class="mi">30</span><span class="p">}</span>
+</span><span id="L-25"><a href="#L-25"><span class="linenos">25</span></a><span class="p">)</span>
+</span><span id="L-26"><a href="#L-26"><span class="linenos">26</span></a>
 </span><span id="L-27"><a href="#L-27"><span class="linenos">27</span></a>
-</span><span id="L-28"><a href="#L-28"><span class="linenos">28</span></a><span class="k">def</span><span class="w"> </span><span class="nf">init_db</span><span class="p">():</span>
-</span><span id="L-29"><a href="#L-29"><span class="linenos">29</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Create all defined database tables if they do not already exist.&quot;&quot;&quot;</span>
-</span><span id="L-30"><a href="#L-30"><span class="linenos">30</span></a>    <span class="n">Base</span><span class="o">.</span><span class="n">metadata</span><span class="o">.</span><span class="n">create_all</span><span class="p">(</span><span class="n">bind</span><span class="o">=</span><span class="n">engine</span><span class="p">)</span>
-</span><span id="L-31"><a href="#L-31"><span class="linenos">31</span></a>
-</span><span id="L-32"><a href="#L-32"><span class="linenos">32</span></a><span class="k">def</span><span class="w"> </span><span class="nf">get_db</span><span class="p">():</span>
-</span><span id="L-33"><a href="#L-33"><span class="linenos">33</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
-</span><span id="L-34"><a href="#L-34"><span class="linenos">34</span></a><span class="sd">    Context manager / Dependency generator for database sessions.</span>
+</span><span id="L-28"><a href="#L-28"><span class="linenos">28</span></a><span class="nd">@event</span><span class="o">.</span><span class="n">listens_for</span><span class="p">(</span><span class="n">engine</span><span class="p">,</span> <span class="s2">&quot;connect&quot;</span><span class="p">)</span>
+</span><span id="L-29"><a href="#L-29"><span class="linenos">29</span></a><span class="k">def</span><span class="w"> </span><span class="nf">_sqlite_pragmas</span><span class="p">(</span><span class="n">dbapi_connection</span><span class="p">,</span> <span class="n">_record</span><span class="p">):</span>
+</span><span id="L-30"><a href="#L-30"><span class="linenos">30</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;WAL + busy timeout: the background OCR worker and request threads write concurrently (&quot;database is locked&quot;).&quot;&quot;&quot;</span>
+</span><span id="L-31"><a href="#L-31"><span class="linenos">31</span></a>    <span class="n">cur</span> <span class="o">=</span> <span class="n">dbapi_connection</span><span class="o">.</span><span class="n">cursor</span><span class="p">()</span>
+</span><span id="L-32"><a href="#L-32"><span class="linenos">32</span></a>    <span class="n">cur</span><span class="o">.</span><span class="n">execute</span><span class="p">(</span><span class="s2">&quot;PRAGMA journal_mode=WAL&quot;</span><span class="p">)</span>
+</span><span id="L-33"><a href="#L-33"><span class="linenos">33</span></a>    <span class="n">cur</span><span class="o">.</span><span class="n">execute</span><span class="p">(</span><span class="s2">&quot;PRAGMA busy_timeout=30000&quot;</span><span class="p">)</span>
+</span><span id="L-34"><a href="#L-34"><span class="linenos">34</span></a>    <span class="n">cur</span><span class="o">.</span><span class="n">close</span><span class="p">()</span>
 </span><span id="L-35"><a href="#L-35"><span class="linenos">35</span></a>
-</span><span id="L-36"><a href="#L-36"><span class="linenos">36</span></a><span class="sd">    Yields a session instance and guarantees its closure after use.</span>
-</span><span id="L-37"><a href="#L-37"><span class="linenos">37</span></a><span class="sd">    &quot;&quot;&quot;</span>
-</span><span id="L-38"><a href="#L-38"><span class="linenos">38</span></a>    <span class="n">db</span> <span class="o">=</span> <span class="n">SessionLocal</span><span class="p">()</span>
-</span><span id="L-39"><a href="#L-39"><span class="linenos">39</span></a>    <span class="k">try</span><span class="p">:</span>
-</span><span id="L-40"><a href="#L-40"><span class="linenos">40</span></a>        <span class="k">yield</span> <span class="n">db</span>
-</span><span id="L-41"><a href="#L-41"><span class="linenos">41</span></a>    <span class="k">finally</span><span class="p">:</span>
-</span><span id="L-42"><a href="#L-42"><span class="linenos">42</span></a>        <span class="n">db</span><span class="o">.</span><span class="n">close</span><span class="p">()</span>
+</span><span id="L-36"><a href="#L-36"><span class="linenos">36</span></a><span class="c1"># Session factory for generating clean database sessions</span>
+</span><span id="L-37"><a href="#L-37"><span class="linenos">37</span></a><span class="n">SessionLocal</span> <span class="o">=</span> <span class="n">sessionmaker</span><span class="p">(</span><span class="n">autocommit</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span> <span class="n">autoflush</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span> <span class="n">bind</span><span class="o">=</span><span class="n">engine</span><span class="p">)</span>
+</span><span id="L-38"><a href="#L-38"><span class="linenos">38</span></a>
+</span><span id="L-39"><a href="#L-39"><span class="linenos">39</span></a><span class="k">def</span><span class="w"> </span><span class="nf">migrate_schema</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]:</span>
+</span><span id="L-40"><a href="#L-40"><span class="linenos">40</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+</span><span id="L-41"><a href="#L-41"><span class="linenos">41</span></a><span class="sd">    Additive migration: add every model column that is missing from an EXISTING database table.</span>
+</span><span id="L-42"><a href="#L-42"><span class="linenos">42</span></a>
+</span><span id="L-43"><a href="#L-43"><span class="linenos">43</span></a><span class="sd">    Base.metadata.create_all() creates missing TABLES but never adds columns to existing ones, so every release that</span>
+</span><span id="L-44"><a href="#L-44"><span class="linenos">44</span></a><span class="sd">    added a column needed a manual scripts/migrate_db.py run - and an old database (or a backup restored from an</span>
+</span><span id="L-45"><a href="#L-45"><span class="linenos">45</span></a><span class="sd">    older version) failed at the first INSERT with &quot;no such column&quot;. Runs on every start and after an import.</span>
+</span><span id="L-46"><a href="#L-46"><span class="linenos">46</span></a><span class="sd">    Only nullable / defaulted columns can be added in place; anything else is reported, never guessed.</span>
+</span><span id="L-47"><a href="#L-47"><span class="linenos">47</span></a><span class="sd">    &quot;&quot;&quot;</span>
+</span><span id="L-48"><a href="#L-48"><span class="linenos">48</span></a>    <span class="kn">from</span><span class="w"> </span><span class="nn">sqlalchemy</span><span class="w"> </span><span class="kn">import</span> <span class="n">inspect</span><span class="p">,</span> <span class="n">text</span>
+</span><span id="L-49"><a href="#L-49"><span class="linenos">49</span></a>    <span class="n">added</span> <span class="o">=</span> <span class="p">[]</span>
+</span><span id="L-50"><a href="#L-50"><span class="linenos">50</span></a>    <span class="n">insp</span> <span class="o">=</span> <span class="n">inspect</span><span class="p">(</span><span class="n">engine</span><span class="p">)</span>
+</span><span id="L-51"><a href="#L-51"><span class="linenos">51</span></a>    <span class="k">with</span> <span class="n">engine</span><span class="o">.</span><span class="n">begin</span><span class="p">()</span> <span class="k">as</span> <span class="n">conn</span><span class="p">:</span>
+</span><span id="L-52"><a href="#L-52"><span class="linenos">52</span></a>        <span class="k">for</span> <span class="n">table</span> <span class="ow">in</span> <span class="n">Base</span><span class="o">.</span><span class="n">metadata</span><span class="o">.</span><span class="n">sorted_tables</span><span class="p">:</span>
+</span><span id="L-53"><a href="#L-53"><span class="linenos">53</span></a>            <span class="k">if</span> <span class="ow">not</span> <span class="n">insp</span><span class="o">.</span><span class="n">has_table</span><span class="p">(</span><span class="n">table</span><span class="o">.</span><span class="n">name</span><span class="p">):</span>
+</span><span id="L-54"><a href="#L-54"><span class="linenos">54</span></a>                <span class="k">continue</span>
+</span><span id="L-55"><a href="#L-55"><span class="linenos">55</span></a>            <span class="n">existing</span> <span class="o">=</span> <span class="p">{</span><span class="n">c</span><span class="p">[</span><span class="s2">&quot;name&quot;</span><span class="p">]</span> <span class="k">for</span> <span class="n">c</span> <span class="ow">in</span> <span class="n">insp</span><span class="o">.</span><span class="n">get_columns</span><span class="p">(</span><span class="n">table</span><span class="o">.</span><span class="n">name</span><span class="p">)}</span>
+</span><span id="L-56"><a href="#L-56"><span class="linenos">56</span></a>            <span class="k">for</span> <span class="n">column</span> <span class="ow">in</span> <span class="n">table</span><span class="o">.</span><span class="n">columns</span><span class="p">:</span>
+</span><span id="L-57"><a href="#L-57"><span class="linenos">57</span></a>                <span class="k">if</span> <span class="n">column</span><span class="o">.</span><span class="n">name</span> <span class="ow">in</span> <span class="n">existing</span><span class="p">:</span>
+</span><span id="L-58"><a href="#L-58"><span class="linenos">58</span></a>                    <span class="k">continue</span>
+</span><span id="L-59"><a href="#L-59"><span class="linenos">59</span></a>                <span class="k">if</span> <span class="ow">not</span> <span class="n">column</span><span class="o">.</span><span class="n">nullable</span> <span class="ow">and</span> <span class="n">column</span><span class="o">.</span><span class="n">default</span> <span class="ow">is</span> <span class="kc">None</span> <span class="ow">and</span> <span class="n">column</span><span class="o">.</span><span class="n">server_default</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+</span><span id="L-60"><a href="#L-60"><span class="linenos">60</span></a>                    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;[MIGRATE] WARNING </span><span class="si">{</span><span class="n">table</span><span class="o">.</span><span class="n">name</span><span class="si">}</span><span class="s2">.</span><span class="si">{</span><span class="n">column</span><span class="o">.</span><span class="n">name</span><span class="si">}</span><span class="s2"> is NOT NULL without default - cannot add automatically&quot;</span><span class="p">)</span>
+</span><span id="L-61"><a href="#L-61"><span class="linenos">61</span></a>                    <span class="k">continue</span>
+</span><span id="L-62"><a href="#L-62"><span class="linenos">62</span></a>                <span class="n">coltype</span> <span class="o">=</span> <span class="n">column</span><span class="o">.</span><span class="n">type</span><span class="o">.</span><span class="n">compile</span><span class="p">(</span><span class="n">engine</span><span class="o">.</span><span class="n">dialect</span><span class="p">)</span>
+</span><span id="L-63"><a href="#L-63"><span class="linenos">63</span></a>                <span class="n">conn</span><span class="o">.</span><span class="n">execute</span><span class="p">(</span><span class="n">text</span><span class="p">(</span><span class="sa">f</span><span class="s1">&#39;ALTER TABLE &quot;</span><span class="si">{</span><span class="n">table</span><span class="o">.</span><span class="n">name</span><span class="si">}</span><span class="s1">&quot; ADD COLUMN &quot;</span><span class="si">{</span><span class="n">column</span><span class="o">.</span><span class="n">name</span><span class="si">}</span><span class="s1">&quot; </span><span class="si">{</span><span class="n">coltype</span><span class="si">}</span><span class="s1">&#39;</span><span class="p">))</span>
+</span><span id="L-64"><a href="#L-64"><span class="linenos">64</span></a>                <span class="n">added</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">table</span><span class="o">.</span><span class="n">name</span><span class="si">}</span><span class="s2">.</span><span class="si">{</span><span class="n">column</span><span class="o">.</span><span class="n">name</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+</span><span id="L-65"><a href="#L-65"><span class="linenos">65</span></a>                <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;[MIGRATE] added column </span><span class="si">{</span><span class="n">table</span><span class="o">.</span><span class="n">name</span><span class="si">}</span><span class="s2">.</span><span class="si">{</span><span class="n">column</span><span class="o">.</span><span class="n">name</span><span class="si">}</span><span class="s2"> (</span><span class="si">{</span><span class="n">coltype</span><span class="si">}</span><span class="s2">)&quot;</span><span class="p">)</span>
+</span><span id="L-66"><a href="#L-66"><span class="linenos">66</span></a>    <span class="k">return</span> <span class="n">added</span>
+</span><span id="L-67"><a href="#L-67"><span class="linenos">67</span></a>
+</span><span id="L-68"><a href="#L-68"><span class="linenos">68</span></a>
+</span><span id="L-69"><a href="#L-69"><span class="linenos">69</span></a><span class="k">def</span><span class="w"> </span><span class="nf">init_db</span><span class="p">():</span>
+</span><span id="L-70"><a href="#L-70"><span class="linenos">70</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Create missing tables, then add missing columns to existing ones.&quot;&quot;&quot;</span>
+</span><span id="L-71"><a href="#L-71"><span class="linenos">71</span></a>    <span class="n">Base</span><span class="o">.</span><span class="n">metadata</span><span class="o">.</span><span class="n">create_all</span><span class="p">(</span><span class="n">bind</span><span class="o">=</span><span class="n">engine</span><span class="p">)</span>
+</span><span id="L-72"><a href="#L-72"><span class="linenos">72</span></a>    <span class="n">migrate_schema</span><span class="p">()</span>
+</span><span id="L-73"><a href="#L-73"><span class="linenos">73</span></a>
+</span><span id="L-74"><a href="#L-74"><span class="linenos">74</span></a><span class="k">def</span><span class="w"> </span><span class="nf">get_db</span><span class="p">():</span>
+</span><span id="L-75"><a href="#L-75"><span class="linenos">75</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+</span><span id="L-76"><a href="#L-76"><span class="linenos">76</span></a><span class="sd">    Context manager / Dependency generator for database sessions.</span>
+</span><span id="L-77"><a href="#L-77"><span class="linenos">77</span></a>
+</span><span id="L-78"><a href="#L-78"><span class="linenos">78</span></a><span class="sd">    Yields a session instance and guarantees its closure after use.</span>
+</span><span id="L-79"><a href="#L-79"><span class="linenos">79</span></a><span class="sd">    &quot;&quot;&quot;</span>
+</span><span id="L-80"><a href="#L-80"><span class="linenos">80</span></a>    <span class="n">db</span> <span class="o">=</span> <span class="n">SessionLocal</span><span class="p">()</span>
+</span><span id="L-81"><a href="#L-81"><span class="linenos">81</span></a>    <span class="k">try</span><span class="p">:</span>
+</span><span id="L-82"><a href="#L-82"><span class="linenos">82</span></a>        <span class="k">yield</span> <span class="n">db</span>
+</span><span id="L-83"><a href="#L-83"><span class="linenos">83</span></a>    <span class="k">finally</span><span class="p">:</span>
+</span><span id="L-84"><a href="#L-84"><span class="linenos">84</span></a>        <span class="n">db</span><span class="o">.</span><span class="n">close</span><span class="p">()</span>
 </span></pre></div>
 
 
             </section>
-                <section id="db_url_path">
-                    <div class="attr variable">
-            <span class="name">db_url_path</span>        =
-<span class="default_value">&#39;C:/Users/hp/AppData/Roaming/OpenKeyTranslate/openkey_translate.db&#39;</span>
-
-        
-    </div>
-    <a class="headerlink" href="#db_url_path"></a>
-    
-    
-
-                </section>
                 <section id="SQLALCHEMY_DATABASE_URL">
                     <div class="attr variable">
             <span class="name">SQLALCHEMY_DATABASE_URL</span>        =
-<span class="default_value">&#39;sqlite:///./C:/Users/hp/AppData/Roaming/OpenKeyTranslate/openkey_translate.db&#39;</span>
+<span class="default_value">sqlite:///C:\Users\Dell\AppData\Local\Temp\okt_docs_build\openkey_translate.db</span>
 
         
     </div>
@@ -142,7 +172,7 @@
                 <section id="engine">
                     <div class="attr variable">
             <span class="name">engine</span>        =
-<span class="default_value">Engine(sqlite:///./C:/Users/hp/AppData/Roaming/OpenKeyTranslate/openkey_translate.db)</span>
+<span class="default_value">Engine(sqlite:///C:\Users\Dell\AppData\Local\Temp\okt_docs_build\openkey_translate.db)</span>
 
         
     </div>
@@ -155,13 +185,65 @@
                     <div class="attr variable">
             <span class="name">SessionLocal</span>        =
 <input id="SessionLocal-view-value" class="view-value-toggle-state" type="checkbox" aria-hidden="true" tabindex="-1">
-            <label class="view-value-button pdoc-button" for="SessionLocal-view-value"></label><span class="default_value">sessionmaker(class_=&#39;Session&#39;, autocommit=False, bind=Engine(sqlite:///./C:/Users/hp/AppData/Roaming/OpenKeyTranslate/openkey_translate.db), autoflush=False, expire_on_commit=True)</span>
+            <label class="view-value-button pdoc-button" for="SessionLocal-view-value"></label><span class="default_value">sessionmaker(class_=&#39;Session&#39;, autocommit=False, bind=Engine(sqlite:///C:\Users\Dell\AppData\Local\Temp\okt_docs_build\openkey_translate.db), autoflush=False, expire_on_commit=True)</span>
 
         
     </div>
     <a class="headerlink" href="#SessionLocal"></a>
     
     
+
+                </section>
+                <section id="migrate_schema">
+                            <input id="migrate_schema-view-source" class="view-source-toggle-state" type="checkbox" aria-hidden="true" tabindex="-1">
+<div class="attr function">
+            
+        <span class="def">def</span>
+        <span class="name">migrate_schema</span><span class="signature pdoc-code condensed">(<span class="return-annotation">) -> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span>:</span></span>
+
+                <label class="view-source-button" for="migrate_schema-view-source"><span>View Source</span></label>
+
+    </div>
+    <a class="headerlink" href="#migrate_schema"></a>
+            <div class="pdoc-code codehilite"><pre><span></span><span id="migrate_schema-41"><a href="#migrate_schema-41"><span class="linenos">41</span></a><span class="k">def</span><span class="w"> </span><span class="nf">migrate_schema</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]:</span>
+</span><span id="migrate_schema-42"><a href="#migrate_schema-42"><span class="linenos">42</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+</span><span id="migrate_schema-43"><a href="#migrate_schema-43"><span class="linenos">43</span></a><span class="sd">    Additive migration: add every model column that is missing from an EXISTING database table.</span>
+</span><span id="migrate_schema-44"><a href="#migrate_schema-44"><span class="linenos">44</span></a>
+</span><span id="migrate_schema-45"><a href="#migrate_schema-45"><span class="linenos">45</span></a><span class="sd">    Base.metadata.create_all() creates missing TABLES but never adds columns to existing ones, so every release that</span>
+</span><span id="migrate_schema-46"><a href="#migrate_schema-46"><span class="linenos">46</span></a><span class="sd">    added a column needed a manual scripts/migrate_db.py run - and an old database (or a backup restored from an</span>
+</span><span id="migrate_schema-47"><a href="#migrate_schema-47"><span class="linenos">47</span></a><span class="sd">    older version) failed at the first INSERT with &quot;no such column&quot;. Runs on every start and after an import.</span>
+</span><span id="migrate_schema-48"><a href="#migrate_schema-48"><span class="linenos">48</span></a><span class="sd">    Only nullable / defaulted columns can be added in place; anything else is reported, never guessed.</span>
+</span><span id="migrate_schema-49"><a href="#migrate_schema-49"><span class="linenos">49</span></a><span class="sd">    &quot;&quot;&quot;</span>
+</span><span id="migrate_schema-50"><a href="#migrate_schema-50"><span class="linenos">50</span></a>    <span class="kn">from</span><span class="w"> </span><span class="nn">sqlalchemy</span><span class="w"> </span><span class="kn">import</span> <span class="n">inspect</span><span class="p">,</span> <span class="n">text</span>
+</span><span id="migrate_schema-51"><a href="#migrate_schema-51"><span class="linenos">51</span></a>    <span class="n">added</span> <span class="o">=</span> <span class="p">[]</span>
+</span><span id="migrate_schema-52"><a href="#migrate_schema-52"><span class="linenos">52</span></a>    <span class="n">insp</span> <span class="o">=</span> <span class="n">inspect</span><span class="p">(</span><span class="n">engine</span><span class="p">)</span>
+</span><span id="migrate_schema-53"><a href="#migrate_schema-53"><span class="linenos">53</span></a>    <span class="k">with</span> <span class="n">engine</span><span class="o">.</span><span class="n">begin</span><span class="p">()</span> <span class="k">as</span> <span class="n">conn</span><span class="p">:</span>
+</span><span id="migrate_schema-54"><a href="#migrate_schema-54"><span class="linenos">54</span></a>        <span class="k">for</span> <span class="n">table</span> <span class="ow">in</span> <span class="n">Base</span><span class="o">.</span><span class="n">metadata</span><span class="o">.</span><span class="n">sorted_tables</span><span class="p">:</span>
+</span><span id="migrate_schema-55"><a href="#migrate_schema-55"><span class="linenos">55</span></a>            <span class="k">if</span> <span class="ow">not</span> <span class="n">insp</span><span class="o">.</span><span class="n">has_table</span><span class="p">(</span><span class="n">table</span><span class="o">.</span><span class="n">name</span><span class="p">):</span>
+</span><span id="migrate_schema-56"><a href="#migrate_schema-56"><span class="linenos">56</span></a>                <span class="k">continue</span>
+</span><span id="migrate_schema-57"><a href="#migrate_schema-57"><span class="linenos">57</span></a>            <span class="n">existing</span> <span class="o">=</span> <span class="p">{</span><span class="n">c</span><span class="p">[</span><span class="s2">&quot;name&quot;</span><span class="p">]</span> <span class="k">for</span> <span class="n">c</span> <span class="ow">in</span> <span class="n">insp</span><span class="o">.</span><span class="n">get_columns</span><span class="p">(</span><span class="n">table</span><span class="o">.</span><span class="n">name</span><span class="p">)}</span>
+</span><span id="migrate_schema-58"><a href="#migrate_schema-58"><span class="linenos">58</span></a>            <span class="k">for</span> <span class="n">column</span> <span class="ow">in</span> <span class="n">table</span><span class="o">.</span><span class="n">columns</span><span class="p">:</span>
+</span><span id="migrate_schema-59"><a href="#migrate_schema-59"><span class="linenos">59</span></a>                <span class="k">if</span> <span class="n">column</span><span class="o">.</span><span class="n">name</span> <span class="ow">in</span> <span class="n">existing</span><span class="p">:</span>
+</span><span id="migrate_schema-60"><a href="#migrate_schema-60"><span class="linenos">60</span></a>                    <span class="k">continue</span>
+</span><span id="migrate_schema-61"><a href="#migrate_schema-61"><span class="linenos">61</span></a>                <span class="k">if</span> <span class="ow">not</span> <span class="n">column</span><span class="o">.</span><span class="n">nullable</span> <span class="ow">and</span> <span class="n">column</span><span class="o">.</span><span class="n">default</span> <span class="ow">is</span> <span class="kc">None</span> <span class="ow">and</span> <span class="n">column</span><span class="o">.</span><span class="n">server_default</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+</span><span id="migrate_schema-62"><a href="#migrate_schema-62"><span class="linenos">62</span></a>                    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;[MIGRATE] WARNING </span><span class="si">{</span><span class="n">table</span><span class="o">.</span><span class="n">name</span><span class="si">}</span><span class="s2">.</span><span class="si">{</span><span class="n">column</span><span class="o">.</span><span class="n">name</span><span class="si">}</span><span class="s2"> is NOT NULL without default - cannot add automatically&quot;</span><span class="p">)</span>
+</span><span id="migrate_schema-63"><a href="#migrate_schema-63"><span class="linenos">63</span></a>                    <span class="k">continue</span>
+</span><span id="migrate_schema-64"><a href="#migrate_schema-64"><span class="linenos">64</span></a>                <span class="n">coltype</span> <span class="o">=</span> <span class="n">column</span><span class="o">.</span><span class="n">type</span><span class="o">.</span><span class="n">compile</span><span class="p">(</span><span class="n">engine</span><span class="o">.</span><span class="n">dialect</span><span class="p">)</span>
+</span><span id="migrate_schema-65"><a href="#migrate_schema-65"><span class="linenos">65</span></a>                <span class="n">conn</span><span class="o">.</span><span class="n">execute</span><span class="p">(</span><span class="n">text</span><span class="p">(</span><span class="sa">f</span><span class="s1">&#39;ALTER TABLE &quot;</span><span class="si">{</span><span class="n">table</span><span class="o">.</span><span class="n">name</span><span class="si">}</span><span class="s1">&quot; ADD COLUMN &quot;</span><span class="si">{</span><span class="n">column</span><span class="o">.</span><span class="n">name</span><span class="si">}</span><span class="s1">&quot; </span><span class="si">{</span><span class="n">coltype</span><span class="si">}</span><span class="s1">&#39;</span><span class="p">))</span>
+</span><span id="migrate_schema-66"><a href="#migrate_schema-66"><span class="linenos">66</span></a>                <span class="n">added</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">table</span><span class="o">.</span><span class="n">name</span><span class="si">}</span><span class="s2">.</span><span class="si">{</span><span class="n">column</span><span class="o">.</span><span class="n">name</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+</span><span id="migrate_schema-67"><a href="#migrate_schema-67"><span class="linenos">67</span></a>                <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;[MIGRATE] added column </span><span class="si">{</span><span class="n">table</span><span class="o">.</span><span class="n">name</span><span class="si">}</span><span class="s2">.</span><span class="si">{</span><span class="n">column</span><span class="o">.</span><span class="n">name</span><span class="si">}</span><span class="s2"> (</span><span class="si">{</span><span class="n">coltype</span><span class="si">}</span><span class="s2">)&quot;</span><span class="p">)</span>
+</span><span id="migrate_schema-68"><a href="#migrate_schema-68"><span class="linenos">68</span></a>    <span class="k">return</span> <span class="n">added</span>
+</span></pre></div>
+
+
+            <div class="docstring"><p>Additive migration: add every model column that is missing from an EXISTING database table.</p>
+
+<p>Base.metadata.create_all() creates missing TABLES but never adds columns to existing ones, so every release that
+added a column needed a manual scripts/migrate_db.py run - and an old database (or a backup restored from an
+older version) failed at the first INSERT with "no such column". Runs on every start and after an import.
+Only nullable / defaulted columns can be added in place; anything else is reported, never guessed.</p>
+</div>
+
 
                 </section>
                 <section id="init_db">
@@ -175,13 +257,14 @@
 
     </div>
     <a class="headerlink" href="#init_db"></a>
-            <div class="pdoc-code codehilite"><pre><span></span><span id="init_db-30"><a href="#init_db-30"><span class="linenos">30</span></a><span class="k">def</span><span class="w"> </span><span class="nf">init_db</span><span class="p">():</span>
-</span><span id="init_db-31"><a href="#init_db-31"><span class="linenos">31</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Create all defined database tables if they do not already exist.&quot;&quot;&quot;</span>
-</span><span id="init_db-32"><a href="#init_db-32"><span class="linenos">32</span></a>    <span class="n">Base</span><span class="o">.</span><span class="n">metadata</span><span class="o">.</span><span class="n">create_all</span><span class="p">(</span><span class="n">bind</span><span class="o">=</span><span class="n">engine</span><span class="p">)</span>
+            <div class="pdoc-code codehilite"><pre><span></span><span id="init_db-71"><a href="#init_db-71"><span class="linenos">71</span></a><span class="k">def</span><span class="w"> </span><span class="nf">init_db</span><span class="p">():</span>
+</span><span id="init_db-72"><a href="#init_db-72"><span class="linenos">72</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Create missing tables, then add missing columns to existing ones.&quot;&quot;&quot;</span>
+</span><span id="init_db-73"><a href="#init_db-73"><span class="linenos">73</span></a>    <span class="n">Base</span><span class="o">.</span><span class="n">metadata</span><span class="o">.</span><span class="n">create_all</span><span class="p">(</span><span class="n">bind</span><span class="o">=</span><span class="n">engine</span><span class="p">)</span>
+</span><span id="init_db-74"><a href="#init_db-74"><span class="linenos">74</span></a>    <span class="n">migrate_schema</span><span class="p">()</span>
 </span></pre></div>
 
 
-            <div class="docstring"><p>Create all defined database tables if they do not already exist.</p>
+            <div class="docstring"><p>Create missing tables, then add missing columns to existing ones.</p>
 </div>
 
 
@@ -197,17 +280,17 @@
 
     </div>
     <a class="headerlink" href="#get_db"></a>
-            <div class="pdoc-code codehilite"><pre><span></span><span id="get_db-34"><a href="#get_db-34"><span class="linenos">34</span></a><span class="k">def</span><span class="w"> </span><span class="nf">get_db</span><span class="p">():</span>
-</span><span id="get_db-35"><a href="#get_db-35"><span class="linenos">35</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
-</span><span id="get_db-36"><a href="#get_db-36"><span class="linenos">36</span></a><span class="sd">    Context manager / Dependency generator for database sessions.</span>
-</span><span id="get_db-37"><a href="#get_db-37"><span class="linenos">37</span></a>
-</span><span id="get_db-38"><a href="#get_db-38"><span class="linenos">38</span></a><span class="sd">    Yields a session instance and guarantees its closure after use.</span>
-</span><span id="get_db-39"><a href="#get_db-39"><span class="linenos">39</span></a><span class="sd">    &quot;&quot;&quot;</span>
-</span><span id="get_db-40"><a href="#get_db-40"><span class="linenos">40</span></a>    <span class="n">db</span> <span class="o">=</span> <span class="n">SessionLocal</span><span class="p">()</span>
-</span><span id="get_db-41"><a href="#get_db-41"><span class="linenos">41</span></a>    <span class="k">try</span><span class="p">:</span>
-</span><span id="get_db-42"><a href="#get_db-42"><span class="linenos">42</span></a>        <span class="k">yield</span> <span class="n">db</span>
-</span><span id="get_db-43"><a href="#get_db-43"><span class="linenos">43</span></a>    <span class="k">finally</span><span class="p">:</span>
-</span><span id="get_db-44"><a href="#get_db-44"><span class="linenos">44</span></a>        <span class="n">db</span><span class="o">.</span><span class="n">close</span><span class="p">()</span>
+            <div class="pdoc-code codehilite"><pre><span></span><span id="get_db-76"><a href="#get_db-76"><span class="linenos">76</span></a><span class="k">def</span><span class="w"> </span><span class="nf">get_db</span><span class="p">():</span>
+</span><span id="get_db-77"><a href="#get_db-77"><span class="linenos">77</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+</span><span id="get_db-78"><a href="#get_db-78"><span class="linenos">78</span></a><span class="sd">    Context manager / Dependency generator for database sessions.</span>
+</span><span id="get_db-79"><a href="#get_db-79"><span class="linenos">79</span></a>
+</span><span id="get_db-80"><a href="#get_db-80"><span class="linenos">80</span></a><span class="sd">    Yields a session instance and guarantees its closure after use.</span>
+</span><span id="get_db-81"><a href="#get_db-81"><span class="linenos">81</span></a><span class="sd">    &quot;&quot;&quot;</span>
+</span><span id="get_db-82"><a href="#get_db-82"><span class="linenos">82</span></a>    <span class="n">db</span> <span class="o">=</span> <span class="n">SessionLocal</span><span class="p">()</span>
+</span><span id="get_db-83"><a href="#get_db-83"><span class="linenos">83</span></a>    <span class="k">try</span><span class="p">:</span>
+</span><span id="get_db-84"><a href="#get_db-84"><span class="linenos">84</span></a>        <span class="k">yield</span> <span class="n">db</span>
+</span><span id="get_db-85"><a href="#get_db-85"><span class="linenos">85</span></a>    <span class="k">finally</span><span class="p">:</span>
+</span><span id="get_db-86"><a href="#get_db-86"><span class="linenos">86</span></a>        <span class="n">db</span><span class="o">.</span><span class="n">close</span><span class="p">()</span>
 </span></pre></div>
 
 

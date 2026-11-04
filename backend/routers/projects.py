@@ -35,6 +35,19 @@ async def get_projects(db: Session = Depends(get_db)):
     projects = db.query(Project).all()
     return projects
 
+@router.get("/{project_id}/progress")
+def project_progress(project_id: int, db: Session = Depends(get_db)):
+    """
+    Pages of the project (not excluded) per work stage - the stage bar on the project card, same rule as the chapter
+    bars (services/page_progress.py): {"total", "stages": {stage: n}, "processed", "reviewed", "last_activity"}.
+    """
+    from services.page_progress import project_progress
+    project = db.query(Project).filter(Project.id == project_id).first()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    return project_progress(project)
+
+
 @router.get("/select-folder")
 async def select_folder():
     """
@@ -120,22 +133,44 @@ async def delete_project(project_id: int, db: Session = Depends(get_db)):
 @router.post("/{project_id}/export-pages")
 def export_pages(project_id: int, payload: dict, db: Session = Depends(get_db)):
     """
-    Export the translated pages as PNG files: {"path": destination folder, "chapter_ids": [..] (omit = all chapters),
-    "include_untranslated": false}. Runs as a background job - poll GET /system/jobs/{job_id}.
+    Export pages: {"path": destination folder ("" / omitted = <project folder>/exported), "chapter_ids": [..] (omit = all
+    chapters), "content": "translated" | "clean" | "both", "format": "png" | "jpg", "quality": 50-100, "zip": false,
+    "include_untranslated": false, "only_reviewed": false}. Runs as a background job - poll GET /system/jobs/{job_id}.
     """
     from services import backup_service as bs
-    from services.render_service import export_chapters
+    from services.render_service import export_chapters, EXPORT_CONTENT, EXPORT_FORMATS
     if not db.query(Project).filter(Project.id == project_id).first():
         raise HTTPException(status_code=404, detail="Project not found")
-    dest = (payload.get("path") or "").strip()
-    if not dest:
-        raise HTTPException(status_code=400, detail="path (destination folder) is required")
+    dest = (payload.get("path") or "").strip() or None
+    content = payload.get("content", "translated")
+    fmt = payload.get("format", "png")
+    if content not in EXPORT_CONTENT or fmt not in EXPORT_FORMATS:
+        raise HTTPException(status_code=400, detail=f"content must be one of {EXPORT_CONTENT}, format one of {EXPORT_FORMATS}")
+    try:
+        quality = int(payload.get("quality", 92))
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="quality must be a number 50-100")
     try:
         job_id = bs.start_job("export_pages", export_chapters, project_id, payload.get("chapter_ids") or None, dest,
-                              bool(payload.get("include_untranslated", False)))
+                              bool(payload.get("include_untranslated", False)), content, fmt, quality, bool(payload.get("zip", False)),
+                              bool(payload.get("only_reviewed", False)))
     except bs.BackupError as e:
         raise HTTPException(status_code=409, detail=str(e))
     return {"job_id": job_id}
+
+
+@router.post("/{project_id}/open-exported")
+async def open_exported(project_id: int, db: Session = Depends(get_db)):
+    """Open <project folder>/exported in the file explorer (created when nothing was exported yet)."""
+    from services.render_service import default_export_root
+    from routers.system import open_path, OpenPathRequest
+    project = db.query(Project).filter(Project.id == project_id).first()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    folder = default_export_root(project)
+    os.makedirs(folder, exist_ok=True)
+    await open_path(OpenPathRequest(path=folder))
+    return {"folder": folder}
 
 
 @router.post("/{project_id}/rescan")

@@ -69,7 +69,8 @@ def apply_info(bubble_dicts: list[dict], info: dict, key: str = "bubble_id") -> 
 
 def reinpaint_from_json(paths: dict, ocr_data: dict) -> bool:
     """
-    Rebuild paths["image"] from the raw file + saved lines. False when the JSON has no line data.
+    Rebuild paths["image"] from the raw file + saved lines + the user's manual cleanup areas (ocr_data["cleanups"]).
+    False when the JSON has no line data.
     Also refreshes interior_box / missed_text of the bubbles in `ocr_data` (the caller writes the JSON afterwards).
     """
     targets = targets_from_json(ocr_data)
@@ -77,7 +78,8 @@ def reinpaint_from_json(paths: dict, ocr_data: dict) -> bool:
         return False
     boxes, bubbles = targets
     image = load_image_bgr(paths["raw"])
-    mask, info, flats = build_erase_mask(image, boxes, bubbles, use_interior=get_setting("inpaint_use_interior", True))
+    mask, info, flats = build_erase_mask(image, boxes, bubbles, use_interior=get_setting("inpaint_use_interior", True),
+                                         cleanups=ocr_data.get("cleanups"))
     apply_info(ocr_data.get("bubbles", []), info)
     write_image(paths["image"], inpaint(image, mask, flats))
     return True

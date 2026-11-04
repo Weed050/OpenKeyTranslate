@@ -1,10 +1,22 @@
 /* frontend/css/tokens.css
-   Design tokens. Dark theme is the default (:root); the light theme overrides the same custom properties under
-   :root[data-theme="light"]. data-theme is set by js/theme.js before first paint (user choice: system / light /
-   dark, kept in localStorage). Every other CSS file reads colors, spacing and radii from these custom properties -
-   nothing else in the project should hardcode a hex color or a raw px gap. */
+   Design tokens. Every other CSS file reads colors, spacing and radii from these custom properties - nothing else in
+   the project should hardcode a hex color or a raw px gap.
 
-:root {
+   Choices set by js/theme.js on <html> before the first paint (kept in localStorage):
+   - color scheme  -> data-theme="dark|light"   (System / Light / Dark; dark is the default in :root)
+   - theme palette -> data-palette="<id>"       (one palette chosen for light and one for dark; absent = the default
+                                                 "Slate" palette below)
+   - surface tint  -> data-tint="off|strong"    (absent = subtle): multiplies the palette's surface chroma (--tint-k)
+
+   The selectors match ANY element carrying the attributes, not only <html>: the Settings page draws small previews
+   (a light mock-up inside a dark page, a swatch per palette) just by putting data-theme / data-palette on them.
+
+   A palette only gives a hue and its accent colors; its surfaces are the default neutral surfaces at the SAME
+   lightness (oklch L), with some chroma of that hue. So every palette keeps the contrast steps of the default one.
+   Checked for all 12 palettes x both schemes x tint subtle / strong (WCAG): body / secondary / muted text >= 4.5:1 on
+   page, panel, input and hover; accent text >= 4.5:1 on the accent; accent >= 4.5:1 on page and panel. */
+
+:root, [data-theme="dark"] {
   color-scheme: dark;              /* native controls, scrollbars, <select> popups follow the theme */
 
   /* surfaces, darkest to lightest */
@@ -20,21 +32,24 @@
   /* accent + status */
   --accent: #6d8cff;
   --accent-text: #0e0f12;
-  --danger: #e0575c;
+  --danger: #e8696d;
   --success: #4caf7d;
   --warn: #d9a441;
+  --edited: #7b98ff;              /* "edited" marker: fixed blue, never the palette accent (green in Grove = "accepted") */
 
   /* translucent tints of the status colors (badges, hover, draw rectangle, chapter progress) */
   --accent-soft: rgba(109, 140, 255, 0.14);
   --danger-soft: rgba(224, 87, 92, 0.12);
   --success-soft: rgba(76, 175, 125, 0.16);
+  --warn-soft: rgba(217, 164, 65, 0.16);
+  --edited-soft: rgba(123, 152, 255, 0.16);
   --tint-rest: rgba(255, 255, 255, 0.02);
   --hover-filter: brightness(1.25);
 
   /* text */
   --text-primary: #e7e7ea;
   --text-secondary: #a4a5ad;
-  --text-muted: #6b6c74;
+  --text-muted: #8f909a;           /* >= 4.5:1 also on --bg-hover (was #8a8b95: 4.4) */
 
   /* borders */
   --border: #2a2b31;
@@ -43,11 +58,129 @@
   /* overlays, shadows, floating button */
   --backdrop: rgba(0, 0, 0, 0.6);
   --shadow: rgba(0, 0, 0, 0.2);
+  --card-shadow: none;             /* dark: surfaces are told apart by brightness alone */
   --fab-bg: #333;
   --fab-hover: #555;
   --fab-text: #fff;
+}
 
-  /* drawn ON the manga image itself - same in both themes (the page is the background, not the UI) */
+/* Light scheme: also used for printing (js/theme.js switches to it on beforeprint). The page background is a clear
+   step darker than the white panels and the borders are stronger than before, so sidebar / cards / editor panels
+   stay apart; status colors are darker than in the dark scheme so text in them keeps >= 4.5:1 on the grey page. */
+[data-theme="light"] {
+  color-scheme: light;
+
+  --bg-page: #e3e5ea;
+  --bg-panel: #ffffff;
+  --bg-panel-2: #eff0f4;
+  --bg-hover: #e5e7ec;
+  --bg-selected: #dfe6ff;
+  --bg-input: #ffffff;
+  --bg-sunken: #f3f4f7;
+  --bg-well: #dadde4;
+
+  --accent: #3552d4;
+  --accent-text: #ffffff;
+  --danger: #b42f35;
+  --success: #1a6b41;
+  --warn: #825500;
+  --edited: #3552d4;
+
+  --accent-soft: rgba(53, 82, 212, 0.10);
+  --danger-soft: rgba(180, 47, 53, 0.10);
+  --success-soft: rgba(26, 107, 65, 0.12);
+  --warn-soft: rgba(130, 85, 0, 0.12);
+  --edited-soft: rgba(53, 82, 212, 0.11);
+  --tint-rest: rgba(0, 0, 0, 0.015);
+  --hover-filter: brightness(0.96);
+
+  --text-primary: #1b1c21;
+  --text-secondary: #43454f;
+  --text-muted: #5a5d68;
+
+  --border: #c8cbd4;
+  --border-strong: #a2a7b3;
+
+  --backdrop: rgba(20, 22, 30, 0.35);
+  --shadow: rgba(0, 0, 0, 0.15);
+  --card-shadow: 0 1px 2px rgba(20, 24, 35, 0.06), 0 1px 4px rgba(20, 24, 35, 0.06);
+  --fab-bg: #4a4c56;
+  --fab-hover: #2c2d33;
+  --fab-text: #fff;
+}
+
+/* ---------- theme palettes (data-palette) ----------
+   Per palette: hue + chroma of the surfaces for each scheme, accent + the text drawn on it for each scheme.
+   To add one: one rule here + one entry in PALETTES in js/theme.js. */
+
+[data-palette="mono"]  { --tint-h: 270; --tint-c-dark: 0;     --tint-c-light: 0;
+                         --accent-dark: #d6d8de; --accent-text-dark: #121318; --accent-light: #2c2e35; --accent-text-light: #ffffff; }
+[data-palette="paper"] { --tint-h: 70;  --tint-c-dark: 0.014; --tint-c-light: 0.016;
+                         --accent-dark: #f2879a; --accent-text-dark: #1a0a0d; --accent-light: #a8233a; --accent-text-light: #ffffff; }
+[data-palette="grove"] { --tint-h: 160; --tint-c-dark: 0.016; --tint-c-light: 0.016;
+                         --accent-dark: #4fc48c; --accent-text-dark: #07130d; --accent-light: #18754a; --accent-text-light: #ffffff; }
+[data-palette="ocean"] { --tint-h: 235; --tint-c-dark: 0.018; --tint-c-light: 0.016;
+                         --accent-dark: #5ab8ea; --accent-text-dark: #06121a; --accent-light: #0b6696; --accent-text-light: #ffffff; }
+[data-palette="ember"] { --tint-h: 45;  --tint-c-dark: 0.016; --tint-c-light: 0.016;
+                         --accent-dark: #f39d60; --accent-text-dark: #170c05; --accent-light: #a84812; --accent-text-light: #ffffff; }
+[data-palette="iris"]  { --tint-h: 290; --tint-c-dark: 0.022; --tint-c-light: 0.018;
+                         --accent-dark: #ab96ff; --accent-text-dark: #0f0b1f; --accent-light: #5f41d0; --accent-text-light: #ffffff; }
+[data-palette="sakura"] { --tint-h: 355; --tint-c-dark: 0.018; --tint-c-light: 0.016;
+                         --accent-dark: #f48fbe; --accent-text-dark: #1c0912; --accent-light: #b02a68; --accent-text-light: #ffffff; }
+[data-palette="jade"]  { --tint-h: 185; --tint-c-dark: 0.016; --tint-c-light: 0.016;
+                         --accent-dark: #3cc8b4; --accent-text-dark: #04130f; --accent-light: #0d6e62; --accent-text-light: #ffffff; }
+[data-palette="yuzu"]  { --tint-h: 95;  --tint-c-dark: 0.016; --tint-c-light: 0.018;
+                         --accent-dark: #e3c54a; --accent-text-dark: #151104; --accent-light: #755a00; --accent-text-light: #ffffff; }
+[data-palette="plum"]  { --tint-h: 325; --tint-c-dark: 0.020; --tint-c-light: 0.018;
+                         --accent-dark: #d892ea; --accent-text-dark: #160b1a; --accent-light: #8c2ea2; --accent-text-light: #ffffff; }
+[data-palette="rust"]  { --tint-h: 30;  --tint-c-dark: 0.016; --tint-c-light: 0.016;
+                         --accent-dark: #f0856f; --accent-text-dark: #1a0905; --accent-light: #a2391f; --accent-text-light: #ffffff; }
+
+/* surface tint strength (Settings > Appearance): x0 = neutral surfaces with the palette's accent, x2.5 = clearly colored.
+   Light schemes get their own, larger factors: the same chroma near white is much harder to see than on a dark grey,
+   and the panels (most of the screen) are mixed towards white - "strong" changed almost nothing in light mode. */
+:root { --tint-k: 1; --tint-k-light: 1.5; --panel-tint: 8%; }
+[data-tint="off"] { --tint-k: 0; --tint-k-light: 0; --panel-tint: 0%; }
+[data-tint="strong"] { --tint-k: 2.5; --tint-k-light: 4.5; --panel-tint: 45%; }
+
+/* surfaces of a palette = the default surfaces' lightness + the palette's hue (same steps as the hex values above) */
+[data-palette][data-theme="dark"] {
+  --tint-c: calc(var(--tint-c-dark) * var(--tint-k));
+  --bg-page: oklch(16.9% var(--tint-c) var(--tint-h));
+  --bg-panel: oklch(22.8% var(--tint-c) var(--tint-h));
+  --bg-panel-2: oklch(24.9% var(--tint-c) var(--tint-h));
+  --bg-hover: oklch(27.5% var(--tint-c) var(--tint-h));
+  --bg-input: oklch(24.6% var(--tint-c) var(--tint-h));
+  --bg-sunken: oklch(18.8% var(--tint-c) var(--tint-h));
+  --bg-well: oklch(14% var(--tint-c) var(--tint-h));
+  --border: oklch(29% var(--tint-c) var(--tint-h));
+  --border-strong: oklch(35.5% var(--tint-c) var(--tint-h));
+  --accent: var(--accent-dark);
+  --accent-text: var(--accent-text-dark);
+  --accent-soft: color-mix(in srgb, var(--accent-dark) 15%, transparent);
+  --bg-selected: color-mix(in oklab, var(--accent-dark) 20%, var(--bg-panel));
+}
+
+[data-palette][data-theme="light"] {
+  --tint-c: calc(var(--tint-c-light) * var(--tint-k-light));
+  --bg-page: oklch(92.2% var(--tint-c) var(--tint-h));
+  --bg-panel: color-mix(in oklab, var(--bg-page) var(--panel-tint), #ffffff);   /* near white: full chroma at L 100% would clip */
+  --bg-panel-2: oklch(95.6% var(--tint-c) var(--tint-h));
+  --bg-hover: oklch(92.8% var(--tint-c) var(--tint-h));
+  --bg-input: color-mix(in oklab, var(--bg-page) calc(var(--panel-tint) * 0.6), #ffffff);
+  --bg-sunken: oklch(96.7% var(--tint-c) var(--tint-h));
+  --bg-well: oklch(89.7% var(--tint-c) var(--tint-h));
+  --border: oklch(84.2% var(--tint-c) var(--tint-h));
+  --border-strong: oklch(72.8% var(--tint-c) var(--tint-h));
+  --accent: var(--accent-light);
+  --accent-text: var(--accent-text-light);
+  --accent-soft: color-mix(in srgb, var(--accent-light) 11%, transparent);
+  --bg-selected: color-mix(in oklab, var(--accent-light) 13%, var(--bg-panel));
+}
+
+/* ---------- everything below is the same in every scheme and palette ---------- */
+:root {
+  /* drawn ON the manga image itself (the page is the background, not the UI) */
   --overlay-outline: rgba(0, 0, 0, 0.55);
   --overlay-halo: rgba(255, 255, 255, 0.6);
   --overlay-chip-bg: rgba(30, 30, 40, 0.85);
@@ -73,42 +206,28 @@
   --panel-w: 320px;
 }
 
-/* Light theme: also used for printing (js/theme.js switches to it on beforeprint). Status colors are darker than in
-   the dark theme so text in them keeps >= 4.5:1 contrast on white. */
-:root[data-theme="light"] {
-  color-scheme: light;
-
-  --bg-page: #f4f5f7;
-  --bg-panel: #ffffff;
-  --bg-panel-2: #f0f1f4;
-  --bg-hover: #e9eaef;
-  --bg-selected: #dfe6ff;
-  --bg-input: #ffffff;
-  --bg-sunken: #f8f9fa;
-  --bg-well: #eceef2;
-
-  --accent: #3552d4;
-  --accent-text: #ffffff;
-  --danger: #c4343a;
-  --success: #1f7a4a;
-  --warn: #9a6400;
-
-  --accent-soft: rgba(53, 82, 212, 0.10);
-  --danger-soft: rgba(196, 52, 58, 0.10);
-  --success-soft: rgba(31, 122, 74, 0.14);
-  --tint-rest: rgba(0, 0, 0, 0.015);
-  --hover-filter: brightness(0.96);
-
-  --text-primary: #1b1c21;
-  --text-secondary: #4a4c56;
-  --text-muted: #6e707a;
-
-  --border: #d9dbe1;
-  --border-strong: #b9bcc5;
-
-  --backdrop: rgba(20, 22, 30, 0.35);
-  --shadow: rgba(0, 0, 0, 0.15);
-  --fab-bg: #4a4c56;
-  --fab-hover: #2c2d33;
-  --fab-text: #fff;
+/* ---------- work stages of a page (js/stages.js: page list, chapter bars, project cards, Help) ----------
+   Fixed, muted colours of their own - NOT the palette accent. A ramp of the accent was tried first (no clash with a
+   green / orange palette), but with a near-black or near-white accent (Mono, Slate light) it became six greys nobody
+   could tell apart. Now: one hue per stage, in pipeline order cool -> warm -> green, each a little stronger than the
+   one before, so the order still reads as "more done" and every stage is its own colour. Muted (low chroma) so they
+   sit next to any accent; a separate set for the light scheme (darker, so they hold on white).
+   "exported" = the "fully reviewed" green with stripes. The empty track (not started) stays neutral. */
+:root, [data-theme="dark"] {
+  --stage-todo: #34353d;
+  --stage-ocr: #7c74b8;            /* violet  - OCR done */
+  --stage-partial: #c99a45;        /* amber   - partly translated */
+  --stage-translated: #4f8fd6;     /* blue    - translated by the AI */
+  --stage-reviewed: #3aa89c;       /* teal    - translation reviewed */
+  --stage-checked: #4cb56c;        /* green   - fully reviewed (text + bubbles) */
+  --stage-exported: repeating-linear-gradient(135deg, #4cb56c 0 4px, #2d7a46 4px 7px);
+}
+[data-theme="light"] {
+  --stage-todo: #d3d6de;
+  --stage-ocr: #8f86cc;
+  --stage-partial: #d4993a;
+  --stage-translated: #3d7fd0;
+  --stage-reviewed: #23958a;
+  --stage-checked: #2f9a52;
+  --stage-exported: repeating-linear-gradient(135deg, #2f9a52 0 4px, #8acb9d 4px 7px);
 }

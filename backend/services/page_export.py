@@ -14,11 +14,16 @@ be exactly one place that defines it.
 import json
 import os
 import tempfile
+from datetime import datetime, timezone
 
-from core.config import SCALE
+from core.config import SCALE, TEXT_THRESHOLD
+
+OCR_DEBUG_MAX = 400          # entries per list in a page's ocr_debug (a junk-heavy page must not bloat the JSON)
 
 
-def save_ocr_json(out_dir: str, file_base_name: str, ocr_result: dict, pending_translation: bool = False) -> str:
+def save_ocr_json(out_dir: str, file_base_name: str, ocr_result: dict, pending_translation: bool = False,
+                  detect_rotation: bool | None = None, cleanups: list | None = None,
+                  bubble_order: str | None = None) -> str:
     """
     Save OCR results (items, lines, bubbles with translations) to JSON.
 
@@ -57,9 +62,13 @@ def save_ocr_json(out_dir: str, file_base_name: str, ocr_result: dict, pending_t
         }
         if b.get("text_raw"):
             entry["text_raw"] = b["text_raw"]          # raw OCR string when ocr_textfix changed the text
-        for flag in ("interior_box", "missed_text", "refined", "merged_from"):
+        for flag in ("interior_box", "missed_text", "refined", "merged_from", "layout"):   # layout: carried by Re-OCR
             if b.get(flag) is not None and b.get(flag) is not False:
                 entry[flag] = b[flag]
+        if b.get("confirmed_at") and not b.get("skip"):   # review stamp carried over by Re-OCR (utils.bubble_post.carry_over)
+            entry["confirmed_translation"], entry["confirmed_at"] = b.get("confirmed_translation", ""), b["confirmed_at"]
+            if b.get("confirmed_via"):
+                entry["confirmed_via"] = b["confirmed_via"]   # "page": accepted with the whole page (review_page)
         if b.get("skip"):
             entry["skip"] = True                        # number / symbol-only bubble: listed, never translated/inpainted
             entry["skip_reason"] = b.get("skip_reason")
@@ -70,20 +79,40 @@ def save_ocr_json(out_dir: str, file_base_name: str, ocr_result: dict, pending_t
         "items": [
             {
                 "text":     item["text"],
-                "score":    round(item["score"], 4),
+                "score":    round(float(item["score"]), 4),
                 "slice_id": item.get("slice_id"),
                 "box":      orig(item["box"]),
+                **({"rescued": item["rescued"]} if item.get("rescued") else {}),   # second-chance reading (utils/ocr_rescue)
             }
             for item in ocr_result["items"]
         ],
         "bubbles": bubbles_out,
-        "lines": [
-            {"line_id": l["line_id"], "box": orig(l["box"]), "bubble_id": owner.get(l["line_id"])}
+        "lines": [   # text per line: lets the editor split a bubble without OCR (services/bubble_edit.split_bubble)
+            {"line_id": l["line_id"], "box": orig(l["box"]), "bubble_id": owner.get(l["line_id"]), "text": l.get("text", ""),
+             **({"angle": l["angle"]} if "angle" in l else {})}     # tilted line: slant (utils/merge_boxes.build_text_lines)
             for l in ocr_result.get("lines", [])
         ],
     }
     if pending_translation:
         payload["pending_translation"] = True   # prefetched: the editor translates when the page is opened
+    if detect_rotation is not None:
+        payload["detect_rotation"] = bool(detect_rotation)   # the page's own choice (Re-OCR dialog), see ocr_pipeline.PageOCR
+    if cleanups:
+        payload["cleanups"] = cleanups                       # manual "Clean area" rectangles (routers/pages.py add_cleanup)
+    if bubble_order:
+        payload["bubble_order"] = bubble_order               # reading order chosen in the editor (ttb / rtl / ltr)
+    dbg = ocr_result.get("debug") or {}
+    if "rejected" in dbg:
+        # what the OCR saw but did not use - the editor's OCR debug view (GET /pages/{id}/ocr-debug). Display only.
+        payload["ocr_debug"] = {
+            "at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "threshold": TEXT_THRESHOLD,
+            "slices": [[round(a / SCALE), round(b / SCALE)] for a, b in dbg.get("slices", [])],
+            "rejected": [{"text": r["text"], "score": round(float(r["score"]), 4), "box": orig(r["box"])}
+                         for r in dbg["rejected"][:OCR_DEBUG_MAX]],
+            "dropped": [{"text": d["text"], "score": round(float(d.get("score") or 0), 4), "box": orig(d["box"]),
+                         "why": d["why"]} for d in dbg.get("dropped", [])[:OCR_DEBUG_MAX]],
+        }
 
     out_path = os.path.join(out_dir, f"{file_base_name}_ocr.json")
     with open(out_path, "w", encoding="utf-8") as f:
@@ -91,6 +120,88 @@ def save_ocr_json(out_dir: str, file_base_name: str, ocr_result: dict, pending_t
 
     print(f"[JSON] saved -> {out_path}")
     return out_path
+
+
+def bubble_reviewed(b: dict) -> bool:
+    """The user looked at this bubble: edited it (translation != AI draft) or accepted it unchanged (confirmed stamp)."""
+    text = (b.get("translation") or "").strip()
+    if not text:
+        return False
+    return text != (b.get("ai_translation") or "").strip() or b.get("confirmed_translation") == b.get("translation")
+
+
+_REVIEW_CACHE: dict[str, tuple[float, bool]] = {}
+
+
+def page_reviewed(json_path: str) -> bool:
+    """
+    Every bubble to translate on the page has been reviewed by the user (same rule as the editor's list markers and the
+    Lettering switch). A page without such bubbles (no text, only skipped numbers) counts as reviewed - nothing to check.
+    Cached by file mtime: the project list asks for hundreds of pages.
+    """
+    try:
+        mtime = os.path.getmtime(json_path)
+    except OSError:
+        return False
+    hit = _REVIEW_CACHE.get(json_path)
+    if hit and hit[0] == mtime:
+        return hit[1]
+    try:
+        data = load_page_json(json_path)
+        done = all(bubble_reviewed(b) for b in data.get("bubbles", []) if not b.get("skip"))
+    except Exception:
+        done = False
+    _REVIEW_CACHE[json_path] = (mtime, done)
+    return done
+
+
+_STAGE_CACHE: dict[str, tuple[float, dict]] = {}
+
+
+def page_stage(json_path: str) -> dict:
+    """
+    Where a PROCESSED page is in the work: {"stage", "bubbles", "translated", "reviewed", "page_accepted", "layout"} -
+    bubbles = the ones to translate (not skipped; automatic skips such as page numbers do not count), translated = how
+    many of them have a translation, reviewed = how many of them the user accepted or edited (page_accepted = how many
+    of those only by "Accept page"), layout = the user marked the bubbles of the page as checked (review_page).
+      "ocr"         read by the OCR, NO bubble translated yet (translation failed, or a prefetched page not opened yet)
+      "partial"     some bubbles translated, some not (a failed batch, bubbles added / split / re-read later)
+      "translated"  every bubble has a translation, not all are reviewed (AI draft / review in progress)
+      "reviewed"    every bubble is reviewed (bubble_reviewed: edited, or accepted unchanged = moved on in the editor)
+      "checked"     reviewed AND the bubbles (boxes, order, cleaning, lettering) marked as checked = fully reviewed
+    A page with nothing to translate counts as text-reviewed. Cached by file mtime (the chapter list asks for every page).
+    """
+    empty = {"stage": "ocr", "bubbles": 0, "translated": 0, "reviewed": 0, "page_accepted": 0, "layout": False}
+    try:
+        mtime = os.path.getmtime(json_path)
+    except OSError:
+        return dict(empty)
+    hit = _STAGE_CACHE.get(json_path)
+    if hit and hit[0] == mtime:
+        return hit[1]
+    try:
+        data = load_page_json(json_path)
+        todo = [b for b in data.get("bubbles", []) if not b.get("skip")]
+    except Exception:
+        data, todo = None, None
+    if todo is None:
+        out = dict(empty)
+    else:
+        done = [b for b in todo if bubble_reviewed(b)]
+        translated = sum(1 for b in todo if (b.get("translation") or "").strip())
+        layout = bool(data.get("layout_checked_at"))
+        if len(done) == len(todo):
+            stage = "checked" if layout else "reviewed"
+        elif translated == 0:
+            stage = "ocr"
+        elif translated < len(todo):
+            stage = "partial"
+        else:
+            stage = "translated"
+        out = {"stage": stage, "bubbles": len(todo), "translated": translated, "reviewed": len(done),
+               "page_accepted": sum(1 for b in done if b.get("confirmed_via") == "page"), "layout": layout}
+    _STAGE_CACHE[json_path] = (mtime, out)
+    return out
 
 
 def page_paths(page) -> dict:
@@ -141,6 +252,11 @@ def update_bubble_translation(json_path: str, bubble_id: str, new_translation: s
     the editor shows the user's saved edit next time the page loads instead
     of reverting to the AI's first draft every time.
 
+    Also stamps the bubble as reviewed: `confirmed_at` + `confirmed_translation`. That is the only record of "the user
+    read this and accepted it unchanged" now that unchanged translations no longer go into memory by default
+    (memory_store_approved) - the evaluation needs it to tell an accepted line from one nobody looked at. The stamp is
+    valid only while translation == confirmed_translation, so a later retranslation invalidates it by itself.
+
     :return: True if the bubble was found and updated, False otherwise
         (missing file or unknown bubble_id).
     """
@@ -151,6 +267,52 @@ def update_bubble_translation(json_path: str, bubble_id: str, new_translation: s
     for b in data.get("bubbles", []):
         if b["bubble_id"] == bubble_id:
             b["translation"] = new_translation
+            b["confirmed_translation"] = new_translation
+            b["confirmed_at"] = datetime.now(timezone.utc).isoformat()
+            b.pop("confirmed_via", None)        # looked at on its own now, not only accepted with the whole page
+            b.pop("split_check", None)          # the user looked at the divided translation of a split bubble
             write_page_json(json_path, data)
             return True
     return False
+
+
+def review_page(json_path: str, layout: bool | None = None, accept: bool = False, unaccept: list | None = None) -> dict:
+    """
+    Page-level review (editor mode bar: "Accept page", "Layout checked", the "On next page" review mode).
+
+    - layout True / False: set / clear `layout_checked_at` - the user checked the BUBBLES of the page (boxes, reading
+      order, cleaning, lettering), not only their text. Kept in the page JSON; a Re-OCR writes a new JSON without it,
+      because the bubbles are rebuilt.
+    - accept: every bubble that has a translation and is not reviewed yet gets the review stamp of an unchanged
+      translation (confirmed_translation / confirmed_at, as update_bubble_translation) PLUS confirmed_via = "page".
+      Why the extra field: a bubble accepted with the whole page may never have been read on its own; the evaluation
+      can tell such stamps apart (or leave them out) instead of counting them as a deliberate "accepted unchanged".
+      No memory entry and no TranslationLog change - exactly like the silent per-bubble acceptance.
+    - unaccept: bubble ids whose page-acceptance is undone (only stamps with confirmed_via == "page" are removed).
+
+    :return: {"accepted": [bubble ids], "unaccepted": [...], "layout_checked_at": str | None}
+    """
+    data = load_page_json(json_path)
+    now = datetime.now(timezone.utc).isoformat()
+    accepted, unaccepted = [], []
+    if accept:
+        for b in data.get("bubbles", []):
+            if b.get("skip") or not (b.get("translation") or "").strip() or bubble_reviewed(b):
+                continue
+            b["confirmed_translation"], b["confirmed_at"], b["confirmed_via"] = b["translation"], now, "page"
+            b.pop("split_check", None)
+            accepted.append(b["bubble_id"])
+    if unaccept:
+        wanted = set(unaccept)
+        for b in data.get("bubbles", []):
+            if b["bubble_id"] in wanted and b.get("confirmed_via") == "page":
+                for key in ("confirmed_translation", "confirmed_at", "confirmed_via"):
+                    b.pop(key, None)
+                unaccepted.append(b["bubble_id"])
+    if layout is True:
+        data["layout_checked_at"] = now
+    elif layout is False:
+        data.pop("layout_checked_at", None)
+    if accepted or unaccepted or layout is not None:
+        write_page_json(json_path, data)
+    return {"accepted": accepted, "unaccepted": unaccepted, "layout_checked_at": data.get("layout_checked_at")}

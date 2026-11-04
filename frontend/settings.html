@@ -5,17 +5,23 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="icon" href="img/okt-logo.svg" type="image/svg+xml">
+    <link rel="alternate icon" href="img/okt.ico">
     <title>OpenKeyTranslate - Settings</title>
     <link rel="stylesheet" href="css/tokens.css">
     <script src="js/theme.js"></script>
     <link rel="stylesheet" href="css/base.css">
     <link rel="stylesheet" href="css/layout.css">
+    <link rel="stylesheet" href="css/appearance.css">
+    <link rel="stylesheet" href="css/settings.css">
+    <link rel="stylesheet" href="css/help.css">
+    <script src="js/help.js" defer></script>
 </head>
 <body>
  
     <div class="app-shell">
         <nav class="sidebar">
-            <div class="sidebar-brand">OpenKeyTranslate</div>
+            <div class="sidebar-brand"><img src="img/okt-logo.svg" alt="" class="brand-icon">OpenKeyTranslate</div>
  
             <div class="sidebar-section">
                 <div class="sidebar-label">Active</div>
@@ -35,6 +41,8 @@
         </nav>
  
         <main class="main-content">
+          <div class="settings-layout">
+           <div class="settings-cards">
             <div class="page-header">
                 <h1>Settings</h1>
             </div>
@@ -57,44 +65,101 @@
 
             <div class="card">
                 <h2>Appearance</h2>
-                <div class="row">
-                    <div class="text-muted">Color theme (System follows your OS light/dark setting; printing always uses Light)</div>
-                    <select id="themeSelect" style="max-width:200px;">
-                        <option value="system">System</option>
-                        <option value="light">Light</option>
-                        <option value="dark">Dark</option>
-                    </select>
+                <p class="text-muted">Stored in this browser only and applied at once. Printing always uses the neutral light look.</p>
+                <div class="appearance-row">
+                    <div class="appearance-row-label">Color scheme</div>
+                    <div class="scheme-grid" id="schemeGrid" role="radiogroup" aria-label="Color scheme"></div>
+                </div>
+                <div class="appearance-row">
+                    <div class="appearance-row-label">Light theme colors<small>used while the app is light</small></div>
+                    <div class="palette-grid" id="paletteGridLight" role="radiogroup" aria-label="Colors of the light theme"></div>
+                </div>
+                <div class="appearance-row">
+                    <div class="appearance-row-label">Dark theme colors<small>used while the app is dark</small></div>
+                    <div class="palette-grid" id="paletteGridDark" role="radiogroup" aria-label="Colors of the dark theme"></div>
+                </div>
+                <div class="appearance-row">
+                    <div class="appearance-row-label">Surface tint</div>
+                    <div>
+                        <div class="segmented" id="tintSwitch" role="radiogroup" aria-label="Surface tint"></div>
+                        <p class="appearance-note">How much of the theme color goes into backgrounds and panels. The accent (buttons, selection) is the same at every level; Slate and Ink stay neutral.</p>
+                    </div>
                 </div>
             </div>
  
             <div class="card">
-                <h2>Translation (BYOK)</h2>
-                <p class="text-muted">Your own API keys. Saved and applied immediately - no restart. Keys are never shown again in full.</p>
+                <h2>Editor</h2>
+                <div class="row">
+                    <div class="text-muted">Polish spellcheck in translation text field (browser's built-in dictionary - needs a Polish language pack in your OS/browser to actually underline anything)</div>
+                    <label style="display:flex; align-items:center; gap:6px;">
+                        <input type="checkbox" id="spellcheckSettingCheckbox"> Enable
+                    </label>
+                </div>
+                <div class="row">
+                    <div class="text-muted" title="Stored in this browser only. Pages read before this version show only the kept readings - Re-OCR a page to collect the rest.">OCR debug view: an <b>OCR debug</b> button over the page in the editor shows every raw OCR reading with its confidence, second-chance (rescued) readings, readings under the threshold, what the filters dropped and where a tall page was cut into slices</div>
+                    <label style="display:flex; align-items:center; gap:6px;">
+                        <input type="checkbox" id="ocrDebugSettingCheckbox"> Show
+                    </label>
+                </div>
+            </div>
+
+            <div class="card">
+                <h2 data-toc="Shortcuts">Keyboard shortcuts</h2>
+                <p class="text-muted">Stored in this browser only. A key cannot be given twice where both actions could fire, nor taken from the browser; an action that also works while typing needs Ctrl or Alt. Fixed: Esc cancels, Shift+click picks bubbles to merge, Ctrl+scroll zooms.</p>
+                <div id="shortcutList" class="shortcut-list"></div>
+                <div style="display:flex; gap:8px; align-items:center; margin-top:10px;">
+                    <button id="resetShortcutsBtn">Reset all to default</button>
+                    <span class="text-muted" id="shortcutStatus"></span>
+                </div>
+            </div>
+
+            <div class="card" id="translation">
+                <h2 data-toc="Translation &amp; API keys">Translation &amp; API keys (BYOK)</h2>
+                <div class="quick-start">
+                    <b>Quick start</b>
+                    <ol>
+                        <li>Get a free key: <a href="https://console.groq.com/keys" target="_blank" rel="noopener">Groq</a> or <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">Google AI Studio (Gemini)</a> - or use any OpenAI-compatible service, or a local Ollama / LM Studio.</li>
+                        <li><i>+ Add key</i> (or the empty row), pick the provider and paste the key.</li>
+                        <li>Press <i>Test</i> next to the key - the result appears right under it. Everything is saved when you leave a field, no restart.</li>
+                    </ol>
+                    <span class="text-muted">Only the text of the bubbles is sent to the provider - the page images never leave this computer.</span>
+                </div>
                 <div class="row">
                     <label style="display:flex; align-items:center; gap:6px; margin:0;">
                         <input type="checkbox" id="translationOnCheckbox"> Translate pages (off = OCR only)
                     </label>
-                    <button id="testTranslationBtn" title="Sends one tiny request through the active provider and key pool">Test connection</button>
+                </div>
+                <h3 class="key-heading">Keys <span class="text-muted">used from the top - when a key hits its limit (or fails), the next one switched on takes over; providers can be mixed</span></h3>
+                <div id="keyList" class="key-list"></div>
+                <datalist id="compatPresets"></datalist>
+                <div class="key-actions">
+                    <button id="addKeyBtn">+ Add key</button>
+                    <button id="testTranslationBtn" title="One tiny translation exactly as a page would be translated: through the first key that is switched on and not resting after a limit">Test the pool</button>
+                </div>
+                <div id="poolTestResult" class="key-result hidden" role="status"></div>
+                <p class="text-muted key-ab-note">A/B experiment (memory vs. no memory): both versions of a bubble always go through the <b>same key and model</b>. If that key is busy at that moment, the pair is skipped instead of comparing two models.</p>
+                <h3 class="key-heading">Default model per provider <span class="text-muted">used by every key whose Model field is empty</span></h3>
+                <div class="row">
+                    <div class="text-muted">Groq</div>
+                    <input type="text" id="providerModelGroq" list="modelsGroq" style="max-width:320px;" spellcheck="false">
                 </div>
                 <div class="row">
-                    <div class="text-muted">Active provider</div>
-                    <select id="providerSelect" style="max-width:200px;">
-                        <option value="groq">Groq</option>
-                        <option value="gemini">Gemini</option>
-                    </select>
+                    <div class="text-muted">Gemini</div>
+                    <input type="text" id="providerModelGemini" list="modelsGemini" style="max-width:320px;" spellcheck="false">
                 </div>
                 <div class="row">
-                    <div class="text-muted">Model for this provider</div>
-                    <input type="text" id="providerModelInput" style="max-width:320px;" spellcheck="false">
+                    <div class="text-muted" title="Model names depend on the server: e.g. meta-llama/llama-3.3-70b-instruct (OpenRouter), mistral-small-latest, deepseek-chat, llama3.1 (Ollama). The Models button of a key lists them.">OpenAI-compatible</div>
+                    <input type="text" id="providerModelCompat" style="max-width:320px;" spellcheck="false" placeholder="e.g. llama3.1">
                 </div>
-                <div>
-                    <div class="text-muted" style="margin:8px 0 4px;">API keys for this provider (several keys = automatic rotation on rate limits)</div>
-                    <div id="keyList"></div>
-                    <button id="addKeyBtn" style="margin-top:6px;">+ Add key</button>
-                </div>
+                <datalist id="modelsGroq"></datalist>
+                <datalist id="modelsGemini"></datalist>
                 <div class="row">
                     <div class="text-muted">Temperature (0 = most repeatable; use 0 for the zero-shot vs memory experiment)</div>
                     <input type="text" id="temperatureInput" style="max-width:80px;" inputmode="decimal">
+                </div>
+                <div class="row">
+                    <div class="text-muted" title="Upper limit for the model's answer to ONE page (the JSON with every bubble's translation). 4096 is plenty for a manga page; raise it only if very dense pages come back cut off.">Max output tokens per page (advanced; default 4096)</div>
+                    <input type="text" id="translationMaxTokensInput" style="max-width:80px;" inputmode="numeric">
                 </div>
                 <div class="row">
                     <div class="text-muted" title="Gemini 2.5 thinking tokens count against the output limit and can cut off the JSON of a dense page. 0 = off (Flash), -1 = model default. Pro models use at least 128.">Gemini thinking budget (tokens; 0 = off, -1 = model default)</div>
@@ -126,8 +191,8 @@
                     <div class="text-muted" title="Share of content words (stopwords ignored) a fuzzy match must ALSO have in common with the line, unless its similarity is 0.90 or more. Filters 'same topic, different line' matches. 25 recommended.">Minimum content-word overlap for fuzzy matches (%, 0 = off)</div>
                     <input type="text" id="memoryLexicalInput" style="max-width:80px;" inputmode="numeric">
                 </div>
-                <label style="display:flex; align-items:center; gap:6px; margin:6px 0;" title="A translation you accept without changes is stored as an 'approved' memory entry. Edits are stored as 'corrected' and always rank first.">
-                    <input type="checkbox" id="memoryStoreApprovedCheckbox"> Also remember translations I accept unchanged (approved)
+                <label style="display:flex; align-items:center; gap:6px; margin:6px 0;" title="Shows an 'Approve to memory' button in the editor: it stores an UNCHANGED AI translation as an 'approved' memory example. Moving on from a bubble never does that. Off by default - approved entries feed the model's own text back to it; edits are always stored as 'corrected'.">
+                    <input type="checkbox" id="memoryStoreApprovedCheckbox"> Allow approving unchanged translations into memory ("Approve to memory" button in the editor)
                 </label>
                 <label style="display:flex; align-items:center; gap:6px; margin:6px 0;" title="For bubbles with a memory match the same payload is translated a second time WITHOUT the memory (same glossary and context) - the zero-shot vs memory comparison in Logs.">
                     <input type="checkbox" id="memoryAbCheckbox"> A/B experiment: also translate matched bubbles without memory (for Logs)
@@ -148,6 +213,45 @@
                 </label>
                 <button id="saveMemorySettingsBtn" class="primary">Save</button>
                 <p class="text-muted" id="memorySettingsStatus" style="margin-top:10px;"></p>
+            </div>
+
+            <div class="card" id="ocr-engine">
+                <h2 data-toc="OCR engine">OCR engine (CPU / GPU)</h2>
+                <p class="text-muted" id="ocrRuntimeNow">Loading what the OCR uses now…</p>
+                <div class="row">
+                    <div class="text-muted" title="auto = the GPU when this Paddle build and the computer have CUDA, else the CPU">Device</div>
+                    <select id="ocrDeviceSelect" style="max-width:260px;">
+                        <option value="auto">Automatic</option>
+                        <option value="cpu">CPU</option>
+                        <option value="gpu">GPU (NVIDIA, CUDA build of Paddle)</option>
+                    </select>
+                </div>
+                <div class="row">
+                    <div class="text-muted" title="The network that finds where text is. Recognition (reading the letters) is the same either way.">Text detection model</div>
+                    <select id="ocrDetModelSelect" style="max-width:320px;">
+                        <option value="auto">Automatic (server on GPU, mobile on CPU)</option>
+                        <option value="server">Server - most accurate, slow on a CPU</option>
+                        <option value="mobile">Mobile - about 3x faster on a CPU, less memory</option>
+                    </select>
+                </div>
+                <div class="row">
+                    <div class="text-muted" title="0 = the library decides. On a laptop 2-4 keeps the computer usable and cooler.">CPU threads (0 = automatic)</div>
+                    <input type="text" id="ocrThreadsInput" style="max-width:80px;" inputmode="numeric">
+                </div>
+                <div class="row">
+                    <label style="display:flex; align-items:center; gap:6px; margin:0;" title="Intel oneDNN acceleration on the CPU. Faster with Paddle 3.0; with Paddle 3.3 the OCR fails with 'ConvertPirAttribute2RuntimeAttribute not support' - leave it off there.">
+                        <input type="checkbox" id="ocrMkldnnCheckbox"> oneDNN acceleration on the CPU (only with Paddle 3.0)
+                    </label>
+                </div>
+                <p class="text-muted"><b>Applies after a restart of the backend</b> (the OCR model is loaded once at start).</p>
+                <div class="quick-start">
+                    <b>OCR crashes or the backend disappears?</b> Stop the backend and run in <code>backend</code>:
+                    <code>python scripts/ocr_selftest.py</code> - it tests OpenCV, Paddle and the OCR step by step in
+                    separate processes and says what to change. Its last report:
+                    <div id="ocrSelftestReport" class="text-muted" style="margin-top:6px;">none yet</div>
+                </div>
+                <button id="saveOcrEngineBtn" class="primary">Save</button>
+                <p class="text-muted" id="ocrEngineStatus" style="margin-top:10px;"></p>
             </div>
 
             <div class="card">
@@ -197,20 +301,47 @@
                         <input type="checkbox" id="ocrScanCheckbox"> Look for bubbles the OCR did not find at all (experimental)
                     </label>
                 </div>
+                <div class="row">
+                    <label style="display:flex; align-items:center; gap:6px; margin:0;" title="PaddleOCR's whole-image orientation step. Off: on upright manga it wrongly turned 12 of 67 page strips in a test and garbled their text. Sideways text inside a page is read without it. For one sideways page use Re-OCR in the editor -> 'The whole page is rotated'.">
+                        <input type="checkbox" id="ocrDetectRotationCheckbox"> Detect whole-page rotation on every page (only for scans that lie sideways)
+                    </label>
+                </div>
                 <p class="text-muted">Skipped bubbles stay in the editor list (you can still force-translate one) but are not sent to the LLM and their original pixels are NOT erased. Applies to pages processed from now on; use <b>Re-OCR</b> in the editor for existing pages.</p>
                 <button id="saveOcrOptionsBtn" class="primary">Save</button>
                 <p class="text-muted" id="ocrOptionsStatus" style="margin-top:10px;"></p>
             </div>
 
-            <div class="card">
-                <h2>Text on the page (preview and export)</h2>
+            <div class="card" id="fonts">
+                <h2 data-toc="Text &amp; fonts">Text on the page &amp; fonts</h2>
                 <div class="row">
-                    <div class="text-muted">Font file (.ttf / .otf) with Polish letters. Empty = Arial / DejaVu / Liberation when found.</div>
-                    <input type="text" id="typesettingFontInput" style="max-width:340px;" spellcheck="false" placeholder="C:\\Windows\\Fonts\\arial.ttf">
+                    <div class="text-muted" title="Used for every bubble that has no font of its own (Lettering mode can pick one per bubble)">Default font of the translated text</div>
+                    <select id="typesettingFontInput" style="max-width:340px;"><option value="">Automatic (Arial / DejaVu / Liberation)</option></select>
+                </div>
+                <div class="fonts-box">
+                    <div class="fonts-head">
+                        <b>Your fonts</b>
+                        <span class="text-muted">Comic fonts you add here can be picked in Settings and in the editor's Lettering mode. Fonts installed in the system are listed too.</span>
+                    </div>
+                    <div id="userFontList" class="user-font-list"><span class="text-muted">Loading…</span></div>
+                    <div class="fonts-actions">
+                        <input type="file" id="fontFileInput" accept=".ttf,.otf,.ttc" multiple class="hidden">
+                        <button id="addFontBtn" title="Copy .ttf / .otf / .ttc files into the app's font folder">Add font files…</button>
+                        <button id="openFontFolderBtn" title="The app's font folder - files dropped in here work too (then press Refresh)">Open font folder</button>
+                        <button id="refreshFontsBtn" title="Scan the font folders again">Refresh</button>
+                        <span class="text-muted" id="fontStatus"></span>
+                    </div>
+                    <p class="text-muted fonts-note">Need a free comic font with Polish letters? E.g. <a href="https://fonts.google.com/specimen/Comic+Neue" target="_blank" rel="noopener">Comic Neue</a>,
+                        <a href="https://fonts.google.com/specimen/Bangers" target="_blank" rel="noopener">Bangers</a>, <a href="https://fonts.google.com/specimen/Patrick+Hand" target="_blank" rel="noopener">Patrick Hand</a>
+                        (Google Fonts, SIL Open Font License) - download, then <i>Add font files…</i>. Fonts marked <span class="font-warn">no Polish</span> show empty boxes for ą ę ł ń ó ś ź ż. Check the license of commercial comic fonts before exporting pages.</p>
                 </div>
                 <div class="row">
                     <label style="display:flex; align-items:center; gap:6px; margin:0;">
                         <input type="checkbox" id="typesettingUpperCheckbox"> UPPER CASE lettering (manga style)
+                    </label>
+                </div>
+                <div class="row">
+                    <label style="display:flex; align-items:center; gap:6px; margin:0;" title="Each line is as wide as the bubble at its height: short lines at the top and bottom of an oval, long ones in the middle - usually a larger text. Used only when it gives a larger size than the rectangle, and not for areas you drew in Lettering.">
+                        <input type="checkbox" id="typesettingShapeCheckbox"> Follow the bubble's shape (oval bubbles get larger text)
                     </label>
                 </div>
                 <button id="saveTypesettingBtn" class="primary">Save</button>
@@ -221,16 +352,16 @@
                 <h2>OCR: ignored text</h2>
                 <p class="text-muted">Bubbles whose text matches any of these regular expressions (one per line, case-insensitive, "contains" match) are dropped before translation - watermarks, site URLs, credits. Applies to pages processed from now on (no restart); use Re-OCR in the editor for pages already processed. Example: ^\W*\d+\W*$ also drops number-only bubbles.</p>
                 <textarea id="ignorePatternsInput" class="text-mono" rows="5" spellcheck="false"></textarea>
-                <button id="saveIgnorePatternsBtn" class="primary" style="margin-top:8px;">Save</button>
+                <button id="saveIgnorePatternsBtn" class="primary">Save</button>
                 <p class="text-muted" id="ignorePatternsStatus" style="margin-top:10px;"></p>
             </div>
  
-            <div class="card">
-                <h2>Backup &amp; move to another computer</h2>
+            <div class="card" id="backup">
+                <h2 data-toc="Backup &amp; moving">Backup &amp; move to another computer</h2>
                 <p class="text-muted">One zip with everything: database (projects, corrections, glossary, logs), settings (without this PC's folder path), the .env file and all page images + OCR results. On the new computer install the app, open this page and import the zip - everything is put in the right place automatically.</p>
                 <div class="row">
-                    <label style="display:flex; align-items:center; gap:6px; margin:0;" title="Without it the zip contains no API keys and no .env - safer to share, but you have to enter the keys again.">
-                        <input type="checkbox" id="backupSecretsCheckbox" checked> Include API keys and .env
+                    <label style="display:flex; align-items:center; gap:6px; margin:0;" title="Off by default: the zip then contains no API keys and no .env - safe to copy or share, you enter the keys again on the new computer. Tick it only for a zip that stays with you.">
+                        <input type="checkbox" id="backupSecretsCheckbox"> Include API keys and .env (keep such a zip private)
                     </label>
                 </div>
                 <div class="row">
@@ -251,6 +382,28 @@
                 <p class="text-muted" id="backupStatus" style="margin-top:10px; white-space:pre-wrap;"></p>
             </div>
 
+            <div class="card" id="storage">
+                <h2 data-toc="Storage &amp; uninstall">Storage &amp; uninstall</h2>
+                <p class="text-muted">Everything OpenKeyTranslate keeps on this computer, with sizes. Caches and logs can be deleted here - they come back by themselves. Your work (projects, database, settings) is only shown here, never deleted from the app.</p>
+                <div class="storage-head">
+                    <button id="storageScanBtn" title="Counts the folders (the program folder can take a few seconds)">Check sizes</button>
+                    <span class="text-muted" id="storageStatus"></span>
+                </div>
+                <div id="storageList" class="storage-list"></div>
+                <details class="uninstall-box" id="uninstallBox">
+                    <summary>Uninstalling OpenKeyTranslate</summary>
+                    <ol>
+                        <li>If you may come back: <a href="#backup">Export all data</a> - one zip with projects, memory, glossary and settings.</li>
+                        <li>Delete the model caches above (they lie outside the app folders), unless another program uses PaddleOCR.</li>
+                        <li>Close the app: stop the backend (its console window, Ctrl+C).</li>
+                        <li>Delete these folders by hand:
+                            <div id="uninstallFolders" class="uninstall-folders"><span class="text-muted">Press Check sizes.</span></div>
+                        </li>
+                    </ol>
+                    <p class="text-muted">A packaged version's uninstaller removes the program; the data folders stay unless you delete them - so a reinstall finds your projects again.</p>
+                </details>
+            </div>
+
             <div class="card">
                 <h2>About</h2>
                 <div class="row">
@@ -268,6 +421,10 @@
                     <div class="text-muted">Database file (open with "DB Browser for SQLite" to inspect corrections/logs)</div>
                     <button class="copy-btn" id="openDbFolderBtn">Open</button>
                 </div>
+                <div class="row">
+                    <div class="text-muted" title="Kept in your user app data folder, outside the project/repository folder, so API keys can never be committed">Settings file (contains your API keys)</div>
+                    <span class="text-mono" id="settingsPathLabel" style="font-size:11px; overflow-wrap:anywhere;">...</span>
+                </div>
                 <div id="logViewerBlock" class="hidden">
                     <label style="display:flex; align-items:center; gap:6px; margin:10px 0;">
                         <input type="checkbox" id="logErrorsOnlyCheckbox"> Errors only
@@ -275,15 +432,9 @@
                     <pre id="logViewerContent" class="text-mono" style="max-height:300px; overflow-y:auto; background:var(--bg-panel-2); padding:10px; border-radius:var(--radius-sm); font-size:11px; white-space:pre-wrap;"></pre>
                 </div>
             </div>
-            <div class="card">
-                <h2>Editor</h2>
-                <div class="row">
-                    <div class="text-muted">Polish spellcheck in translation text field (browser's built-in dictionary - needs a Polish language pack in your OS/browser to actually underline anything)</div>
-                    <label style="display:flex; align-items:center; gap:6px;">
-                        <input type="checkbox" id="spellcheckSettingCheckbox"> Enable
-                    </label>
-                </div>
-            </div>
+           </div>
+           <nav class="settings-toc" id="settingsToc" aria-label="Settings sections"></nav>
+          </div>
         </main>
     </div>
  

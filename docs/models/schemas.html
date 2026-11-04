@@ -61,6 +61,9 @@
                                 <a class="variable" href="#ProjectSchema.created_at">created_at</a>
                         </li>
                         <li>
+                                <a class="variable" href="#ProjectSchema.status">status</a>
+                        </li>
+                        <li>
                                 <a class="class" href="#ProjectSchema.Config">ProjectSchema.Config</a>
                                         <ul class="memberlist">
                                     <li>
@@ -104,6 +107,54 @@
                         </li>
                         <li>
                                 <a class="variable" href="#SettingsSchema.migrate_data">migrate_data</a>
+                        </li>
+                </ul>
+
+            </li>
+            <li>
+                    <a class="class" href="#CorrectionSchema">CorrectionSchema</a>
+                            <ul class="memberlist">
+                        <li>
+                                <a class="variable" href="#CorrectionSchema.source_text">source_text</a>
+                        </li>
+                        <li>
+                                <a class="variable" href="#CorrectionSchema.ai_translation">ai_translation</a>
+                        </li>
+                        <li>
+                                <a class="variable" href="#CorrectionSchema.final_translation">final_translation</a>
+                        </li>
+                        <li>
+                                <a class="variable" href="#CorrectionSchema.approve">approve</a>
+                        </li>
+                </ul>
+
+            </li>
+            <li>
+                    <a class="class" href="#CorrectionEditSchema">CorrectionEditSchema</a>
+                            <ul class="memberlist">
+                        <li>
+                                <a class="variable" href="#CorrectionEditSchema.final_translation">final_translation</a>
+                        </li>
+                </ul>
+
+            </li>
+            <li>
+                    <a class="class" href="#MemoryReplaceSchema">MemoryReplaceSchema</a>
+                            <ul class="memberlist">
+                        <li>
+                                <a class="variable" href="#MemoryReplaceSchema.find">find</a>
+                        </li>
+                        <li>
+                                <a class="variable" href="#MemoryReplaceSchema.replace">replace</a>
+                        </li>
+                        <li>
+                                <a class="variable" href="#MemoryReplaceSchema.mode">mode</a>
+                        </li>
+                        <li>
+                                <a class="variable" href="#MemoryReplaceSchema.ids">ids</a>
+                        </li>
+                        <li>
+                                <a class="variable" href="#MemoryReplaceSchema.apply">apply</a>
                         </li>
                 </ul>
 
@@ -161,25 +212,62 @@ rules for the API endpoints.</p>
 </span><span id="L-25"><a href="#L-25"><span class="linenos">25</span></a>    <span class="n">name</span><span class="p">:</span> <span class="nb">str</span>
 </span><span id="L-26"><a href="#L-26"><span class="linenos">26</span></a>    <span class="n">workspace_path</span><span class="p">:</span> <span class="nb">str</span>
 </span><span id="L-27"><a href="#L-27"><span class="linenos">27</span></a>    <span class="n">created_at</span><span class="p">:</span> <span class="n">datetime</span>
-</span><span id="L-28"><a href="#L-28"><span class="linenos">28</span></a>
-</span><span id="L-29"><a href="#L-29"><span class="linenos">29</span></a>    <span class="k">class</span><span class="w"> </span><span class="nc">Config</span><span class="p">:</span>
-</span><span id="L-30"><a href="#L-30"><span class="linenos">30</span></a>        <span class="n">from_attributes</span> <span class="o">=</span> <span class="kc">True</span>
-</span><span id="L-31"><a href="#L-31"><span class="linenos">31</span></a>
-</span><span id="L-32"><a href="#L-32"><span class="linenos">32</span></a><span class="k">class</span><span class="w"> </span><span class="nc">UploadResponse</span><span class="p">(</span><span class="n">BaseModel</span><span class="p">):</span>
-</span><span id="L-33"><a href="#L-33"><span class="linenos">33</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Standardized API response structure for file upload and processing endpoints.&quot;&quot;&quot;</span>
-</span><span id="L-34"><a href="#L-34"><span class="linenos">34</span></a>
-</span><span id="L-35"><a href="#L-35"><span class="linenos">35</span></a>    <span class="n">message</span><span class="p">:</span> <span class="nb">str</span>
-</span><span id="L-36"><a href="#L-36"><span class="linenos">36</span></a>    <span class="nb">id</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span>
-</span><span id="L-37"><a href="#L-37"><span class="linenos">37</span></a>    <span class="n">filename</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;&quot;</span>
-</span><span id="L-38"><a href="#L-38"><span class="linenos">38</span></a>    <span class="n">extracted_texts</span><span class="p">:</span> <span class="n">List</span><span class="p">[</span><span class="n">OcrText</span><span class="p">]</span> <span class="o">=</span> <span class="p">[]</span>
-</span><span id="L-39"><a href="#L-39"><span class="linenos">39</span></a>
-</span><span id="L-40"><a href="#L-40"><span class="linenos">40</span></a><span class="k">class</span><span class="w"> </span><span class="nc">SettingsSchema</span><span class="p">(</span><span class="n">BaseModel</span><span class="p">):</span>
-</span><span id="L-41"><a href="#L-41"><span class="linenos">41</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Schema for validating configuration payloads and migration flags.&quot;&quot;&quot;</span>
-</span><span id="L-42"><a href="#L-42"><span class="linenos">42</span></a>
-</span><span id="L-43"><a href="#L-43"><span class="linenos">43</span></a>    <span class="n">app_root_dir</span><span class="p">:</span> <span class="nb">str</span>
-</span><span id="L-44"><a href="#L-44"><span class="linenos">44</span></a>    <span class="n">source_lang</span><span class="p">:</span> <span class="nb">str</span>
-</span><span id="L-45"><a href="#L-45"><span class="linenos">45</span></a>    <span class="n">target_lang</span><span class="p">:</span> <span class="nb">str</span>
-</span><span id="L-46"><a href="#L-46"><span class="linenos">46</span></a>    <span class="n">migrate_data</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span> <span class="c1"># Flag indicating whether to move files to the new root directory</span>
+</span><span id="L-28"><a href="#L-28"><span class="linenos">28</span></a>    <span class="n">status</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;active&quot;</span>
+</span><span id="L-29"><a href="#L-29"><span class="linenos">29</span></a>
+</span><span id="L-30"><a href="#L-30"><span class="linenos">30</span></a>    <span class="k">class</span><span class="w"> </span><span class="nc">Config</span><span class="p">:</span>
+</span><span id="L-31"><a href="#L-31"><span class="linenos">31</span></a>        <span class="n">from_attributes</span> <span class="o">=</span> <span class="kc">True</span>
+</span><span id="L-32"><a href="#L-32"><span class="linenos">32</span></a>
+</span><span id="L-33"><a href="#L-33"><span class="linenos">33</span></a><span class="k">class</span><span class="w"> </span><span class="nc">UploadResponse</span><span class="p">(</span><span class="n">BaseModel</span><span class="p">):</span>
+</span><span id="L-34"><a href="#L-34"><span class="linenos">34</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Standardized API response structure for file upload and processing endpoints.&quot;&quot;&quot;</span>
+</span><span id="L-35"><a href="#L-35"><span class="linenos">35</span></a>
+</span><span id="L-36"><a href="#L-36"><span class="linenos">36</span></a>    <span class="n">message</span><span class="p">:</span> <span class="nb">str</span>
+</span><span id="L-37"><a href="#L-37"><span class="linenos">37</span></a>    <span class="nb">id</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span>
+</span><span id="L-38"><a href="#L-38"><span class="linenos">38</span></a>    <span class="n">filename</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;&quot;</span>
+</span><span id="L-39"><a href="#L-39"><span class="linenos">39</span></a>    <span class="n">extracted_texts</span><span class="p">:</span> <span class="n">List</span><span class="p">[</span><span class="n">OcrText</span><span class="p">]</span> <span class="o">=</span> <span class="p">[]</span>
+</span><span id="L-40"><a href="#L-40"><span class="linenos">40</span></a>
+</span><span id="L-41"><a href="#L-41"><span class="linenos">41</span></a><span class="k">class</span><span class="w"> </span><span class="nc">SettingsSchema</span><span class="p">(</span><span class="n">BaseModel</span><span class="p">):</span>
+</span><span id="L-42"><a href="#L-42"><span class="linenos">42</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Schema for validating configuration payloads and migration flags.&quot;&quot;&quot;</span>
+</span><span id="L-43"><a href="#L-43"><span class="linenos">43</span></a>
+</span><span id="L-44"><a href="#L-44"><span class="linenos">44</span></a>    <span class="n">app_root_dir</span><span class="p">:</span> <span class="nb">str</span>
+</span><span id="L-45"><a href="#L-45"><span class="linenos">45</span></a>    <span class="n">source_lang</span><span class="p">:</span> <span class="nb">str</span>
+</span><span id="L-46"><a href="#L-46"><span class="linenos">46</span></a>    <span class="n">target_lang</span><span class="p">:</span> <span class="nb">str</span>
+</span><span id="L-47"><a href="#L-47"><span class="linenos">47</span></a>    <span class="n">migrate_data</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span> <span class="c1"># Flag indicating whether to move files to the new root directory</span>
+</span><span id="L-48"><a href="#L-48"><span class="linenos">48</span></a>
+</span><span id="L-49"><a href="#L-49"><span class="linenos">49</span></a>
+</span><span id="L-50"><a href="#L-50"><span class="linenos">50</span></a><span class="k">class</span><span class="w"> </span><span class="nc">CorrectionSchema</span><span class="p">(</span><span class="n">BaseModel</span><span class="p">):</span>
+</span><span id="L-51"><a href="#L-51"><span class="linenos">51</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+</span><span id="L-52"><a href="#L-52"><span class="linenos">52</span></a><span class="sd">    Payload for confirming a user-approved translation for a single bubble.</span>
+</span><span id="L-53"><a href="#L-53"><span class="linenos">53</span></a>
+</span><span id="L-54"><a href="#L-54"><span class="linenos">54</span></a><span class="sd">    Sent by the frontend editor when the user saves an edit, when they move on from an unchanged bubble (a plain</span>
+</span><span id="L-55"><a href="#L-55"><span class="linenos">55</span></a><span class="sd">    &quot;reviewed&quot; confirmation, approve=False) and when they explicitly approve an unchanged translation into memory</span>
+</span><span id="L-56"><a href="#L-56"><span class="linenos">56</span></a><span class="sd">    (approve=True). An edit always becomes a &quot;corrected&quot; memory entry; an unchanged translation becomes an &quot;approved&quot;</span>
+</span><span id="L-57"><a href="#L-57"><span class="linenos">57</span></a><span class="sd">    entry ONLY with approve=True AND memory_store_approved on - moving on used to store AI text in memory silently.</span>
+</span><span id="L-58"><a href="#L-58"><span class="linenos">58</span></a><span class="sd">    &quot;&quot;&quot;</span>
+</span><span id="L-59"><a href="#L-59"><span class="linenos">59</span></a>
+</span><span id="L-60"><a href="#L-60"><span class="linenos">60</span></a>    <span class="n">source_text</span><span class="p">:</span> <span class="nb">str</span>
+</span><span id="L-61"><a href="#L-61"><span class="linenos">61</span></a>    <span class="n">ai_translation</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span>
+</span><span id="L-62"><a href="#L-62"><span class="linenos">62</span></a>    <span class="n">final_translation</span><span class="p">:</span> <span class="nb">str</span>
+</span><span id="L-63"><a href="#L-63"><span class="linenos">63</span></a>    <span class="n">approve</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span>
+</span><span id="L-64"><a href="#L-64"><span class="linenos">64</span></a>
+</span><span id="L-65"><a href="#L-65"><span class="linenos">65</span></a>
+</span><span id="L-66"><a href="#L-66"><span class="linenos">66</span></a><span class="k">class</span><span class="w"> </span><span class="nc">CorrectionEditSchema</span><span class="p">(</span><span class="n">BaseModel</span><span class="p">):</span>
+</span><span id="L-67"><a href="#L-67"><span class="linenos">67</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Inline edit of a stored memory entry&#39;s final translation (Memory page).&quot;&quot;&quot;</span>
+</span><span id="L-68"><a href="#L-68"><span class="linenos">68</span></a>
+</span><span id="L-69"><a href="#L-69"><span class="linenos">69</span></a>    <span class="n">final_translation</span><span class="p">:</span> <span class="nb">str</span>
+</span><span id="L-70"><a href="#L-70"><span class="linenos">70</span></a>
+</span><span id="L-71"><a href="#L-71"><span class="linenos">71</span></a>
+</span><span id="L-72"><a href="#L-72"><span class="linenos">72</span></a><span class="k">class</span><span class="w"> </span><span class="nc">MemoryReplaceSchema</span><span class="p">(</span><span class="n">BaseModel</span><span class="p">):</span>
+</span><span id="L-73"><a href="#L-73"><span class="linenos">73</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+</span><span id="L-74"><a href="#L-74"><span class="linenos">74</span></a><span class="sd">    Find &amp; replace over a project&#39;s stored final translations (services/memory_service.replace_in_memory).</span>
+</span><span id="L-75"><a href="#L-75"><span class="linenos">75</span></a><span class="sd">    mode &quot;word&quot; = whole words; &quot;prefix&quot; = words starting with `find` (the term + its inflected forms).</span>
+</span><span id="L-76"><a href="#L-76"><span class="linenos">76</span></a><span class="sd">    apply=False returns a preview; ids limits the change to the entries left ticked in that preview.</span>
+</span><span id="L-77"><a href="#L-77"><span class="linenos">77</span></a><span class="sd">    &quot;&quot;&quot;</span>
+</span><span id="L-78"><a href="#L-78"><span class="linenos">78</span></a>
+</span><span id="L-79"><a href="#L-79"><span class="linenos">79</span></a>    <span class="n">find</span><span class="p">:</span> <span class="nb">str</span>
+</span><span id="L-80"><a href="#L-80"><span class="linenos">80</span></a>    <span class="n">replace</span><span class="p">:</span> <span class="nb">str</span>
+</span><span id="L-81"><a href="#L-81"><span class="linenos">81</span></a>    <span class="n">mode</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;word&quot;</span>
+</span><span id="L-82"><a href="#L-82"><span class="linenos">82</span></a>    <span class="n">ids</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">List</span><span class="p">[</span><span class="nb">int</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span>
+</span><span id="L-83"><a href="#L-83"><span class="linenos">83</span></a>    <span class="n">apply</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span>
 </span></pre></div>
 
 
@@ -263,9 +351,10 @@ rules for the API endpoints.</p>
 </span><span id="ProjectSchema-27"><a href="#ProjectSchema-27"><span class="linenos">27</span></a>    <span class="n">name</span><span class="p">:</span> <span class="nb">str</span>
 </span><span id="ProjectSchema-28"><a href="#ProjectSchema-28"><span class="linenos">28</span></a>    <span class="n">workspace_path</span><span class="p">:</span> <span class="nb">str</span>
 </span><span id="ProjectSchema-29"><a href="#ProjectSchema-29"><span class="linenos">29</span></a>    <span class="n">created_at</span><span class="p">:</span> <span class="n">datetime</span>
-</span><span id="ProjectSchema-30"><a href="#ProjectSchema-30"><span class="linenos">30</span></a>
-</span><span id="ProjectSchema-31"><a href="#ProjectSchema-31"><span class="linenos">31</span></a>    <span class="k">class</span><span class="w"> </span><span class="nc">Config</span><span class="p">:</span>
-</span><span id="ProjectSchema-32"><a href="#ProjectSchema-32"><span class="linenos">32</span></a>        <span class="n">from_attributes</span> <span class="o">=</span> <span class="kc">True</span>
+</span><span id="ProjectSchema-30"><a href="#ProjectSchema-30"><span class="linenos">30</span></a>    <span class="n">status</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;active&quot;</span>
+</span><span id="ProjectSchema-31"><a href="#ProjectSchema-31"><span class="linenos">31</span></a>
+</span><span id="ProjectSchema-32"><a href="#ProjectSchema-32"><span class="linenos">32</span></a>    <span class="k">class</span><span class="w"> </span><span class="nc">Config</span><span class="p">:</span>
+</span><span id="ProjectSchema-33"><a href="#ProjectSchema-33"><span class="linenos">33</span></a>        <span class="n">from_attributes</span> <span class="o">=</span> <span class="kc">True</span>
 </span></pre></div>
 
 
@@ -321,6 +410,18 @@ rules for the API endpoints.</p>
     
 
                             </div>
+                            <div id="ProjectSchema.status" class="classattr">
+                                <div class="attr variable">
+            <span class="name">status</span><span class="annotation">: str</span>        =
+<span class="default_value">&#39;active&#39;</span>
+
+        
+    </div>
+    <a class="headerlink" href="#ProjectSchema.status"></a>
+    
+    
+
+                            </div>
                 </section>
                 <section id="ProjectSchema.Config">
                             <input id="ProjectSchema.Config-view-source" class="view-source-toggle-state" type="checkbox" aria-hidden="true" tabindex="-1">
@@ -333,8 +434,8 @@ rules for the API endpoints.</p>
 
     </div>
     <a class="headerlink" href="#ProjectSchema.Config"></a>
-            <div class="pdoc-code codehilite"><pre><span></span><span id="ProjectSchema.Config-31"><a href="#ProjectSchema.Config-31"><span class="linenos">31</span></a>    <span class="k">class</span><span class="w"> </span><span class="nc">Config</span><span class="p">:</span>
-</span><span id="ProjectSchema.Config-32"><a href="#ProjectSchema.Config-32"><span class="linenos">32</span></a>        <span class="n">from_attributes</span> <span class="o">=</span> <span class="kc">True</span>
+            <div class="pdoc-code codehilite"><pre><span></span><span id="ProjectSchema.Config-32"><a href="#ProjectSchema.Config-32"><span class="linenos">32</span></a>    <span class="k">class</span><span class="w"> </span><span class="nc">Config</span><span class="p">:</span>
+</span><span id="ProjectSchema.Config-33"><a href="#ProjectSchema.Config-33"><span class="linenos">33</span></a>        <span class="n">from_attributes</span> <span class="o">=</span> <span class="kc">True</span>
 </span></pre></div>
 
 
@@ -364,13 +465,13 @@ rules for the API endpoints.</p>
 
     </div>
     <a class="headerlink" href="#UploadResponse"></a>
-            <div class="pdoc-code codehilite"><pre><span></span><span id="UploadResponse-34"><a href="#UploadResponse-34"><span class="linenos">34</span></a><span class="k">class</span><span class="w"> </span><span class="nc">UploadResponse</span><span class="p">(</span><span class="n">BaseModel</span><span class="p">):</span>
-</span><span id="UploadResponse-35"><a href="#UploadResponse-35"><span class="linenos">35</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Standardized API response structure for file upload and processing endpoints.&quot;&quot;&quot;</span>
-</span><span id="UploadResponse-36"><a href="#UploadResponse-36"><span class="linenos">36</span></a>
-</span><span id="UploadResponse-37"><a href="#UploadResponse-37"><span class="linenos">37</span></a>    <span class="n">message</span><span class="p">:</span> <span class="nb">str</span>
-</span><span id="UploadResponse-38"><a href="#UploadResponse-38"><span class="linenos">38</span></a>    <span class="nb">id</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span>
-</span><span id="UploadResponse-39"><a href="#UploadResponse-39"><span class="linenos">39</span></a>    <span class="n">filename</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;&quot;</span>
-</span><span id="UploadResponse-40"><a href="#UploadResponse-40"><span class="linenos">40</span></a>    <span class="n">extracted_texts</span><span class="p">:</span> <span class="n">List</span><span class="p">[</span><span class="n">OcrText</span><span class="p">]</span> <span class="o">=</span> <span class="p">[]</span>
+            <div class="pdoc-code codehilite"><pre><span></span><span id="UploadResponse-35"><a href="#UploadResponse-35"><span class="linenos">35</span></a><span class="k">class</span><span class="w"> </span><span class="nc">UploadResponse</span><span class="p">(</span><span class="n">BaseModel</span><span class="p">):</span>
+</span><span id="UploadResponse-36"><a href="#UploadResponse-36"><span class="linenos">36</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Standardized API response structure for file upload and processing endpoints.&quot;&quot;&quot;</span>
+</span><span id="UploadResponse-37"><a href="#UploadResponse-37"><span class="linenos">37</span></a>
+</span><span id="UploadResponse-38"><a href="#UploadResponse-38"><span class="linenos">38</span></a>    <span class="n">message</span><span class="p">:</span> <span class="nb">str</span>
+</span><span id="UploadResponse-39"><a href="#UploadResponse-39"><span class="linenos">39</span></a>    <span class="nb">id</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span>
+</span><span id="UploadResponse-40"><a href="#UploadResponse-40"><span class="linenos">40</span></a>    <span class="n">filename</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;&quot;</span>
+</span><span id="UploadResponse-41"><a href="#UploadResponse-41"><span class="linenos">41</span></a>    <span class="n">extracted_texts</span><span class="p">:</span> <span class="n">List</span><span class="p">[</span><span class="n">OcrText</span><span class="p">]</span> <span class="o">=</span> <span class="p">[]</span>
 </span></pre></div>
 
 
@@ -438,13 +539,13 @@ rules for the API endpoints.</p>
 
     </div>
     <a class="headerlink" href="#SettingsSchema"></a>
-            <div class="pdoc-code codehilite"><pre><span></span><span id="SettingsSchema-42"><a href="#SettingsSchema-42"><span class="linenos">42</span></a><span class="k">class</span><span class="w"> </span><span class="nc">SettingsSchema</span><span class="p">(</span><span class="n">BaseModel</span><span class="p">):</span>
-</span><span id="SettingsSchema-43"><a href="#SettingsSchema-43"><span class="linenos">43</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Schema for validating configuration payloads and migration flags.&quot;&quot;&quot;</span>
-</span><span id="SettingsSchema-44"><a href="#SettingsSchema-44"><span class="linenos">44</span></a>
-</span><span id="SettingsSchema-45"><a href="#SettingsSchema-45"><span class="linenos">45</span></a>    <span class="n">app_root_dir</span><span class="p">:</span> <span class="nb">str</span>
-</span><span id="SettingsSchema-46"><a href="#SettingsSchema-46"><span class="linenos">46</span></a>    <span class="n">source_lang</span><span class="p">:</span> <span class="nb">str</span>
-</span><span id="SettingsSchema-47"><a href="#SettingsSchema-47"><span class="linenos">47</span></a>    <span class="n">target_lang</span><span class="p">:</span> <span class="nb">str</span>
-</span><span id="SettingsSchema-48"><a href="#SettingsSchema-48"><span class="linenos">48</span></a>    <span class="n">migrate_data</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span> <span class="c1"># Flag indicating whether to move files to the new root directory</span>
+            <div class="pdoc-code codehilite"><pre><span></span><span id="SettingsSchema-43"><a href="#SettingsSchema-43"><span class="linenos">43</span></a><span class="k">class</span><span class="w"> </span><span class="nc">SettingsSchema</span><span class="p">(</span><span class="n">BaseModel</span><span class="p">):</span>
+</span><span id="SettingsSchema-44"><a href="#SettingsSchema-44"><span class="linenos">44</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Schema for validating configuration payloads and migration flags.&quot;&quot;&quot;</span>
+</span><span id="SettingsSchema-45"><a href="#SettingsSchema-45"><span class="linenos">45</span></a>
+</span><span id="SettingsSchema-46"><a href="#SettingsSchema-46"><span class="linenos">46</span></a>    <span class="n">app_root_dir</span><span class="p">:</span> <span class="nb">str</span>
+</span><span id="SettingsSchema-47"><a href="#SettingsSchema-47"><span class="linenos">47</span></a>    <span class="n">source_lang</span><span class="p">:</span> <span class="nb">str</span>
+</span><span id="SettingsSchema-48"><a href="#SettingsSchema-48"><span class="linenos">48</span></a>    <span class="n">target_lang</span><span class="p">:</span> <span class="nb">str</span>
+</span><span id="SettingsSchema-49"><a href="#SettingsSchema-49"><span class="linenos">49</span></a>    <span class="n">migrate_data</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span> <span class="c1"># Flag indicating whether to move files to the new root directory</span>
 </span></pre></div>
 
 
@@ -496,6 +597,220 @@ rules for the API endpoints.</p>
         
     </div>
     <a class="headerlink" href="#SettingsSchema.migrate_data"></a>
+    
+    
+
+                            </div>
+                </section>
+                <section id="CorrectionSchema">
+                            <input id="CorrectionSchema-view-source" class="view-source-toggle-state" type="checkbox" aria-hidden="true" tabindex="-1">
+<div class="attr class">
+            
+    <span class="def">class</span>
+    <span class="name">CorrectionSchema</span><wbr>(<span class="base">pydantic.main.BaseModel</span>):
+
+                <label class="view-source-button" for="CorrectionSchema-view-source"><span>View Source</span></label>
+
+    </div>
+    <a class="headerlink" href="#CorrectionSchema"></a>
+            <div class="pdoc-code codehilite"><pre><span></span><span id="CorrectionSchema-52"><a href="#CorrectionSchema-52"><span class="linenos">52</span></a><span class="k">class</span><span class="w"> </span><span class="nc">CorrectionSchema</span><span class="p">(</span><span class="n">BaseModel</span><span class="p">):</span>
+</span><span id="CorrectionSchema-53"><a href="#CorrectionSchema-53"><span class="linenos">53</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+</span><span id="CorrectionSchema-54"><a href="#CorrectionSchema-54"><span class="linenos">54</span></a><span class="sd">    Payload for confirming a user-approved translation for a single bubble.</span>
+</span><span id="CorrectionSchema-55"><a href="#CorrectionSchema-55"><span class="linenos">55</span></a>
+</span><span id="CorrectionSchema-56"><a href="#CorrectionSchema-56"><span class="linenos">56</span></a><span class="sd">    Sent by the frontend editor when the user saves an edit, when they move on from an unchanged bubble (a plain</span>
+</span><span id="CorrectionSchema-57"><a href="#CorrectionSchema-57"><span class="linenos">57</span></a><span class="sd">    &quot;reviewed&quot; confirmation, approve=False) and when they explicitly approve an unchanged translation into memory</span>
+</span><span id="CorrectionSchema-58"><a href="#CorrectionSchema-58"><span class="linenos">58</span></a><span class="sd">    (approve=True). An edit always becomes a &quot;corrected&quot; memory entry; an unchanged translation becomes an &quot;approved&quot;</span>
+</span><span id="CorrectionSchema-59"><a href="#CorrectionSchema-59"><span class="linenos">59</span></a><span class="sd">    entry ONLY with approve=True AND memory_store_approved on - moving on used to store AI text in memory silently.</span>
+</span><span id="CorrectionSchema-60"><a href="#CorrectionSchema-60"><span class="linenos">60</span></a><span class="sd">    &quot;&quot;&quot;</span>
+</span><span id="CorrectionSchema-61"><a href="#CorrectionSchema-61"><span class="linenos">61</span></a>
+</span><span id="CorrectionSchema-62"><a href="#CorrectionSchema-62"><span class="linenos">62</span></a>    <span class="n">source_text</span><span class="p">:</span> <span class="nb">str</span>
+</span><span id="CorrectionSchema-63"><a href="#CorrectionSchema-63"><span class="linenos">63</span></a>    <span class="n">ai_translation</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span>
+</span><span id="CorrectionSchema-64"><a href="#CorrectionSchema-64"><span class="linenos">64</span></a>    <span class="n">final_translation</span><span class="p">:</span> <span class="nb">str</span>
+</span><span id="CorrectionSchema-65"><a href="#CorrectionSchema-65"><span class="linenos">65</span></a>    <span class="n">approve</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span>
+</span></pre></div>
+
+
+            <div class="docstring"><p>Payload for confirming a user-approved translation for a single bubble.</p>
+
+<p>Sent by the frontend editor when the user saves an edit, when they move on from an unchanged bubble (a plain
+"reviewed" confirmation, approve=False) and when they explicitly approve an unchanged translation into memory
+(approve=True). An edit always becomes a "corrected" memory entry; an unchanged translation becomes an "approved"
+entry ONLY with approve=True AND memory_store_approved on - moving on used to store AI text in memory silently.</p>
+</div>
+
+
+                            <div id="CorrectionSchema.source_text" class="classattr">
+                                <div class="attr variable">
+            <span class="name">source_text</span><span class="annotation">: str</span>        =
+<span class="default_value">PydanticUndefined</span>
+
+        
+    </div>
+    <a class="headerlink" href="#CorrectionSchema.source_text"></a>
+    
+    
+
+                            </div>
+                            <div id="CorrectionSchema.ai_translation" class="classattr">
+                                <div class="attr variable">
+            <span class="name">ai_translation</span><span class="annotation">: Optional[str]</span>        =
+<span class="default_value">None</span>
+
+        
+    </div>
+    <a class="headerlink" href="#CorrectionSchema.ai_translation"></a>
+    
+    
+
+                            </div>
+                            <div id="CorrectionSchema.final_translation" class="classattr">
+                                <div class="attr variable">
+            <span class="name">final_translation</span><span class="annotation">: str</span>        =
+<span class="default_value">PydanticUndefined</span>
+
+        
+    </div>
+    <a class="headerlink" href="#CorrectionSchema.final_translation"></a>
+    
+    
+
+                            </div>
+                            <div id="CorrectionSchema.approve" class="classattr">
+                                <div class="attr variable">
+            <span class="name">approve</span><span class="annotation">: bool</span>        =
+<span class="default_value">False</span>
+
+        
+    </div>
+    <a class="headerlink" href="#CorrectionSchema.approve"></a>
+    
+    
+
+                            </div>
+                </section>
+                <section id="CorrectionEditSchema">
+                            <input id="CorrectionEditSchema-view-source" class="view-source-toggle-state" type="checkbox" aria-hidden="true" tabindex="-1">
+<div class="attr class">
+            
+    <span class="def">class</span>
+    <span class="name">CorrectionEditSchema</span><wbr>(<span class="base">pydantic.main.BaseModel</span>):
+
+                <label class="view-source-button" for="CorrectionEditSchema-view-source"><span>View Source</span></label>
+
+    </div>
+    <a class="headerlink" href="#CorrectionEditSchema"></a>
+            <div class="pdoc-code codehilite"><pre><span></span><span id="CorrectionEditSchema-68"><a href="#CorrectionEditSchema-68"><span class="linenos">68</span></a><span class="k">class</span><span class="w"> </span><span class="nc">CorrectionEditSchema</span><span class="p">(</span><span class="n">BaseModel</span><span class="p">):</span>
+</span><span id="CorrectionEditSchema-69"><a href="#CorrectionEditSchema-69"><span class="linenos">69</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Inline edit of a stored memory entry&#39;s final translation (Memory page).&quot;&quot;&quot;</span>
+</span><span id="CorrectionEditSchema-70"><a href="#CorrectionEditSchema-70"><span class="linenos">70</span></a>
+</span><span id="CorrectionEditSchema-71"><a href="#CorrectionEditSchema-71"><span class="linenos">71</span></a>    <span class="n">final_translation</span><span class="p">:</span> <span class="nb">str</span>
+</span></pre></div>
+
+
+            <div class="docstring"><p>Inline edit of a stored memory entry's final translation (Memory page).</p>
+</div>
+
+
+                            <div id="CorrectionEditSchema.final_translation" class="classattr">
+                                <div class="attr variable">
+            <span class="name">final_translation</span><span class="annotation">: str</span>        =
+<span class="default_value">PydanticUndefined</span>
+
+        
+    </div>
+    <a class="headerlink" href="#CorrectionEditSchema.final_translation"></a>
+    
+    
+
+                            </div>
+                </section>
+                <section id="MemoryReplaceSchema">
+                            <input id="MemoryReplaceSchema-view-source" class="view-source-toggle-state" type="checkbox" aria-hidden="true" tabindex="-1">
+<div class="attr class">
+            
+    <span class="def">class</span>
+    <span class="name">MemoryReplaceSchema</span><wbr>(<span class="base">pydantic.main.BaseModel</span>):
+
+                <label class="view-source-button" for="MemoryReplaceSchema-view-source"><span>View Source</span></label>
+
+    </div>
+    <a class="headerlink" href="#MemoryReplaceSchema"></a>
+            <div class="pdoc-code codehilite"><pre><span></span><span id="MemoryReplaceSchema-74"><a href="#MemoryReplaceSchema-74"><span class="linenos">74</span></a><span class="k">class</span><span class="w"> </span><span class="nc">MemoryReplaceSchema</span><span class="p">(</span><span class="n">BaseModel</span><span class="p">):</span>
+</span><span id="MemoryReplaceSchema-75"><a href="#MemoryReplaceSchema-75"><span class="linenos">75</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+</span><span id="MemoryReplaceSchema-76"><a href="#MemoryReplaceSchema-76"><span class="linenos">76</span></a><span class="sd">    Find &amp; replace over a project&#39;s stored final translations (services/memory_service.replace_in_memory).</span>
+</span><span id="MemoryReplaceSchema-77"><a href="#MemoryReplaceSchema-77"><span class="linenos">77</span></a><span class="sd">    mode &quot;word&quot; = whole words; &quot;prefix&quot; = words starting with `find` (the term + its inflected forms).</span>
+</span><span id="MemoryReplaceSchema-78"><a href="#MemoryReplaceSchema-78"><span class="linenos">78</span></a><span class="sd">    apply=False returns a preview; ids limits the change to the entries left ticked in that preview.</span>
+</span><span id="MemoryReplaceSchema-79"><a href="#MemoryReplaceSchema-79"><span class="linenos">79</span></a><span class="sd">    &quot;&quot;&quot;</span>
+</span><span id="MemoryReplaceSchema-80"><a href="#MemoryReplaceSchema-80"><span class="linenos">80</span></a>
+</span><span id="MemoryReplaceSchema-81"><a href="#MemoryReplaceSchema-81"><span class="linenos">81</span></a>    <span class="n">find</span><span class="p">:</span> <span class="nb">str</span>
+</span><span id="MemoryReplaceSchema-82"><a href="#MemoryReplaceSchema-82"><span class="linenos">82</span></a>    <span class="n">replace</span><span class="p">:</span> <span class="nb">str</span>
+</span><span id="MemoryReplaceSchema-83"><a href="#MemoryReplaceSchema-83"><span class="linenos">83</span></a>    <span class="n">mode</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;word&quot;</span>
+</span><span id="MemoryReplaceSchema-84"><a href="#MemoryReplaceSchema-84"><span class="linenos">84</span></a>    <span class="n">ids</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">List</span><span class="p">[</span><span class="nb">int</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span>
+</span><span id="MemoryReplaceSchema-85"><a href="#MemoryReplaceSchema-85"><span class="linenos">85</span></a>    <span class="n">apply</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span>
+</span></pre></div>
+
+
+            <div class="docstring"><p>Find &amp; replace over a project's stored final translations (services/memory_service.replace_in_memory).
+mode "word" = whole words; "prefix" = words starting with <code><a href="#MemoryReplaceSchema.find">find</a></code> (the term + its inflected forms).
+apply=False returns a preview; ids limits the change to the entries left ticked in that preview.</p>
+</div>
+
+
+                            <div id="MemoryReplaceSchema.find" class="classattr">
+                                <div class="attr variable">
+            <span class="name">find</span><span class="annotation">: str</span>        =
+<span class="default_value">PydanticUndefined</span>
+
+        
+    </div>
+    <a class="headerlink" href="#MemoryReplaceSchema.find"></a>
+    
+    
+
+                            </div>
+                            <div id="MemoryReplaceSchema.replace" class="classattr">
+                                <div class="attr variable">
+            <span class="name">replace</span><span class="annotation">: str</span>        =
+<span class="default_value">PydanticUndefined</span>
+
+        
+    </div>
+    <a class="headerlink" href="#MemoryReplaceSchema.replace"></a>
+    
+    
+
+                            </div>
+                            <div id="MemoryReplaceSchema.mode" class="classattr">
+                                <div class="attr variable">
+            <span class="name">mode</span><span class="annotation">: str</span>        =
+<span class="default_value">&#39;word&#39;</span>
+
+        
+    </div>
+    <a class="headerlink" href="#MemoryReplaceSchema.mode"></a>
+    
+    
+
+                            </div>
+                            <div id="MemoryReplaceSchema.ids" class="classattr">
+                                <div class="attr variable">
+            <span class="name">ids</span><span class="annotation">: Optional[List[int]]</span>        =
+<span class="default_value">None</span>
+
+        
+    </div>
+    <a class="headerlink" href="#MemoryReplaceSchema.ids"></a>
+    
+    
+
+                            </div>
+                            <div id="MemoryReplaceSchema.apply" class="classattr">
+                                <div class="attr variable">
+            <span class="name">apply</span><span class="annotation">: bool</span>        =
+<span class="default_value">False</span>
+
+        
+    </div>
+    <a class="headerlink" href="#MemoryReplaceSchema.apply"></a>
     
     
 

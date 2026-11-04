@@ -139,7 +139,7 @@ def merge_split_bubbles(image, result: dict) -> int:
                 continue
             u = union_bbox(a, b)
             it = find_interior(image, center(a), u)
-            if it is not None and it.contains(*center(a)) and it.contains(*center(b)):
+            if it is not None and it.encloses(a) and it.encloses(b):      # encloses: also a line touching the outline
                 parent[find(j)] = find(i)
 
     groups: dict[int, list[int]] = {}
@@ -271,7 +271,7 @@ def split_bubbles_by_interior(image, result: dict) -> int:
             if it is None:
                 groups.append(remaining)                       # cannot tell: keep the rest together
                 break
-            inside = [i for i in remaining if it.contains(*center(bbox_of(by_line[i]["box"])))] or [remaining[0]]
+            inside = [i for i in remaining if it.encloses(bbox_of(by_line[i]["box"]))] or [remaining[0]]
             groups.append(inside)
             remaining = [i for i in remaining if i not in inside]
         if len(groups) == 1:
@@ -364,6 +364,11 @@ def refine_missed_text(image, result: dict, ocr_region_fn) -> int:
         it, info, _ = analyze_bubble(image, target)
         bubble["missed_text"] = bool(info["missed_text"])
         if it is None or not info["missed_text"] or it.brightness < MIN_WHITE_BRIGHTNESS:
+            continue
+        # Connected bubbles share one interior: the "missed" ink is the NEIGHBOUR's text, and reading the whole interior
+        # gave both bubbles the same mixed text of the two (Chapter_1/page_035). Lines of another bubble in here: skip.
+        own = set(bubble.get("line_ids", []))
+        if any(it.encloses(bbox_of(l["box"])) for l in result["lines"] if l["line_id"] not in own):
             continue
         region = expand(it.bbox, 0.02, iw, ih)
         reading = read_region(image, region, ocr_region_fn)

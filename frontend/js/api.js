@@ -30,8 +30,16 @@ async function request(path, options = {}) {
 }
  
 export const api = {
+    fonts: {
+        list: (refresh = false) => request(`/fonts/${refresh ? "?refresh=true" : ""}`),   // {fonts: [{family, source, polish, styles}], folder}
+        user: () => request("/fonts/user"),                                                // {files: [{file, family, style, polish}], folder}
+        upload: (name, data) => request("/fonts/user", { method: "POST", body: JSON.stringify({ name, data }) }),
+        remove: (file) => request(`/fonts/user/${encodeURIComponent(file)}`, { method: "DELETE" }),
+    },
     projects: {
         list: () => request("/projects/"),
+        progress: (projectId) => request(`/projects/${projectId}/progress`),   // {total, processed, reviewed}
+        openExported: (projectId) => request(`/projects/${projectId}/open-exported`, { method: "POST" }),
         selectFolder: () => request("/projects/select-folder"),
         import: (path, projectName) =>
             request("/projects/import", { method: "POST", body: JSON.stringify({ path, projectName }) }),
@@ -57,7 +65,11 @@ export const api = {
         updateIgnorePatterns: (payload) => request("/settings/ignore-patterns", { method: "POST", body: JSON.stringify(payload) }),
         updateTranslation: (payload) => request("/settings/translation", { method: "POST", body: JSON.stringify(payload) }),
         testTranslation: () => request("/settings/test-translation", { method: "POST" }),
+        // one key of the pool, by id "provider/label": a tiny translation / the models its server offers
+        testKey: (id) => request("/settings/test-key", { method: "POST", body: JSON.stringify({ id }) }),
+        keyModels: (id) => request("/settings/key-models", { method: "POST", body: JSON.stringify({ id }) }),
         updateOcrOptions: (payload) => request("/settings/ocr-options", { method: "POST", body: JSON.stringify(payload) }),
+        updateOcrEngine: (payload) => request("/settings/ocr-engine", { method: "POST", body: JSON.stringify(payload) }),
     },
  
     pages: {
@@ -70,8 +82,14 @@ export const api = {
         process: (pageId) => request(`/pages/${pageId}/process`, { method: "POST" }),
         // translate=false: prefetch OCR + inpainting only; the page is translated when opened (fresh memory/glossary)
         processAsync: (pageId, translate = true) => request(`/pages/${pageId}/process-async?translate=${translate}`, { method: "POST" }),
-        reocr: (pageId) => request(`/pages/${pageId}/reocr`, { method: "POST" }),
+        // detectRotation: true / false = the page's own whole-page-rotation choice; null = keep the stored one
+        reocr: (pageId, detectRotation = null) => request(`/pages/${pageId}/reocr`, {
+            method: "POST", body: detectRotation === null ? undefined : JSON.stringify({ detect_rotation: detectRotation }),
+        }),
         reinpaint: (pageId) => request(`/pages/${pageId}/reinpaint`, { method: "POST" }),
+        // manual "Clean area" rectangles (stored in the page JSON, kept by Rebuild image / Re-OCR)
+        addCleanup: (pageId, box) => request(`/pages/${pageId}/cleanups`, { method: "POST", body: JSON.stringify({ box }) }),
+        removeCleanups: (pageId, all = false) => request(`/pages/${pageId}/cleanups?all=${all}`, { method: "DELETE" }),
         patchBubble: (pageId, bubbleId, payload) =>
             request(`/pages/${pageId}/bubbles/${bubbleId}`, { method: "PATCH", body: JSON.stringify(payload) }),
         // box (optional) = [x1, y1, x2, y2] the user drew: that exact area is read instead of the detected bubble
@@ -80,8 +98,22 @@ export const api = {
         reorderBubbles: (pageId, payload) =>
             request(`/pages/${pageId}/bubbles/reorder`, { method: "POST", body: JSON.stringify(payload) }),
         addBubble: (pageId, box) => request(`/pages/${pageId}/bubbles`, { method: "POST", body: JSON.stringify({ box }) }),
-        mergeBubble: (pageId, bubbleId, otherId) =>
-            request(`/pages/${pageId}/bubbles/${bubbleId}/merge`, { method: "POST", body: JSON.stringify({ with: otherId }) }),
+        // otherIds: one id or a list; order: every merged id in joining order (null = reading-order setting)
+        mergeBubble: (pageId, bubbleId, otherIds, order = null) =>
+            request(`/pages/${pageId}/bubbles/${bubbleId}/merge`, { method: "POST", body: JSON.stringify({ with: otherIds, order }) }),
+        bubbleLines: (pageId, bubbleId) => request(`/pages/${pageId}/bubbles/${bubbleId}/lines`),
+        // Lettering mode: text areas of the page, one bubble's placement, export of this page
+        layout: (pageId) => request(`/pages/${pageId}/layout`),
+        setLayout: (pageId, bubbleId, changes) =>
+            request(`/pages/${pageId}/bubbles/${bubbleId}/layout`, { method: "PATCH", body: JSON.stringify(changes) }),
+        exportPage: (pageId, options) => request(`/pages/${pageId}/export`, { method: "POST", body: JSON.stringify(options) }),
+        // target: an existing bubble id = MOVE the picked lines there (with their part of the translation)
+        splitPreview: (pageId, bubbleId, newLines, target = null) =>
+            request(`/pages/${pageId}/bubbles/${bubbleId}/split`, { method: "POST", body: JSON.stringify({ new_lines: newLines, preview: true, ...(target ? { target } : {}) }) }),
+        splitBubble: (pageId, bubbleId, newLines, target = null) =>
+            request(`/pages/${pageId}/bubbles/${bubbleId}/split`, { method: "POST", body: JSON.stringify({ new_lines: newLines, ...(target ? { target } : {}) }) }),
+        mergePreview: (pageId, bubbleId, otherIds, order = null) =>
+            request(`/pages/${pageId}/bubbles/${bubbleId}/merge`, { method: "POST", body: JSON.stringify({ with: otherIds, order, preview: true }) }),
         retranslateBubble: (pageId, bubbleId) =>
             request(`/pages/${pageId}/bubbles/${bubbleId}/retranslate`, { method: "POST" }),
         status: (pageId) => request(`/pages/${pageId}/status`),
@@ -89,12 +121,20 @@ export const api = {
             request(`/pages/${pageId}/retranslate?overwrite_edited=${overwriteEdited}`, { method: "POST" }),
         deleteBubble: (pageId, bubbleId) =>
             request(`/pages/${pageId}/bubbles/${bubbleId}`, { method: "DELETE" }),
+        // page-level review: {layout: true|false, accept: true, unaccept: [bubble ids]} (js/editor-review.js)
+        review: (pageId, payload) => request(`/pages/${pageId}/review`, { method: "POST", body: JSON.stringify(payload) }),
+        // raw OCR readings, rejected / dropped ones and slice cuts (js/editor-ocrdebug.js)
+        ocrDebug: (pageId) => request(`/pages/${pageId}/ocr-debug`),
         exclude: (pageId) => request(`/pages/${pageId}/exclude`, { method: "POST" }),
         restore: (pageId) => request(`/pages/${pageId}/restore`, { method: "POST" }),
     },
  
     system: {
         health: () => request("/system/health"),
+        ocrRuntime: () => request("/system/ocr-runtime"),
+        // Settings > Storage & uninstall: places + sizes; delete only caches / logs / spare copies (by item id)
+        storage: () => request("/system/storage"),
+        storageDelete: (id) => request("/system/storage/delete", { method: "POST", body: JSON.stringify({ id }) }),
         openPath: (path) => request("/system/open-path", { method: "POST", body: JSON.stringify({ path }) }),
         tailLog: (lines = 200, errorsOnly = false) =>
             request(`/system/tail-log?lines=${lines}&errors_only=${errorsOnly}`),
@@ -119,6 +159,13 @@ export const api = {
         import: (projectId, payload) => request(`/corrections/import/${projectId}`, { method: "POST", body: JSON.stringify(payload) }),
         usage: (correctionId) => request(`/corrections/${correctionId}/usage`),
         reembed: (projectId) => request(`/corrections/reembed/${projectId}`, { method: "POST" }),
+        edit: (correctionId, finalTranslation) =>
+            request(`/corrections/${correctionId}`, { method: "PATCH", body: JSON.stringify({ final_translation: finalTranslation }) }),
+        // payload: {find, replace, mode: "word" | "prefix", ids?: [...], apply: bool} - apply=false is a preview
+        replace: (projectId, payload) =>
+            request(`/corrections/replace/${projectId}`, { method: "POST", body: JSON.stringify(payload) }),
+        // what the memory contributed to this bubble's latest AI translation (editor panel)
+        usedFor: (pageId, bubbleId) => request(`/corrections/used/${pageId}/${encodeURIComponent(bubbleId)}`),
     },
  
     glossary: {

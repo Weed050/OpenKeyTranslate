@@ -173,7 +173,7 @@ def _busy_pages() -> int:
 
 # ------------------------------------------------------------------ export
 
-def create_backup(job: dict, dest_path: str, include_secrets: bool = True, include_models: bool = False,
+def create_backup(job: dict, dest_path: str, include_secrets: bool = False, include_models: bool = False,
                   include_logs: bool = False) -> dict:
     dest_path = os.path.abspath(dest_path)
     if not dest_path.lower().endswith(".zip"):
@@ -371,7 +371,8 @@ def restore_backup(job: dict, path: str, mode: str = "fresh", restore_settings: 
             current = load_settings()
             keep_keys = not manifest.get("has_secrets")
             for key, value in imported.items():
-                if key in ("app_root_dir",) or (key == "providers" and keep_keys):
+                # without keys in the bundle the current key pool stays whole: its keys, order and pool switch
+                if key in ("app_root_dir",) or (key in ("providers", "key_order", "active_provider") and keep_keys):
                     continue
                 current[key] = value
             if keep_keys:

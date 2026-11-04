@@ -14,7 +14,11 @@ export const state = {
     pageId,
     bubbles: [],
     selectedIndex: null,
-    savedThisSession: new Set(),
+    unsavedId: null,          // bubble_id whose open textarea differs from its saved translation ("unsaved" marker)
+    storeApproved: false,     // memory_store_approved: show the explicit "Approve to memory" button
+    mergePicks: [],           // bubble ids Shift+clicked to be merged into the selected bubble
+    detectRotation: false,    // this page's "whole page is rotated" OCR choice (Re-OCR dialog)
+    cleanups: [],             // this page's manual "Clean area" rectangles ({box}), newest last
     zoomFactor: 1,
     baseScale: 1,
     naturalW: 0,
@@ -33,11 +37,19 @@ export function escapeHtml(text) {
     return div.innerHTML;
 }
 
-export function showToast(message, ms = 1800) {
+export function showToast(message, ms = 1800, action = null) {
     el.saveToast.textContent = message;
+    if (action) {                                   // {label, run}: one button in the message (e.g. Undo)
+        const btn = document.createElement("button");
+        btn.className = "toast-action";
+        btn.textContent = action.label;
+        btn.addEventListener("click", () => { el.saveToast.classList.remove("show"); action.run(); }, { once: true });
+        el.saveToast.append(" ", btn);
+    }
+    el.saveToast.classList.toggle("has-action", !!action);
     el.saveToast.classList.add("show");
     clearTimeout(showToast._t);
-    showToast._t = setTimeout(() => el.saveToast.classList.remove("show"), ms);
+    showToast._t = setTimeout(() => el.saveToast.classList.remove("show"), action ? Math.max(ms, 6000) : ms);
 }
 
 export async function openOrAlert(path) {

@@ -96,6 +96,11 @@ label { display: block; font-size: 12px; color: var(--text-secondary); margin-bo
 .badge[data-status="queued"]     { color: var(--accent); background: var(--accent-soft); }
 .badge[data-status="processing"] { color: var(--accent); background: var(--accent-soft); }
 .badge[data-status="excluded"]   { color: var(--text-muted); opacity: 0.7; text-decoration: line-through; }
+/* work stages of a processed page (js/pagepicker.js) */
+.badge[data-status="ocr"]        { color: var(--warn); }
+.badge[data-status="translated"] { color: var(--warn); background: var(--warn-soft, color-mix(in srgb, var(--warn) 14%, transparent)); }
+.badge[data-status="reviewed"]   { color: var(--success); background: var(--success-soft); }
+.badge[data-status="exported"]   { color: var(--accent); background: var(--accent-soft); }
  
 /* Tooltip: title attribute styling is left to the browser default on
    purpose (zero JS, zero extra markup) - buttons that need one just get a
@@ -111,3 +116,91 @@ label { display: block; font-size: 12px; color: var(--text-secondary); margin-bo
  
 .field-label { font-size: 11px; color: var(--text-muted); }
 .field-value { font-size: 13px; color: var(--text-primary); background: var(--bg-panel-2); border-radius: var(--radius-sm); padding: 6px 10px; }
+/* Review status of a bubble (editor bubble list + its legend in the Help dialog, js/help.js): a small tinted square
+   with an icon. The icon is a CSS mask, so it takes the marker's own color (currentColor) in every theme. */
+.status-mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 5px;
+  flex-shrink: 0;
+  vertical-align: middle;
+}
+.status-mark::before {
+  content: "";
+  width: 12px;
+  height: 12px;
+  background: currentColor;
+  -webkit-mask: var(--mark-icon) center / contain no-repeat;
+  mask: var(--mark-icon) center / contain no-repeat;
+}
+.status-mark.edited {
+  color: var(--edited);
+  background: var(--edited-soft);
+  --mark-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z'/%3E%3C/svg%3E");
+}
+.status-mark.accepted {
+  color: var(--success);
+  background: var(--success-soft);
+  --mark-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='3.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M20 6 9 17l-5-5'/%3E%3C/svg%3E");
+}
+.status-mark.unsaved { color: var(--warn); background: var(--warn-soft); }
+.status-mark.unsaved::before { width: 8px; height: 8px; border-radius: 50%; -webkit-mask: none; mask: none; }
+
+/* ---------- shared small components: segmented switch (Settings > Appearance, editor mode bar, Lettering panel) and a key cap ---------- */
+
+.segmented {
+  display: inline-flex;
+  padding: 2px;
+  background: var(--bg-sunken);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+.segmented button {
+  padding: 4px 12px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+}
+.segmented button:hover { color: var(--text-primary); background: var(--bg-hover); }
+.segmented button.selected { color: var(--accent-text); background: var(--accent); }
+kbd {
+  display: inline-block;
+  padding: 1px 6px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-primary);
+  background: var(--bg-sunken);
+  border: 1px solid var(--border-strong);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+}
+
+/* ---------- work stages (js/stages.js): bar segments, legend dots, badge dots - colours in css/tokens.css ---------- */
+/* 2px gaps between the segments (the track shows through) and a minimum width: one page out of 300 stays visible */
+.stage-bar { display: flex; gap: 2px; height: 10px; border-radius: 5px; overflow: hidden; background: var(--stage-todo); }
+.stage-bar .seg { display: block; height: 100%; min-width: 4px; transition: width .4s ease; }
+.seg.stage-ocr, .dot.stage-ocr { background: var(--stage-ocr); }
+.seg.stage-partial, .dot.stage-partial { background: var(--stage-partial); }
+.seg.stage-translated, .dot.stage-translated { background: var(--stage-translated); }
+.seg.stage-reviewed, .dot.stage-reviewed { background: var(--stage-reviewed); }
+.seg.stage-checked, .dot.stage-checked { background: var(--stage-checked); }
+.seg.stage-exported, .dot.stage-exported { background: var(--stage-exported); }
+.dot.stage-todo { background: var(--stage-todo); }
+.dot[class*="stage-"] { width: 10px; height: 10px; border-radius: 3px; display: inline-block; flex-shrink: 0;
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.12); }
+/* page badges of a stage: neutral text + a dot in the stage colour (readable in every palette) */
+.badge.stage-badge { gap: 5px; color: var(--text-secondary); background: var(--bg-panel-2); }
+.badge.stage-badge::before { content: ""; width: 7px; height: 7px; border-radius: 2px; background: var(--dot, var(--stage-todo)); }
+.badge.stage-badge[data-status="ocr"] { --dot: var(--stage-ocr); }
+.badge.stage-badge[data-status="partial"] { --dot: var(--stage-partial); }
+.badge.stage-badge[data-status="translated"] { --dot: var(--stage-translated); }
+.badge.stage-badge[data-status="reviewed"] { --dot: var(--stage-reviewed); }
+.badge.stage-badge[data-status="checked"] { --dot: var(--stage-checked); }
+.badge.stage-badge[data-status="exported"] { --dot: var(--stage-exported); }
+.badge.stage-badge[data-status="failed"] { --dot: var(--danger); color: var(--danger); }
+.badge.stage-badge[data-status="queued"], .badge.stage-badge[data-status="processing"] { --dot: var(--accent); }

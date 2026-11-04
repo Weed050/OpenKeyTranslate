@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 from core.database import get_db
 from models.models import Project, GlossaryTerm
 from datetime import datetime, timezone
-from services.glossary_service import suggest_glossary_terms, get_term_usage
+from services.glossary_service import suggest_glossary_terms, get_term_usage, term_usage_counts
 from services.terminology import extract_terms_llm
 
 router = APIRouter(prefix="/glossary", tags=["Glossary"])
@@ -21,16 +21,24 @@ router = APIRouter(prefix="/glossary", tags=["Glossary"])
 
 @router.get("/by-project/{project_id}")
 async def list_terms(project_id: int, db: Session = Depends(get_db)):
-    """List every glossary term for a project."""
+    """
+    List every glossary term for a project. used / last_used: translated bubbles where the term fired (read from the
+    translation logs, services/glossary_service.term_usage_counts) - occurrences is something else: in how many
+    corrections a suggested term was seen when it was added.
+    """
     terms = (
         db.query(GlossaryTerm)
         .filter(GlossaryTerm.project_id == project_id)
         .order_by(GlossaryTerm.source_term)
         .all()
     )
+    usage = term_usage_counts(project_id, db)
     return [
         {"id": t.id, "source_term": t.source_term, "target_term": t.target_term,
-         "auto_detected": t.auto_detected, "occurrences": t.occurrences}
+         "auto_detected": t.auto_detected, "occurrences": t.occurrences,
+         "used": usage.get(t.source_term.lower(), {}).get("used", 0),
+         "last_used": usage.get(t.source_term.lower(), {}).get("last_used"),
+         "created_at": t.created_at.isoformat() if t.created_at else None}   # "Added" column / sort on the Memory page
         for t in terms
     ]
 
