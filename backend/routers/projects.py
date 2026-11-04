@@ -169,6 +169,20 @@ def export_pages(project_id: int, payload: dict, db: Session = Depends(get_db)):
     return {"job_id": job_id}
 
 
+@router.post("/{project_id}/open-exported")
+async def open_exported(project_id: int, db: Session = Depends(get_db)):
+    """Open <project folder>/exported in the file explorer (created when nothing was exported yet)."""
+    from services.render_service import default_export_root
+    from routers.system import open_path, OpenPathRequest
+    project = db.query(Project).filter(Project.id == project_id).first()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    folder = default_export_root(project)
+    os.makedirs(folder, exist_ok=True)
+    await open_path(OpenPathRequest(path=folder))
+    return {"folder": folder}
+
+
 @router.post("/{project_id}/rescan")
 def rescan_project(project_id: int, db: Session = Depends(get_db)):
     """

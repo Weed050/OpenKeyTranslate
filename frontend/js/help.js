@@ -129,11 +129,14 @@
                 ["Translate | Lettering", "The switch under the image, on the right (shortcut in Keyboard &amp; mouse). Lettering shows the page with the text, as an export writes it."],
                 ["Text boxes", "Every drawn bubble has a box. Click one to select it; drag to move, corners to resize (also when turned; hold Alt to grow evenly from the centre), the knob above it to turn it (Shift: free angle, otherwise 5° steps)."],
                 ["Font", "Per bubble: the font (recently used ones on top; add your own in Settings > Text &amp; fonts), <b>B</b> bold and <i>I</i> italic - imitated when the font has no bold / italic file. Default (Settings) = the default font of the project text."],
-                ["Fit to bubble", "Text area = the inside of the bubble again, centred horizontally and vertically, largest size that fits. Font, outline and angle stay."],
-                ["Panel", "Font size (auto = largest that fits, or a fixed size), horizontal and vertical alignment, rotation, white outline for text over artwork. Reset bubble = everything automatic again. Text that was diagonal in the original (map labels) is lettered along the same slant (\"auto\" next to the rotation); turning it to 0° keeps it level."],
+                ["Fit to bubble", "Text area = the inside of the bubble again, centred horizontally and vertically, largest size that fits. Font, outline and angle stay. In an oval bubble every line is as wide as the bubble at its height (short lines at the top and bottom) - switch off in Settings > Text &amp; fonts."],
+                ["Panel", "Font size (auto = largest that fits, or a fixed size), horizontal and vertical alignment, rotation. Reset bubble = everything automatic again. Text that was diagonal in the original (map labels) is lettered along the same slant (\"auto\" next to the rotation); turning it to 0° keeps it level."],
+                ["Letters &amp; outline", "Black or white letters; the outline is always the other colour and grows with the text. A white outline in a white bubble is invisible - it is for text over artwork."],
+                ["Style carries over", "Font, bold / italic, letters and outline you choose go to the next bubbles you open that have no style of their own (Undo in the message; switch off with \"Next bubbles get this style\"). \"Use on whole page\" gives the style to every bubble of the page."],
+                ["Not reviewed yet", "Lettering opens only when every bubble of the page is reviewed (accepted or edited); otherwise the message says how many are left and \"Show it\" jumps to the first."],
                 ["Red box", "The text does not fit - make the box bigger or the font smaller."],
                 ["Next page", "In Lettering, a page with bubbles not reviewed yet (no edited / accepted marker) opens in Translate - reviewing comes first. In Translate nothing switches by itself."],
-                ["Export page", "Writes this page into the project folder, sub-folder exported - with the options of the last export on the pages list."],
+                ["Export page", "Writes this page into the project folder, sub-folder exported - with the options of the last export on the pages list. \"Show file\" in the message selects it in Explorer; \"View export\" opens the last exported image."],
             ]),
         },
         {
@@ -149,7 +152,9 @@
         {
             id: "pages", title: "Pages list",
             html: items([
-                ["Status badges", "processed / pending / queued / processing / failed / excluded - per page."],
+                ["Stage of a page", "not processed &rarr; <i>no translation</i> (read by the OCR, AI translation missing) &rarr; <i>AI draft</i> (translated, not reviewed) &rarr; <i>reviewed</i> (you accepted or edited every bubble; skipped ones and page numbers do not count) &rarr; <i>exported</i> (exported after the last change; \"export old\" = changed since). Hover a page for the bubble counts."],
+                ["Chapter bar", "Blue exported, green reviewed, orange AI draft, pale no translation, grey not processed - like the project cards."],
+                ["Exported files", "Opens the project folder &rsaquo; exported in Explorer (also in the \"&ctdot;\" menu of a project card)."],
                 ["Import new chapters...", "Adds chapter folders to the project, with a preview of what is found."],
                 ["Export pages...", "Ticked chapters (or all): with the translation, clean or both; PNG or JPG; into the project folder &rsaquo; exported or another folder; optionally one ZIP."],
                 ["Rescan folders", "Compares the folders on disk with the database (new / missing files, wrong statuses)."],
@@ -205,12 +210,13 @@
                 <p class="text-muted">Editor: the &ldquo;Used from memory&rdquo; panel under the text box lists the glossary terms the AI got for that bubble.</p>`,
         },
         {
-            id: "settings", title: "Settings & logs",
+            id: "settings", title: "Settings & history",
             html: items([
                 ["Settings", "Every field saves itself when you leave it; leaving the page with unsaved input asks first. The list on the right jumps to a section."],
                 ["Appearance", "Color scheme (System / Light / Dark), separate theme colors for the light and the dark look, and how strongly they tint the surfaces. Stored in this browser only."],
                 ["Translation &amp; API keys", "Paste your API key here (Quick start: free keys from Groq or Google AI Studio, then Test connection). Provider and model per key; keys are never shown again in full."],
-                ["Logs", "Every zero-shot vs memory-injected translation pair (the A/B experiment), with what was given to the AI. Read only."],
+                ["OCR engine", "CPU or GPU, the text detection model (mobile = about 3x faster on a CPU), CPU threads, oneDNN - after a restart of the backend. If the OCR crashes: python scripts/ocr_selftest.py (its last report is shown there)."],
+                ["History", "What the AI translated: when, where (chapter, page, bubble - Open jumps there), the hints it got (memory examples, glossary) and what the bubble says now. Filters: changed by you, not reviewed, chapter, search. <i>Research view</i> adds the A/B columns of the memory experiment. Read only."],
             ]),
         },
     ];

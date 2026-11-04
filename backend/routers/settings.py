@@ -284,6 +284,33 @@ def test_translation():
             else "The provider answered but returned no translation."}
 
 
+@router.post("/ocr-engine")
+async def update_ocr_engine(payload: dict):
+    """
+    The OCR engine (core/ocr_runtime.py): device, detection model, CPU threads, oneDNN. The model is built once when
+    the backend starts, so these apply after a RESTART of the backend.
+    """
+    current = load_settings()
+    choices = {"ocr_device": ("auto", "cpu", "gpu"), "ocr_det_model": ("auto", "server", "mobile")}
+    for key, allowed in choices.items():
+        if key in payload:
+            if payload[key] not in allowed:
+                raise HTTPException(status_code=400, detail=f"{key} must be one of {', '.join(allowed)}")
+            current[key] = payload[key]
+    if "ocr_cpu_threads" in payload:
+        try:
+            threads = int(payload["ocr_cpu_threads"] or 0)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="ocr_cpu_threads must be a whole number (0 = library default)")
+        if not 0 <= threads <= 64:
+            raise HTTPException(status_code=400, detail="ocr_cpu_threads must be 0..64")
+        current["ocr_cpu_threads"] = threads
+    if "ocr_mkldnn" in payload:
+        current["ocr_mkldnn"] = bool(payload["ocr_mkldnn"])
+    save_settings(current)
+    return {"message": "Saved - restart the backend to load the OCR with these settings."}
+
+
 @router.post("/ocr-options")
 async def update_ocr_options(payload: dict):
     """Post-OCR options (utils/bubble_post.py). Apply to pages processed from now on - no restart."""
@@ -294,6 +321,8 @@ async def update_ocr_options(payload: dict):
             current[key] = bool(payload[key])
     if "typesetting_uppercase" in payload:
         current["typesetting_uppercase"] = bool(payload["typesetting_uppercase"])
+    if "typesetting_shape_fit" in payload:
+        current["typesetting_shape_fit"] = bool(payload["typesetting_shape_fit"])
     if "typesetting_font" in payload:
         font = str(payload["typesetting_font"] or "").strip()
         if font and not os.path.isfile(font):            # a family name from Settings > Fonts, or a file path

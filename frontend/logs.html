@@ -5,7 +5,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>OpenKeyTranslate - Translation logs</title>
+    <title>OpenKeyTranslate - Translation history</title>
     <link rel="stylesheet" href="css/tokens.css">
     <script src="js/theme.js"></script>
     <link rel="stylesheet" href="css/base.css">
@@ -29,7 +29,18 @@
         .inj-ex.corrected { border-left-color: var(--accent); }
         .inj-rejected { color: var(--danger); text-decoration: line-through; }
         .inj-missing { color: var(--warn); }
-        .logs-filter { display: flex; gap: 8px; align-items: center; margin: 10px 0; }
+        .logs-filter { display: flex; gap: 8px; align-items: center; margin: 10px 0; flex-wrap: wrap; }
+        .logs-filter select { width: auto; max-width: 240px; }              /* base.css makes selects 100 % wide */
+        .logs-filter input[type="text"] { width: 220px; }
+        .logs-filter .research-switch { margin-left: auto; display: inline-flex; align-items: center; gap: 6px; }
+        tr.logs-day td { background: var(--bg-panel-2); color: var(--text-muted); font-size: 11px; font-weight: 600;
+                         text-transform: uppercase; letter-spacing: 0.04em; padding: 6px 12px; }
+        .logs-time { white-space: nowrap; font-variant-numeric: tabular-nums; }
+        .logs-where { font-weight: 500; color: var(--text-primary); }
+        .col-research { display: none; }
+        body.logs-research .col-research { display: table-cell; }
+        body.logs-research .col-simple { display: none; }
+        #logsMore { margin-top: 10px; }
     </style>
 </head>
 <body>
@@ -54,20 +65,23 @@
  
         <main class="main-content">
             <div class="page-header">
-                <h1>Translation logs</h1>
+                <h1>Translation history</h1>
                 <div style="display:flex; align-items:center; gap:8px;">
                     <button id="exportLogsBtn">Export JSON</button>
                     <span class="badge" id="countBadge"></span>
                 </div>
             </div>
-            <p class="text-muted">Every zero-shot vs. memory-injected pair the correction-memory experiment is evaluated from. Read-only - never fed back into translation.</p>
+            <p class="text-muted" id="logsIntro"></p>
  
             <div id="noProject" class="hidden text-muted">Open a project from the sidebar first.</div>
             <div class="card hidden" id="logsSummary" style="font-size:12px; display:flex; gap:20px; flex-wrap:wrap;"></div>
             <div class="logs-filter">
-                <span class="text-muted">Show</span>
+                <input type="text" id="logsSearchInput" placeholder="Search text or page..." spellcheck="false">
+                <select id="logsChapterSelect"><option value="">All chapters</option></select>
                 <select id="logsFilterSelect">
                     <option value="all">All bubbles</option>
+                    <option value="changed">Changed by you</option>
+                    <option value="unreviewed">Not reviewed yet</option>
                     <option value="memory">With memory (any lane)</option>
                     <option value="fuzzy">Memory: fuzzy examples</option>
                     <option value="exact">Memory: exact phrase</option>
@@ -75,22 +89,28 @@
                     <option value="glossary">With glossary terms</option>
                     <option value="postedit">Terminology post-edited</option>
                 </select>
+                <label class="research-switch" title="Thesis columns: zero-shot vs memory-injected output (A/B), memory lane, similarity, API key and the experiment summary">
+                    <input type="checkbox" id="researchToggle"> Research view</label>
             </div>
  
             <div class="logs-table-wrap">
                 <table class="logs-table">
                     <thead>
                         <tr>
+                            <th>Time</th>
+                            <th>Where</th>
                             <th>Source (EN)</th>
-                            <th>Zero-shot</th>
-                            <th>Memory-injected</th>
-                            <th>Diff vs. final correction</th>
-                            <th>Injected / what happened</th>
+                            <th class="col-simple">AI translation</th>
+                            <th class="col-research">Zero-shot (no memory)</th>
+                            <th class="col-research">Memory-injected</th>
+                            <th>In the bubble now</th>
+                            <th>Hints given to the AI</th>
                         </tr>
                     </thead>
                     <tbody id="logsBody"></tbody>
                 </table>
             </div>
+            <button id="logsMore" class="hidden"></button>
         </main>
     </div>
  

@@ -1,14 +1,15 @@
 /**
  * @file frontend/js/logs.js
- * @description Debug/TM analytics table: pairs each zero-shot and
- * memory-injected TranslationLog row from the same translation pass
- * (run_id + bubble_id), diffs the shown variant against whatever the
- * user eventually confirmed for that exact source text (if anything), and shows
- * everything that was injected into the prompt / done afterwards (injection_json):
- * memory examples (EN -> PL pairs), exact phrase, glossary, terminology post-edit, case normalization.
+ * @description Translation history of a project. Every row = one bubble of one translation pass (the zero-shot and
+ * memory-injected TranslationLog rows of the same run_id + bubble_id are paired): when, where (chapter, page,
+ * bubble number - with a link into the editor), the source, what the AI gave, what the bubble holds NOW (with a diff)
+ * and everything that went into the prompt with it (memory examples, glossary, terminology post-edit...).
  *
- * The A/B comparison uses the MODEL output of both variants (injection_json.model_output, i.e. before
- * the terminology post-edit and the ALL-CAPS normalization), so only the memory differs between them.
+ * "Research view" (a switch, remembered) adds the thesis columns: the zero-shot counterfactual next to the
+ * memory-injected output, lane / similarity / key badges and the summary numbers of the memory experiment.
+ * The A/B comparison uses the MODEL output of both variants (injection_json.model_output, i.e. before the
+ * terminology post-edit and the ALL-CAPS normalization), so only the memory differs between them.
+ * Display only: nothing here changes what is logged.
  */
 
 import { api } from "./api.js";
@@ -17,9 +18,11 @@ import { diffHtml as sharedDiffHtml } from "./diff.js";
 
 const params = new URLSearchParams(window.location.search);
 const projectId = params.get("project");
+const RESEARCH_KEY = "okt-logs-research";
+const PAGE_SIZE = 200;
 
 let allRows = [];
-let correctionBySource = new Map();
+let shownCount = PAGE_SIZE;
 
 window.addEventListener("DOMContentLoaded", async () => {
     renderSidebar(projectId);
@@ -27,29 +30,38 @@ window.addEventListener("DOMContentLoaded", async () => {
         document.getElementById("noProject").classList.remove("hidden");
         return;
     }
-    document.getElementById("logsFilterSelect")?.addEventListener("change", renderRows);
+    const research = document.getElementById("researchToggle");
+    research.checked = localStorage.getItem(RESEARCH_KEY) === "1";
+    research.addEventListener("change", () => {
+        localStorage.setItem(RESEARCH_KEY, research.checked ? "1" : "0");
+        applyResearch();
+        renderRows();
+    });
+    ["logsFilterSelect", "logsChapterSelect"].forEach((id) => document.getElementById(id).addEventListener("change", () => { shownCount = PAGE_SIZE; renderRows(); }));
+    document.getElementById("logsSearchInput").addEventListener("input", () => { shownCount = PAGE_SIZE; renderRows(); });
+    applyResearch();
     await loadLogs();
 });
 
+const isResearch = () => document.getElementById("researchToggle").checked;
+
+function applyResearch() {
+    document.body.classList.toggle("logs-research", isResearch());
+    document.getElementById("logsSummary").classList.toggle("hidden", !isResearch() || !allRows.length);
+    document.getElementById("logsIntro").textContent = isResearch()
+        ? "Research view: every zero-shot vs. memory-injected pair the correction-memory experiment is evaluated from. Read-only - never fed back into translation."
+        : "What the AI translated, where, what it was given as hints - and what the bubble says now.";
+}
+
 async function loadLogs() {
     const tableBody = document.getElementById("logsBody");
-    let logs, corrections;
+    let logs;
     try {
-        [logs, corrections] = await Promise.all([
-            api.logs.listByProject(projectId),
-            api.corrections.listByProject(projectId),
-        ]);
+        logs = await api.logs.listByProject(projectId);
     } catch (e) {
-        tableBody.innerHTML = `<tr><td colspan="5">Couldn't load logs: ${e.message}</td></tr>`;
+        tableBody.innerHTML = `<tr><td colspan="8">Couldn't load logs: ${escapeHtml(e.message)}</td></tr>`;
         return;
     }
-
-    // Corrections come back newest-first, so the first match per source text is the latest one.
-    correctionBySource = new Map();
-    corrections.forEach((c) => {
-        if (!correctionBySource.has(c.source_text)) correctionBySource.set(c.source_text, c);
-    });
-
     const groups = new Map();
     logs.forEach((log) => {
         log.injection = parseJson(log.injection_json) || {};
@@ -57,11 +69,19 @@ async function loadLogs() {
         if (!groups.has(key)) groups.set(key, {});
         groups.get(key)[log.variant] = log;
     });
-
     allRows = [...groups.values()].filter((g) => g.zero_shot || g.memory_injected);
+
+    const chapters = [...new Set(allRows.map((g) => base(g).chapter).filter(Boolean))]
+        .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+    document.getElementById("logsChapterSelect").innerHTML = '<option value="">All chapters</option>'
+        + chapters.map((c) => `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join("");
     renderSummary(allRows);
+    applyResearch();
     renderRows();
 }
+
+const base = (g) => g.zero_shot || g.memory_injected;
+function shownLog(g) { return g.memory_injected || g.zero_shot; }
 
 function lane(g) {
     const log = g.memory_injected;
@@ -73,12 +93,12 @@ function lane(g) {
     return log.threshold_used == null ? "exact" : "fuzzy";
 }
 
-function shownLog(g) { return g.memory_injected || g.zero_shot; }
-
 function postedited(g) { return !!shownLog(g).injection.terms?.postedit?.applied; }
 
 const FILTERS = {
     all: () => true,
+    changed: (g) => base(g).current_translation != null && norm(base(g).current_translation) !== norm(shownLog(g).output_text),
+    unreviewed: (g) => base(g).reviewed === false,
     memory: (g) => !!g.memory_injected,
     fuzzy: (g) => lane(g) === "fuzzy",
     exact: (g) => lane(g) === "exact",
@@ -86,44 +106,105 @@ const FILTERS = {
     glossary: (g) => glossaryTerms(shownLog(g)).length > 0,
     postedit: (g) => postedited(g),
 };
+const norm = (t) => (t || "").trim();
+
+function filteredRows() {
+    const mode = document.getElementById("logsFilterSelect").value || "all";
+    const chapter = document.getElementById("logsChapterSelect").value;
+    const q = document.getElementById("logsSearchInput").value.trim().toLowerCase();
+    return allRows.filter((g) => {
+        const b = base(g);
+        if (chapter && b.chapter !== chapter) return false;
+        if (q && ![b.source_text, shownLog(g).output_text, b.current_translation, b.file_name].some((t) => (t || "").toLowerCase().includes(q))) return false;
+        return (FILTERS[mode] || FILTERS.all)(g);
+    });
+}
 
 function renderRows() {
     const tableBody = document.getElementById("logsBody");
-    const mode = document.getElementById("logsFilterSelect")?.value || "all";
-    const rows = allRows.filter(FILTERS[mode] || FILTERS.all);
-    document.getElementById("countBadge").textContent = rows.length;
-
+    const rows = filteredRows();
+    document.getElementById("countBadge").textContent = `${rows.length} bubble${rows.length === 1 ? "" : "s"}`;
     if (!rows.length) {
-        tableBody.innerHTML = `<tr><td colspan="5" class="text-muted">${allRows.length
+        tableBody.innerHTML = `<tr><td colspan="8" class="text-muted">${allRows.length
             ? "No bubbles match this filter."
-            : "No translation logs yet - process a page to generate some."}</td></tr>`;
+            : "No translations yet - process a page to fill the history."}</td></tr>`;
+        document.getElementById("logsMore").classList.add("hidden");
         return;
     }
     tableBody.innerHTML = "";
-    rows.forEach((g) => tableBody.appendChild(logRow(g)));
+    let lastDay = null;
+    rows.slice(0, shownCount).forEach((g) => {
+        const day = dayLabel(base(g).created_at);
+        if (day !== lastDay) {                       // newest first: one separator row per day
+            const sep = document.createElement("tr");
+            sep.className = "logs-day";
+            sep.innerHTML = `<td colspan="8">${escapeHtml(day)}</td>`;
+            tableBody.appendChild(sep);
+            lastDay = day;
+        }
+        tableBody.appendChild(logRow(g));
+    });
+    const more = document.getElementById("logsMore");
+    more.classList.toggle("hidden", rows.length <= shownCount);
+    more.textContent = `Show ${Math.min(PAGE_SIZE, rows.length - shownCount)} more (${rows.length - shownCount} left)`;
+    more.onclick = () => { shownCount += PAGE_SIZE; renderRows(); };
+}
+
+function dayLabel(iso) {
+    if (!iso) return "Unknown date";
+    const d = new Date(iso);
+    const today = new Date();
+    const yesterday = new Date(Date.now() - 864e5);
+    if (d.toDateString() === today.toDateString()) return "Today";
+    if (d.toDateString() === yesterday.toDateString()) return "Yesterday";
+    return d.toLocaleDateString(undefined, { weekday: "short", year: "numeric", month: "long", day: "numeric" });
+}
+
+function timeLabel(iso) {
+    return iso ? new Date(iso).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" }) : "";
+}
+
+function whereCell(b) {
+    const page = (b.file_name || "").replace(/\.[^.]+$/, "");
+    const bubble = b.bubble_no ? `bubble ${b.bubble_no}` : '<span class="text-muted" title="Deleted, merged or split since">bubble gone</span>';
+    const href = `editor.html?project=${encodeURIComponent(projectId)}&page=${b.page_id}${b.bubble_no ? `&bubble=${b.bubble_no - 1}` : ""}`;
+    return `<div class="logs-where">${escapeHtml(b.chapter || "?")}</div>
+        <div>${escapeHtml(page)} &middot; ${bubble}</div>
+        <a href="${href}" title="Open this bubble in the editor">Open &rarr;</a>`;
+}
+
+function nowCell(g) {
+    const b = base(g);
+    if (b.current_translation == null) return '<span class="text-muted">bubble no longer on the page</span>';
+    const ai = shownLog(g).output_text || "";
+    const now = b.current_translation;
+    if (norm(now) === norm(ai)) {
+        return b.reviewed
+            ? `${escapeHtml(now)} <span class="badge" data-status="reviewed" title="You accepted the AI text unchanged">accepted</span>`
+            : `<span class="text-muted">same as the AI</span> <span class="badge" data-status="translated" title="Not reviewed in the editor yet">not reviewed</span>`;
+    }
+    const tag = b.reviewed ? "" : ' <span class="badge" data-status="translated">not reviewed</span>';
+    return `<div title="Changes from the AI text to what the bubble says now">${sharedDiffHtml(ai, now, escapeHtml)}</div>${tag}`;
 }
 
 function logRow(group) {
-    const base = group.zero_shot || group.memory_injected;
-    const finalCorrection = correctionBySource.get(base.source_text);
-    const shownVariant = shownLog(group);
-    const zeroShotIsCounterfactual = !!(group.memory_injected && group.zero_shot);
-
+    const b = base(group);
+    const shown = shownLog(group);
+    const ab = !!(group.memory_injected && group.zero_shot);
     const tr = document.createElement("tr");
     tr.innerHTML = `
-        <td class="text-mono">${escapeHtml(base.source_text)}</td>
-        <td>${group.zero_shot
-            ? escapeHtml(group.zero_shot.output_text) + (zeroShotIsCounterfactual ? ' <span class="badge" title="Same payload without memory (A/B counterfactual)">A/B</span>' : "")
-            : '<span class="text-muted">—</span>'}</td>
-        <td>${group.memory_injected
+        <td class="logs-time">${escapeHtml(timeLabel(b.created_at))}</td>
+        <td>${whereCell(b)}</td>
+        <td class="text-mono">${escapeHtml(b.source_text)}</td>
+        <td class="col-simple">${escapeHtml(shown.output_text || "")}</td>
+        <td class="col-research">${group.zero_shot
+            ? escapeHtml(group.zero_shot.output_text) + (ab ? ' <span class="badge" title="Same payload without memory (A/B counterfactual)">A/B</span>' : "")
+            : '<span class="text-muted">-</span>'}</td>
+        <td class="col-research">${group.memory_injected
             ? escapeHtml(group.memory_injected.output_text) + laneBadge(group) + similarityBadge(group.memory_injected.similarity_score) + keyBadge(group.memory_injected.key_label)
             : '<span class="text-muted">no memory match</span>'}</td>
-        <td>${finalCorrection
-            ? sharedDiffHtml(shownVariant.output_text, finalCorrection.final_translation, escapeHtml)
-              + ((finalCorrection.kind || "corrected") === "approved" ? ' <span class="badge" title="Accepted unchanged">approved</span>' : "")
-            : '<span class="text-muted">not corrected yet</span>'}</td>
-        <td>${injectionCell(shownVariant)}</td>
-    `;
+        <td>${nowCell(group)}</td>
+        <td>${injectionCell(shown)}</td>`;
     return tr;
 }
 
@@ -140,8 +221,8 @@ function injectionCell(log) {
     const chips = [];
 
     if (examples && examples.length) {
-        chips.push(`${examples.length} example${examples.length > 1 ? "s" : ""}`);
-        parts.push(`<div><div class="inj-label">Memory examples (best first)</div>${examples.map((ex) => `
+        chips.push(`${examples.length} from memory`);
+        parts.push(`<div><div class="inj-label">Your earlier translations shown as examples (best first)</div>${examples.map((ex) => `
             <div class="inj-ex ${ex.kind === "corrected" ? "corrected" : ""}">
                 ${ex.en ? `<div class="text-mono">${escapeHtml(ex.en)}</div>` : ""}
                 <div>&rarr; ${escapeHtml(ex.pl || "")}</div>
@@ -150,11 +231,11 @@ function injectionCell(log) {
             </div>`).join("")}</div>`);
     }
     if (exact !== undefined && exact !== null) {
-        chips.push("exact");
+        chips.push("exact phrase");
         parts.push(`<div><div class="inj-label">Exact phrase from memory</div>${escapeHtml(exact)}</div>`);
     }
     if (glossary.length) {
-        chips.push(`glossary ${glossary.length}`);
+        chips.push(`${glossary.length} glossary`);
         parts.push(`<div><div class="inj-label">Glossary</div>${glossary.map((t) =>
             `${escapeHtml(t.source_term)} &rarr; ${escapeHtml(t.target_term)}`).join("<br>")}</div>`);
     }
@@ -180,10 +261,11 @@ function injectionCell(log) {
     if (inj.context_bubbles) meta.push(`${inj.context_bubbles} context bubble(s)`);
     if (inj.ab) meta.push(`A/B: ${inj.ab.replace("_", " ")}`);
     if (log.model_used) meta.push(log.model_used);
+    if (log.key_label) meta.push(`key ${log.key_label}`);
     if (meta.length) parts.push(`<div class="text-muted" style="font-size:11px;">${meta.map(escapeHtml).join(" · ")}</div>`);
 
-    if (!parts.length) return '<span class="text-muted">nothing (plain zero-shot)</span>';
-    return `<details class="inj"><summary>${chips.length ? chips.map(escapeHtml).join(", ") : "details"}</summary>
+    if (!chips.length && !parts.length) return '<span class="text-muted">no hints</span>';
+    return `<details class="inj"><summary>${chips.length ? chips.map(escapeHtml).join(", ") : "no hints - details"}</summary>
         <div class="inj-body">${parts.join("")}</div></details>`;
 }
 
@@ -227,7 +309,6 @@ function renderSummary(rows) {
         stat("Glossary fired", `${glossaryFired}${pct(glossaryFired)}`, "Bubbles with at least one glossary term injected"),
         stat("Term missing / fixed", `${termMissing} / ${termFixed}`, "Bubbles whose model output missed a glossary term / of those, fixed by the terminology post-edit"),
     ].join("");
-    box.classList.remove("hidden");
 }
 
 function laneBadge(group) {

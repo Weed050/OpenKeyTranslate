@@ -65,22 +65,42 @@ export async function showPagePicker() {
 
 /* ------------------------------ one chapter card ------------------------------ */
 
+// work stages of a page (GET /pages/by-project: "stage"), in pipeline order; label = the badge, title = its tooltip
+const STAGES = {
+    pending: ["not processed", "OCR, cleaning and translation have not run yet"],
+    queued: ["queued", "Waiting for the background processing"],
+    processing: ["processing", "OCR / cleaning / translation running"],
+    failed: ["failed", "Processing failed - open the page to see why"],
+    excluded: ["excluded", "Left out of the project (Restore brings it back)"],
+    ocr: ["no translation", "Read by the OCR, but some bubbles have no translation yet (opened page translates; or Retranslate)"],
+    translated: ["AI draft", "Translated by the AI - not reviewed by you yet"],
+    reviewed: ["reviewed", "You accepted or edited every bubble"],
+    exported: ["exported", "Reviewed and exported (project folder > exported) after the last change"],
+};
+const BAR = [["exported", "exported"], ["reviewed", "reviewed"], ["translated", "AI draft"], ["ocr", "no translation"]];
+
 function chapterCard(chapter, chapterPages) {
-    const processedCount = chapterPages.filter((p) => p.status === "processed").length;
-    const fullyDone = processedCount === chapterPages.length;
+    const live = chapterPages.filter((p) => p.status !== "excluded");
+    const count = (stage) => live.filter((p) => p.stage === stage).length;
+    const processedCount = live.filter((p) => p.status === "processed").length;
+    const doneCount = count("reviewed") + count("exported");
+    const fullyDone = live.length > 0 && doneCount === live.length;
     const chapterId = chapterPages[0].chapter_id;
+    const pct = (n) => (live.length ? (100 * n) / live.length : 0);
+    const bar = BAR.map(([stage]) => `<span class="seg ${stage}" style="width:${pct(count(stage))}%"></span>`).join("");
+    const tip = [...BAR.map(([stage, label]) => `${count(stage)} ${label}`), `${live.length - processedCount} not processed`].join("\n");
 
     const details = document.createElement("details");
     details.className = "page-picker-chapter";
     details.dataset.chapter = chapter;
 
     const summary = document.createElement("summary");
-    summary.style.setProperty("--done", `${Math.round((100 * processedCount) / chapterPages.length)}%`);
     summary.innerHTML = `
         <span class="chapter-title">
-            ${fullyDone ? '<span class="chapter-done-check" title="All pages processed">&#10003;</span>' : ""}
+            ${fullyDone ? '<span class="chapter-done-check" title="Every page reviewed">&#10003;</span>' : ""}
             <span class="chapter-name" title="${escapeHtml(chapter)}">${escapeHtml(chapter)}</span>
-            <span class="chapter-count" title="Processed pages">${processedCount}/${chapterPages.length}</span>
+            <span class="chapter-progress" title="${escapeHtml(tip)}"><span class="chapter-bar">${bar}</span>
+                <span class="chapter-count">${doneCount}/${live.length} reviewed</span></span>
             <input type="checkbox" class="chapter-select" data-chapter-id="${chapterId}" data-chapter-name="${escapeHtml(chapter)}" title="Select for bulk delete">
         </span>
         <button class="copy-btn danger chapter-delete-btn" title="Delete this chapter and its pages">Delete chapter</button>
@@ -124,9 +144,14 @@ function pageTile(p) {
     const link = document.createElement("a");
     link.href = `editor.html?project=${state.projectId}&page=${p.page_id}`;
     link.title = p.error ? `${p.file_name}\n${p.error}` : p.file_name;
+    const stage = p.stage || p.status;
+    const [label, what] = STAGES[stage] || [stage, ""];
+    const counts = p.bubbles ? ` (${p.reviewed}/${p.bubbles} bubbles reviewed)` : "";
+    const outdated = p.export === "outdated" ? " - changed after the last export" : "";
+    link.title = p.error ? `${p.file_name}\n${p.error}` : `${p.file_name}\n${what}${counts}${outdated}`;
     link.innerHTML = `
         <span class="page-name">${escapeHtml(p.file_name)}</span>
-        <span class="badge" data-status="${escapeHtml(p.status)}">${escapeHtml(p.status)}</span>
+        <span class="badge" data-status="${escapeHtml(stage)}">${escapeHtml(label)}${p.export === "outdated" ? " &middot; export old" : ""}</span>
     `;
     row.appendChild(link);
 
@@ -158,6 +183,7 @@ function bindToolbar(byChapter) {
     document.getElementById("showExcludedCheckbox").onchange = () => showPagePicker();
     document.getElementById("goToNextUnprocessedBtn").onclick = goToNextUnprocessed;
     document.getElementById("addChaptersBtn").onclick = () => openImportDialog(showPagePicker);
+    document.getElementById("openExportedBtn").onclick = () => api.projects.openExported(state.projectId).catch((e) => alert(e.message));
     document.getElementById("rescanBtn").onclick = rescanFolders;
     document.getElementById("exportPagesBtn").onclick = exportTranslatedPages;
     document.getElementById("chapterViewBtn").onclick = () =>
@@ -340,7 +366,10 @@ async function exportTranslatedPages() {
                 await new Promise((r) => setTimeout(r, 600));
                 continue;
             }
-            if (job.state === "done") showToast(job.message, 6000);
+            if (job.state === "done") {
+                const where = job.result?.path;
+                showToast(job.message, 8000, where ? { label: "Open", run: () => api.system.openPath(where).catch((e) => alert(e.message)) } : null);
+            }
             else alert(`Export failed: ${job.message}`);
             break;
         }

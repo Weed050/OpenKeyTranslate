@@ -13,6 +13,10 @@ device='gpu' in the source (and a machine without a GPU crashed on import). Now:
   ocr_cpu_threads  0 = library default, N = OMP_NUM_THREADS / cpu_threads
   ocr_mkldnn       false (default). oneDNN acceleration; on some CPU/Paddle combinations it fails inside the executor
                    ("ConvertPirAttribute2RuntimeAttribute not support ..."), so it is OFF unless you switch it on.
+  ocr_det_model    "auto" (default) | "server" | "mobile" - the text DETECTION network. auto = server on the GPU, mobile
+                   on the CPU. Measured on CPU (i7-4790, a 1612 px page): server 93 s with Paddle 3.3 and an access
+                   violation with Paddle 3.0 (no oneDNN, images taller than ~1300 px); mobile 33 s with both and no crash.
+                   Recognition is the mobile English model either way (the same as before).
   ocr_env_flags    {} - extra environment variables applied BEFORE paddle is imported, e.g. {"FLAGS_enable_pir_api": "0"}.
                    An escape hatch for Paddle runtime problems that needs no code change.
   models_dir       "" = libraries' default caches (~/.cache/huggingface, ~/.paddlex). A folder = both caches live there
@@ -22,11 +26,33 @@ apply_env() MUST run before `import paddle` / `import paddleocr`; services/ocr_p
 """
 
 import os
+from importlib import metadata
 
 from core.config import get_setting, APP_ROOT_DIR
 
 # Filled by resolve_runtime(); shown by GET /system/health and in the startup log.
-RUNTIME: dict = {"requested": None, "device": None, "reason": "", "mkldnn": False, "threads": 0}
+RUNTIME: dict = {"requested": None, "device": None, "reason": "", "mkldnn": False, "threads": 0, "det_model": None}
+
+DET_MODELS = {"server": "PP-OCRv5_server_det", "mobile": "PP-OCRv5_mobile_det"}
+
+
+def installed_paddle() -> tuple[str | None, str | None]:
+    """(distribution name, version) of the installed Paddle build - read WITHOUT importing paddle."""
+    for name in ("paddlepaddle-gpu", "paddlepaddle"):
+        try:
+            return name, metadata.version(name)
+        except metadata.PackageNotFoundError:
+            continue
+    return None, None
+
+
+def _cpu_only() -> bool:
+    """This run will use the CPU: forced in settings, a CPU-only Paddle build, or CUDA hidden from the process."""
+    if (get_setting("ocr_device", "auto") or "auto") == "cpu":
+        return True
+    if installed_paddle()[0] == "paddlepaddle":
+        return True
+    return os.environ.get("CUDA_VISIBLE_DEVICES", None) == ""
 
 
 def models_root() -> str | None:
@@ -64,8 +90,9 @@ def apply_env() -> None:
     if threads > 0:
         os.environ.setdefault("OMP_NUM_THREADS", str(threads))
 
-    if (get_setting("ocr_device", "auto") or "auto") == "cpu":
-        # what the CPU build instructions asked to uncomment by hand
+    if _cpu_only():
+        # what the CPU build instructions asked to uncomment by hand (before: only with ocr_device="cpu" - a CPU-only
+        # machine on the default "auto" ran without them)
         os.environ.setdefault("FLAGS_allocator_strategy", "naive_best_fit")
         os.environ.setdefault("FLAGS_fraction_of_gpu_memory_to_use", "0")
         os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
@@ -98,8 +125,12 @@ def resolve_runtime() -> dict:
         device, reason = "cpu", "no CUDA available"
 
     threads = int(get_setting("ocr_cpu_threads", 0) or 0)
+    det = (get_setting("ocr_det_model", "auto") or "auto").lower()
+    if det not in DET_MODELS:
+        det = "server" if device == "gpu" else "mobile"
     RUNTIME.update(requested=requested, device=device, reason=reason,
-                   mkldnn=bool(get_setting("ocr_mkldnn", False)) and device == "cpu", threads=threads)
+                   mkldnn=bool(get_setting("ocr_mkldnn", False)) and device == "cpu", threads=threads, det_model=det,
+                   paddle="%s %s" % installed_paddle())
     return RUNTIME
 
 
@@ -112,8 +143,11 @@ def paddle_kwargs() -> dict:
         use_textline_orientation=True,
         enable_mkldnn=rt["mkldnn"],        # never on the GPU build
         use_doc_unwarping=False,           # flat digital scans: the unwarping network is not needed
+        text_detection_model_name=DET_MODELS[rt["det_model"]],
+        text_recognition_model_name="en_PP-OCRv5_mobile_rec",   # what lang="en" picked before - stated, not implied
     )
     if rt["device"] == "cpu" and rt["threads"] > 0:
         kwargs["cpu_threads"] = rt["threads"]
-    print(f"[OCR] device={rt['device']} ({rt['reason']}), mkldnn={rt['mkldnn']}, threads={rt['threads'] or 'default'}")
+    print(f"[OCR] device={rt['device']} ({rt['reason']}), detection={rt['det_model']}, mkldnn={rt['mkldnn']}, "
+          f"threads={rt['threads'] or 'default'}, {rt['paddle']}")
     return kwargs

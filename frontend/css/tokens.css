@@ -136,10 +136,12 @@
 [data-palette="rust"]  { --tint-h: 30;  --tint-c-dark: 0.016; --tint-c-light: 0.016;
                          --accent-dark: #f0856f; --accent-text-dark: #1a0905; --accent-light: #a2391f; --accent-text-light: #ffffff; }
 
-/* surface tint strength (Settings > Appearance): x0 = neutral surfaces with the palette's accent, x2.5 = clearly colored */
-:root { --tint-k: 1; }
-[data-tint="off"] { --tint-k: 0; }
-[data-tint="strong"] { --tint-k: 2.5; }
+/* surface tint strength (Settings > Appearance): x0 = neutral surfaces with the palette's accent, x2.5 = clearly colored.
+   Light schemes get their own, larger factors: the same chroma near white is much harder to see than on a dark grey,
+   and the panels (most of the screen) are mixed towards white - "strong" changed almost nothing in light mode. */
+:root { --tint-k: 1; --tint-k-light: 1.5; --panel-tint: 8%; }
+[data-tint="off"] { --tint-k: 0; --tint-k-light: 0; --panel-tint: 0%; }
+[data-tint="strong"] { --tint-k: 2.5; --tint-k-light: 4.5; --panel-tint: 45%; }
 
 /* surfaces of a palette = the default surfaces' lightness + the palette's hue (same steps as the hex values above) */
 [data-palette][data-theme="dark"] {
@@ -160,12 +162,12 @@
 }
 
 [data-palette][data-theme="light"] {
-  --tint-c: calc(var(--tint-c-light) * var(--tint-k));
+  --tint-c: calc(var(--tint-c-light) * var(--tint-k-light));
   --bg-page: oklch(92.2% var(--tint-c) var(--tint-h));
-  --bg-panel: color-mix(in oklab, var(--bg-page) 8%, #ffffff);    /* near white: full chroma at L 100% would clip */
+  --bg-panel: color-mix(in oklab, var(--bg-page) var(--panel-tint), #ffffff);   /* near white: full chroma at L 100% would clip */
   --bg-panel-2: oklch(95.6% var(--tint-c) var(--tint-h));
   --bg-hover: oklch(92.8% var(--tint-c) var(--tint-h));
-  --bg-input: color-mix(in oklab, var(--bg-page) 5%, #ffffff);
+  --bg-input: color-mix(in oklab, var(--bg-page) calc(var(--panel-tint) * 0.6), #ffffff);
   --bg-sunken: oklch(96.7% var(--tint-c) var(--tint-h));
   --bg-well: oklch(89.7% var(--tint-c) var(--tint-h));
   --border: oklch(84.2% var(--tint-c) var(--tint-h));

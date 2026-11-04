@@ -96,6 +96,11 @@ label { display: block; font-size: 12px; color: var(--text-secondary); margin-bo
 .badge[data-status="queued"]     { color: var(--accent); background: var(--accent-soft); }
 .badge[data-status="processing"] { color: var(--accent); background: var(--accent-soft); }
 .badge[data-status="excluded"]   { color: var(--text-muted); opacity: 0.7; text-decoration: line-through; }
+/* work stages of a processed page (js/pagepicker.js) */
+.badge[data-status="ocr"]        { color: var(--warn); }
+.badge[data-status="translated"] { color: var(--warn); background: var(--warn-soft, color-mix(in srgb, var(--warn) 14%, transparent)); }
+.badge[data-status="reviewed"]   { color: var(--success); background: var(--success-soft); }
+.badge[data-status="exported"]   { color: var(--accent); background: var(--accent-soft); }
  
 /* Tooltip: title attribute styling is left to the browser default on
    purpose (zero JS, zero extra markup) - buttons that need one just get a

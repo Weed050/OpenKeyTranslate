@@ -164,6 +164,7 @@ DEFAULT_SETTINGS = {
     # OCR runtime (see core/ocr_runtime.py): replaces hand-editing services/ocr_pipeline.py to switch CPU <-> GPU.
     "ocr_device": "auto",          # auto | cpu | gpu
     "ocr_cpu_threads": 0,          # 0 = library default
+    "ocr_det_model": "auto",       # auto | server | mobile - text detection network (auto: server on GPU, mobile on CPU)
     "ocr_mkldnn": False,           # oneDNN acceleration (CPU only); off by default - it crashes on some Paddle/CPU combos
     "ocr_env_flags": {},           # extra env vars applied before paddle is imported, e.g. {"FLAGS_enable_pir_api": "0"}
     "models_dir": "",              # "" = library default caches; a folder = HuggingFace + PaddleX caches live inside it
@@ -195,6 +196,7 @@ DEFAULT_SETTINGS = {
     "typesetting_padding_ratio": 0.08,
     "typesetting_font": "",          # path to a .ttf/.otf with Polish letters; "" = Arial / DejaVu / Liberation if found
     "typesetting_uppercase": True,
+    "typesetting_shape_fit": True,     # oval bubbles: each line as wide as the bubble at its height (utils/typesetting.py)
 }
 
 

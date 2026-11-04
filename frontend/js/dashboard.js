@@ -57,6 +57,7 @@ function projectCard(p) {
                 <div class="dash-menu-list">
                     <button data-act="copy">Copy folder path</button>
                     <button data-act="open">Open folder</button>
+                    <button data-act="exported" title="project folder > exported">Open exported files</button>
                     <hr>
                     <button data-act="delete" class="danger">Delete project…</button>
                 </div>
@@ -84,6 +85,8 @@ function projectCard(p) {
             alert(`Couldn't open folder: ${err.message}`);
         }
     });
+    card.querySelector('[data-act="exported"]').addEventListener("click", () =>
+        api.projects.openExported(p.id).catch((err) => alert(`Couldn't open folder: ${err.message}`)));
     card.querySelector('[data-act="delete"]').addEventListener("click", async () => {
         if (!confirm(`Delete project "${p.name}"?\n\nThis removes its files on disk too (scans, cleaned pages, translations). It cannot be undone - consider Settings > Backup first.`)) return;
         try {

@@ -2,6 +2,40 @@
 
 All notable changes to OpenKeyTranslate. Versions follow `APP_VERSION` in `backend/core/config.py`.
 
+## [Unreleased]
+
+### Fixed
+- **OCR on a computer without a GPU**: the default detection model on the CPU is now "mobile" (`ocr_det_model`:
+  auto = server on the GPU, mobile on the CPU). Measured on a 1612 px page: server 979 s with Paddle 3.3 CPU and an
+  access violation with Paddle 3.0 CPU; mobile 19 s with both. The CPU flags of `ocr_runtime` are applied for every
+  CPU run (before: only when `ocr_device` was forced to "cpu").
+- **Lettering switch** uses the same rule as opening a page: not processed / not every bubble reviewed = it stays in
+  Translate and says why (before: the view switched and the bubbles disappeared).
+- **Outline**: grows with the text size (2 / 4 px only on small text); the panel explains that a white outline is
+  invisible in a white bubble.
+- Setup: one OpenCV package in the requirement files (both overwrote `cv2`), UTF-8 files, a new
+  `setup/pip_install_instruction.txt` (no more hand edits of `ocr_pipeline.py`).
+
+### Added
+- `backend/scripts/ocr_selftest.py`: OpenCV, Paddle, torch + Paddle and the OCR model step by step, each in its own
+  process - names the step that crashes and what to change; report in `logs/ocr_selftest.json`.
+- Native crashes are written to `logs/crash.log` (faulthandler); the next start shows a health warning.
+- Settings > **OCR engine**: device, detection model, CPU threads, oneDNN, what the running OCR uses, the last
+  self-test report.
+- Lettering: **shape fit** for oval bubbles (each line as wide as the bubble at its height; used only when the text
+  gets larger; `typesetting_shape_fit`, on by default) - 61 of 164 bubbles of chapter 1 got a larger size, none a
+  smaller one. **White letters** (black outline). **Style carries over** to the next bubbles (font, B / I, letters,
+  outline) and "Use on whole page".
+- Pages list: the **stage** of each page (no translation / AI draft / reviewed / exported, "export old") and a
+  stage bar per chapter; "← Projects"; **Exported files** (also in the project card menu); the export message opens
+  the folder / selects the file; "View export" in the editor.
+- **Translation history** (was "Logs"): date, chapter / page / bubble with an "Open" link into the editor, what the
+  bubble says now (diff against the AI text), filters (changed by you, not reviewed, chapter, search). The A/B columns
+  and the experiment summary are under "Research view". Logged fields unchanged (display only).
+
+### Changed
+- Light themes: their own tint factors (strong tints the panels too; before it was barely visible).
+
 ## [0.2.1] - 2026-11-03
 
 ### Added

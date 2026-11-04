@@ -26,7 +26,7 @@ window.addEventListener("DOMContentLoaded", () => {
 const dirtySections = new Set();
 const saveTimers = {};
 const SECTION_STATUS = {
-    translation: "translationStatus", memory: "memorySettingsStatus", ocr: "ocrOptionsStatus",
+    translation: "translationStatus", memory: "memorySettingsStatus", ocr: "ocrOptionsStatus", engine: "ocrEngineStatus",
     typesetting: "typesettingStatus", ignore: "ignorePatternsStatus",
 };
 // fields whose change saves their section (key rows of the translation section are wired in renderKeyRows)
@@ -38,7 +38,8 @@ const SECTION_FIELDS = {
              "glossaryPosteditCheckbox", "glossarySuggestCheckbox", "matchCaseCheckbox"],
     ocr: ["ocrTextfixCheckbox", "ocrSkipNumericCheckbox", "ocrSkipSymbolsCheckbox", "inpaintInteriorCheckbox",
           "ocrRefineCheckbox", "ocrScanCheckbox", "ocrDetectRotationCheckbox", "inpaintModeSelect", "bubbleOrderSelect"],
-    typesetting: ["typesettingFontInput", "typesettingUpperCheckbox"],
+    typesetting: ["typesettingFontInput", "typesettingUpperCheckbox", "typesettingShapeCheckbox"],
+    engine: ["ocrDeviceSelect", "ocrDetModelSelect", "ocrThreadsInput", "ocrMkldnnCheckbox"],
     ignore: ["ignorePatternsInput"],
 };
 
@@ -333,6 +334,12 @@ async function loadSettings() {
         document.getElementById("ocrDetectRotationCheckbox").checked = appSettings.ocr_detect_page_rotation === true;
         await initFonts(appSettings.typesetting_font || "");
         document.getElementById("typesettingUpperCheckbox").checked = appSettings.typesetting_uppercase !== false;
+        document.getElementById("typesettingShapeCheckbox").checked = appSettings.typesetting_shape_fit !== false;
+        document.getElementById("ocrDeviceSelect").value = appSettings.ocr_device || "auto";
+        document.getElementById("ocrDetModelSelect").value = appSettings.ocr_det_model || "auto";
+        document.getElementById("ocrThreadsInput").value = appSettings.ocr_cpu_threads || 0;
+        document.getElementById("ocrMkldnnCheckbox").checked = appSettings.ocr_mkldnn === true;
+        loadOcrRuntime();
         document.getElementById("inpaintModeSelect").value = appSettings.inpaint_mode || "glyph";
         document.getElementById("bubbleOrderSelect").value = appSettings.bubble_order || "ttb";
         Object.keys(SECTION_STATUS).forEach((section) => markClean(section));
@@ -874,6 +881,7 @@ async function saveTypesetting() {
         await api.settings.updateOcrOptions({
             typesetting_font: document.getElementById("typesettingFontInput").value.trim(),
             typesetting_uppercase: document.getElementById("typesettingUpperCheckbox").checked,
+            typesetting_shape_fit: document.getElementById("typesettingShapeCheckbox").checked,
         });
         markClean("typesetting", `${savedNow()} - the next preview / export uses it.`);
         return true;
@@ -883,8 +891,54 @@ async function saveTypesetting() {
     }
 }
 
+/* ----------------------- OCR engine (core/ocr_runtime.py) ----------------------- */
+
+document.getElementById("saveOcrEngineBtn")?.addEventListener("click", () => saveOcrEngine());
+
+async function saveOcrEngine() {
+    try {
+        const result = await api.settings.updateOcrEngine({
+            ocr_device: document.getElementById("ocrDeviceSelect").value,
+            ocr_det_model: document.getElementById("ocrDetModelSelect").value,
+            ocr_cpu_threads: document.getElementById("ocrThreadsInput").value.trim() || 0,
+            ocr_mkldnn: document.getElementById("ocrMkldnnCheckbox").checked,
+        });
+        markClean("engine", `${savedNow()} - ${result.message}`);
+        return true;
+    } catch (e) {
+        sectionStatus("engine", `Not saved: ${e.message}`);
+        return false;
+    }
+}
+
+const escapeHtml = (text) => String(text ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+/** What the running OCR uses + the last self-test report. */
+async function loadOcrRuntime() {
+    const now = document.getElementById("ocrRuntimeNow");
+    const box = document.getElementById("ocrSelftestReport");
+    let info;
+    try {
+        info = await api.system.ocrRuntime();
+    } catch (e) {
+        now.textContent = `Couldn't ask the backend: ${e.message}`;
+        return;
+    }
+    const rt = info.runtime;
+    now.innerHTML = rt
+        ? `Now: <b>${escapeHtml(rt.device.toUpperCase())}</b> (${escapeHtml(rt.reason)}), detection <b>${escapeHtml(rt.det_model)}</b>,
+           oneDNN ${rt.mkldnn ? "on" : "off"}, threads ${rt.threads || "automatic"} - ${escapeHtml(info.paddle)}`
+        : `The OCR is not loaded in this run yet - ${escapeHtml(info.paddle)}`;
+    const r = info.selftest;
+    if (!r) return;
+    const mark = (s) => (s.ok ? "OK" : s.crash ? "CRASH" : "FAILED");
+    box.innerHTML = `${escapeHtml(r.time || "")} - ${escapeHtml(r.cpu || "")}, RAM ${r.ram_total_gb ?? "?"} GB<br>`
+        + (r.steps || []).map((s) => `${escapeHtml(s.step)}: <b>${mark(s)}</b> (${s.seconds}s${s.peak_mb ? `, ${s.peak_mb} MB` : ""})`).join(" &middot; ")
+        + ((r.advice || []).length ? `<ul style="margin:6px 0 0 18px; padding:0;">${r.advice.map((a) => `<li>${escapeHtml(a)}</li>`).join("")}</ul>` : "");
+}
+
 // section -> save function (autosave calls them with {auto: true}; the Save buttons without arguments)
 const SAVERS = {
-    translation: saveTranslation, memory: saveMemorySettings, ocr: saveOcrOptions,
+    translation: saveTranslation, memory: saveMemorySettings, ocr: saveOcrOptions, engine: saveOcrEngine,
     typesetting: saveTypesetting, ignore: saveIgnorePatterns,
 };

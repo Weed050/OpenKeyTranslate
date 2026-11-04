@@ -138,6 +138,44 @@ def page_reviewed(json_path: str) -> bool:
     return done
 
 
+_STAGE_CACHE: dict[str, tuple[float, dict]] = {}
+
+
+def page_stage(json_path: str) -> dict:
+    """
+    Where a PROCESSED page is in the work: {"stage", "bubbles", "reviewed"} - bubbles = the ones to translate (not
+    skipped; automatic skips such as page numbers do not count), reviewed = how many of them the user accepted or edited.
+      "ocr"         a bubble to translate has no translation (translation failed, or a prefetched page not opened yet)
+      "translated"  every bubble has the AI draft, not all are reviewed
+      "reviewed"    every bubble is reviewed (bubble_reviewed: edited, or accepted unchanged = moved on in the editor)
+    A page with nothing to translate is "reviewed". Cached by file mtime (the chapter list asks for every page).
+    """
+    try:
+        mtime = os.path.getmtime(json_path)
+    except OSError:
+        return {"stage": "ocr", "bubbles": 0, "reviewed": 0}
+    hit = _STAGE_CACHE.get(json_path)
+    if hit and hit[0] == mtime:
+        return hit[1]
+    try:
+        todo = [b for b in load_page_json(json_path).get("bubbles", []) if not b.get("skip")]
+    except Exception:
+        todo = None
+    if todo is None:
+        out = {"stage": "ocr", "bubbles": 0, "reviewed": 0}
+    else:
+        done = sum(1 for b in todo if bubble_reviewed(b))
+        if done == len(todo):
+            stage = "reviewed"
+        elif any(not (b.get("translation") or "").strip() for b in todo):
+            stage = "ocr"
+        else:
+            stage = "translated"
+        out = {"stage": stage, "bubbles": len(todo), "reviewed": done}
+    _STAGE_CACHE[json_path] = (mtime, out)
+    return out
+
+
 def page_paths(page) -> dict:
     """
     Resolve the on-disk raw/JSON/inpainted-image paths for a Page ORM row.

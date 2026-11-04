@@ -70,7 +70,7 @@ def page_layout(paths: dict, ocr_data: dict | None = None) -> list[dict]:
     clean, original = _images(paths)
     return [{"bubble_id": p["bubble_id"], "box": list(p["box"]), "manual_box": p["manual_box"], "manual_size": p["manual_size"],
              "font_size": p["size"], "angle": p["angle"], "manual_angle": p["manual_angle"], "align": p["align"], "stroke": p["stroke"],
-             "valign": p["valign"], "font": p["font_name"], "bold": p["bold"], "italic": p["italic"],
+             "valign": p["valign"], "font": p["font_name"], "bold": p["bold"], "italic": p["italic"], "color": p["color"],
              "overflow": p["overflow"], "lines": len(p["lines"])}
             for p in plan_page(clean, original, _drawable(ocr_data))]
 

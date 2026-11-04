@@ -72,6 +72,28 @@ async def list_pages(project_id: int, include_excluded: bool = False, db: Sessio
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
 
+    from services.page_export import page_stage
+    from services.render_service import default_export_root
+
+    def progress(page, chapter) -> dict:
+        """The work stage of a processed page (services/page_export.page_stage) + whether its export is up to date."""
+        if page.status != "processed":
+            return {"stage": page.status}
+        paths = page_paths(page)
+        info = dict(page_stage(paths["json"]))
+        stem = os.path.splitext(page.file_name)[0]
+        folder = os.path.join(default_export_root(project), chapter.number)
+        exported = [os.path.getmtime(f) for f in (os.path.join(folder, f"{stem}.{ext}") for ext in ("png", "jpg"))
+                    if os.path.exists(f)]
+        if exported:
+            try:                       # changed after the export (a fix, Lettering): the exported file is outdated
+                info["export"] = "current" if max(exported) >= os.path.getmtime(paths["json"]) else "outdated"
+            except OSError:
+                info["export"] = "current"
+            if info["stage"] == "reviewed" and info["export"] == "current":
+                info["stage"] = "exported"
+        return info
+
     return [
         {
             "page_id": page.id,
@@ -81,6 +103,7 @@ async def list_pages(project_id: int, include_excluded: bool = False, db: Sessio
             "order": page.order,
             "status": page.status,
             "error": LAST_ERRORS.get(page.id) if page.status == "failed" else None,
+            **progress(page, chapter),
         }
         for chapter in project.chapters
         for page in chapter.pages
@@ -228,6 +251,24 @@ def export_page(page_id: int, payload: dict | None = Body(default=None), db: Ses
     except (ImageLoadError, ValueError) as e:
         raise HTTPException(status_code=422, detail=str(e))
     return {"files": files, "folder": os.path.dirname(files[0]) if files else None}
+
+
+@router.get("/{page_id}/exported")
+def exported_file(page_id: int, db: Session = Depends(get_db)):
+    """The page's last export (<project>/exported/<chapter>/<page>.png|jpg) as an image - "View export" in the editor."""
+    from fastapi.responses import FileResponse
+    from services.render_service import default_export_root
+    page = db.query(Page).filter(Page.id == page_id).first()
+    if not page:
+        raise HTTPException(status_code=404, detail="Page not found")
+    folder = os.path.join(default_export_root(page.chapter.project), page.chapter.number)
+    stem = os.path.splitext(page.file_name)[0]
+    found = [f for f in (os.path.join(folder, f"{stem}.{ext}") for ext in ("png", "jpg")) if os.path.exists(f)]
+    if not found:
+        raise HTTPException(status_code=404, detail="This page has not been exported yet")
+    newest = max(found, key=os.path.getmtime)
+    return FileResponse(newest, media_type="image/png" if newest.endswith(".png") else "image/jpeg",
+                        headers={"Cache-Control": "no-store"})
 
 
 @router.delete("/{page_id}/bubbles/{bubble_id}")

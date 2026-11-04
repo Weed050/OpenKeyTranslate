@@ -81,7 +81,7 @@ export async function renderSidebar(currentProjectId) {
             projectLinksEl.classList.remove("hidden");
             projectLinksEl.innerHTML = `
                 <a class="sidebar-link" href="memory.html?project=${currentProjectId}">Memory</a>
-                <a class="sidebar-link" href="logs.html?project=${currentProjectId}">Logs</a>
+                <a class="sidebar-link" href="logs.html?project=${currentProjectId}" title="What the AI translated, where and with which hints">History</a>
             `;
         } else {
             projectLinksEl.classList.add("hidden");

@@ -70,6 +70,27 @@ async def open_path(payload: OpenPathRequest):
     return {"message": "Opened"}
 
 
+@router.get("/ocr-runtime")
+async def ocr_runtime_info():
+    """
+    What the OCR of THIS run uses (device, detection model, oneDNN, threads, Paddle build) and the last report of
+    scripts/ocr_selftest.py (logs/ocr_selftest.json) - Settings > OCR engine.
+    """
+    import json
+    from core.config import APP_ROOT_DIR
+    from core.ocr_runtime import RUNTIME, installed_paddle
+    report = None
+    path = os.path.join(APP_ROOT_DIR, "logs", "ocr_selftest.json")
+    try:
+        with open(path, encoding="utf-8") as f:
+            report = json.load(f)
+    except (OSError, ValueError):
+        pass
+    loaded = RUNTIME.get("device") is not None
+    return {"loaded": loaded, "runtime": dict(RUNTIME) if loaded else None, "paddle": "%s %s" % installed_paddle(),
+            "selftest": report}
+
+
 @router.get("/health")
 async def health():
     """Config/connectivity self-check (see core/startup_checks.py) - the frontend shows a banner for error/warn."""

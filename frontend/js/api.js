@@ -39,6 +39,7 @@ export const api = {
     projects: {
         list: () => request("/projects/"),
         progress: (projectId) => request(`/projects/${projectId}/progress`),   // {total, processed, reviewed}
+        openExported: (projectId) => request(`/projects/${projectId}/open-exported`, { method: "POST" }),
         selectFolder: () => request("/projects/select-folder"),
         import: (path, projectName) =>
             request("/projects/import", { method: "POST", body: JSON.stringify({ path, projectName }) }),
@@ -65,6 +66,7 @@ export const api = {
         updateTranslation: (payload) => request("/settings/translation", { method: "POST", body: JSON.stringify(payload) }),
         testTranslation: () => request("/settings/test-translation", { method: "POST" }),
         updateOcrOptions: (payload) => request("/settings/ocr-options", { method: "POST", body: JSON.stringify(payload) }),
+        updateOcrEngine: (payload) => request("/settings/ocr-engine", { method: "POST", body: JSON.stringify(payload) }),
     },
  
     pages: {
@@ -122,6 +124,7 @@ export const api = {
  
     system: {
         health: () => request("/system/health"),
+        ocrRuntime: () => request("/system/ocr-runtime"),
         openPath: (path) => request("/system/open-path", { method: "POST", body: JSON.stringify({ path }) }),
         tailLog: (lines = 200, errorsOnly = false) =>
             request(`/system/tail-log?lines=${lines}&errors_only=${errorsOnly}`),

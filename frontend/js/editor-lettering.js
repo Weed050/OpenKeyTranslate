@@ -13,7 +13,7 @@
  * editor.js wires its own functions in through initLettering().
  */
 
-import { api } from "./api.js";
+import { api, API_BASE } from "./api.js";
 import { pageId, state, el, escapeHtml, showToast } from "./editor-shared.js";
 
 const MODE_KEY = "okt-editor-mode";
@@ -35,9 +35,37 @@ export function isLettering() {
 
 /* ------------------------------------------------------------------ mode */
 
+/**
+ * Why Lettering can not be opened on this page right now, or null. ONE rule for the switch, the shortcut and a page
+ * load: the page must be processed and every bubble that is not skipped must be reviewed (accepted or edited) -
+ * Lettering places the final text, so an unreviewed bubble would be typeset with a draft (or with nothing).
+ */
+export function letteringBlocker() {
+    if (document.getElementById("editorLayout")?.classList.contains("hidden")) return { message: "This page is not processed yet." };
+    const open = state.bubbles.filter((b) => !b.skip && !hooks.status(b));
+    if (!open.length) return null;
+    const untranslated = open.filter((b) => !(b.translation || "").trim()).length;
+    const n = open.length;
+    return {
+        message: `${n} bubble${n > 1 ? "s" : ""} not reviewed yet${untranslated ? ` (${untranslated} without a translation)` : ""} - accept or edit ${n > 1 ? "them" : "it"} first.`,
+        first: state.bubbles.indexOf(open[0]),
+    };
+}
+
 export async function setMode(mode, { quiet = false } = {}) {
     if (mode === state.mode) return;
-    if (mode === "lettering" && !(await hooks.saveIfChanged())) return;
+    if (mode === "lettering") {
+        const blocked = letteringBlocker();
+        if (blocked) {
+            // stay in Translate (the view does not change); offer a jump to the first bubble that needs the review
+            showToast(`Lettering: ${blocked.message}`, 5000, blocked.first >= 0 && blocked.first !== undefined
+                ? { label: "Show it", run: () => hooks.select(blocked.first) } : null);
+            renderModeBar();
+            return;
+        }
+        if (!(await hooks.saveIfChanged())) return;
+        if (letteringBlocker()) return setMode(mode, { quiet });   // the save changed a status: show the message
+    }
     state.mode = mode;
     try { localStorage.setItem(MODE_KEY, mode); } catch { /* this page only */ }
     await enterCurrentMode();
@@ -69,12 +97,12 @@ export async function enterCurrentMode() {
 /** Lettering mode on a page that is not fully reviewed: back to Translate (called after a page is loaded). */
 export async function checkReviewedOnLoad() {
     if (!isLettering()) return enterCurrentMode();
-    const open = state.bubbles.filter((b) => !b.skip && !hooks.status(b)).length;
-    if (open) {
+    const blocked = letteringBlocker();
+    if (blocked) {
         state.mode = "translate";
         try { localStorage.setItem(MODE_KEY, "translate"); } catch { /* ignore */ }
         await enterCurrentMode();
-        showToast(`${open} bubble${open > 1 ? "s" : ""} on this page not reviewed yet - switched to Translate`, 4000);
+        showToast(`Switched to Translate: ${blocked.message}`, 5000);
         return;
     }
     await enterCurrentMode();
@@ -111,6 +139,7 @@ export function renderModeBar() {
     bar.innerHTML = `
         <button type="button" id="exportPageBtn" title="Write this page into the project's exported folder (${what}, ${opts.format.toUpperCase()}) - the options are those of the last export on the project page${exportKey ? ` (${exportKey})` : ""}">Export page</button>
         ${isLettering() ? '<span class="text-muted mode-hint">Drag a box to move it, corners resize (Alt: evenly from the centre), the knob turns it</span>' : ""}
+        <a class="btn" id="viewExportBtn" href="${API_BASE}/pages/${pageId}/exported" target="_blank" rel="noopener" title="Open the last exported image of this page in a new tab">View export</a>
         <span class="mode-bar-spacer"></span>
         ${toggleKey ? `<span class="text-muted mode-hint"><kbd>${escapeHtml(toggleKey)}</kbd> switches</span>` : ""}
         <div class="segmented mode-switch" role="radiogroup" aria-label="Editor mode" title="Switch the editor mode${toggleKey ? ` (${toggleKey})` : ""}">
@@ -126,7 +155,10 @@ export async function exportPage() {
     const opts = exportOptions();
     try {
         const r = await api.pages.exportPage(pageId, opts);
-        showToast(`Exported to ${r.folder}`, 5000);
+        // the file is selected in Explorer: the exported folder lives in the project folder (AppData by default)
+        showToast(`Exported: ${(r.files || []).map((f) => f.split(/[\\/]/).pop()).join(", ")}`, 7000,
+                  r.files?.length ? { label: "Show file", run: () => api.system.openPath(r.files[0]).catch((e) => showToast(e.message, 4000)) } : null);
+        renderModeBar();
     } catch (e) {
         showToast(`Export failed: ${e.message}`, 6000);
     }
@@ -231,9 +263,70 @@ function startDrag(e, bubbleId, node, scale) {
 
 /* ------------------------------------------------------------------ changes */
 
-export async function patchLayout(bubbleId, changes) {
+/* ------------------------------------------------------------------ style that carries over to the next bubbles */
+
+// font, B / I, outline and colour chosen on one bubble go with the user to the next ones (a series uses one font);
+// the area, size, alignment and angle belong to each bubble and never carry over.
+const STYLE_DEFAULTS = { font: null, bold: false, italic: false, stroke: "none", color: "black" };
+const CARRY_KEY = "okt-letter-carry";
+const carriedTo = new Set();         // bubbles already given the carried style in this visit (not again after a Reset)
+
+const styleKey = () => `okt-letter-style-${state.projectId || "x"}`;
+
+function carryOn() {
+    try { return localStorage.getItem(CARRY_KEY) !== "0"; } catch { return true; }
+}
+
+function lastStyle() {
+    try { return JSON.parse(localStorage.getItem(styleKey()) || "null"); } catch { return null; }
+}
+
+/** The style of a bubble's placement (GET layout) - every key, defaults included. */
+function styleOfPlacement(p) {
+    return { font: p.font || null, bold: !!p.bold, italic: !!p.italic, stroke: p.stroke || "none", color: p.color || "black" };
+}
+
+const isDefaultStyle = (st) => Object.keys(STYLE_DEFAULTS).every((k) => (st[k] ?? STYLE_DEFAULTS[k]) === STYLE_DEFAULTS[k]);
+const ownStyle = (bubble) => Object.keys(STYLE_DEFAULTS).some((k) => bubble.layout && k in bubble.layout);
+
+/** A bubble shown for the first time, with no style of its own: give it the last style the user chose. */
+async function carryStyle(b) {
+    if (carriedTo.has(b.bubble_id)) return;
+    carriedTo.add(b.bubble_id);
+    const st = lastStyle();
+    if (!carryOn() || !st || isDefaultStyle(st) || ownStyle(b) || b.skip) return;
+    await patchLayout(b.bubble_id, st, { remember: false });
+    const what = [st.font || "default font", st.bold && "bold", st.italic && "italic", st.stroke !== "none" && `${st.stroke} outline`,
+                  st.color === "white" && "white letters"].filter(Boolean).join(", ");
+    showToast(`Style carried over: ${what}`, 4000, { label: "Undo", run: () => patchLayout(b.bubble_id, { ...STYLE_DEFAULTS }, { remember: false }) });
+}
+
+/** This bubble's style on every other translated bubble of the page. */
+async function styleToPage(b) {
+    const st = styleOfPlacement(state.layout[b.bubble_id]);
+    const others = state.bubbles.filter((x) => x !== b && !x.skip && state.layout[x.bubble_id]);
+    if (!others.length) return;
+    try {
+        for (const x of others) {
+            const r = await api.pages.setLayout(pageId, x.bubble_id, st);
+            if (Object.keys(r.layout).length) x.layout = r.layout; else delete x.layout;
+            if (r.placement) state.layout[x.bubble_id] = r.placement;
+            carriedTo.add(x.bubble_id);
+        }
+        showToast(`Style used on ${others.length} more bubble${others.length > 1 ? "s" : ""}`, 2500);
+    } catch (e) {
+        showToast(`Lettering: ${e.message}`, 5000);
+    }
+    hooks.refreshImage();
+    hooks.rerender();
+}
+
+export async function patchLayout(bubbleId, changes, { remember = true } = {}) {
     try {
         const r = await api.pages.setLayout(pageId, bubbleId, changes);
+        if (remember && r.placement && Object.keys(changes).some((k) => k in STYLE_DEFAULTS)) {
+            try { localStorage.setItem(styleKey(), JSON.stringify(styleOfPlacement(r.placement))); } catch { /* this page only */ }
+        }
         const bubble = state.bubbles.find((b) => b.bubble_id === bubbleId);
         if (bubble) {
             if (Object.keys(r.layout).length) bubble.layout = r.layout;
@@ -328,6 +421,9 @@ export function renderLetteringPanel() {
         wireNav(panel);
         return;
     }
+    if (!carriedTo.has(b.bubble_id)) {
+        carryStyle(b);               // re-renders the panel when it changes something
+    }
     const seg = (name, options, current) => `<div class="segmented" data-field="${name}">${options.map(([v, label, title]) =>
         `<button type="button" data-value="${v}" class="${String(v) === String(current) ? "selected" : ""}" title="${title || label}">${label}</button>`).join("")}</div>`;
     panel.innerHTML = `
@@ -362,7 +458,14 @@ export function renderLetteringPanel() {
                     ${p.angle ? '<button type="button" data-act="rotZero">0°</button>' : ""}
                     ${p.angle && !p.manual_angle ? '<span class="text-muted" title="The original text is tilted - the translation follows it">auto</span>' : ""}
                 </span></div>
-            <div class="lettering-row"><span>Outline</span>${seg("stroke", [["none", "None"], ["thin", "Thin", "Thin white outline - text over artwork"], ["thick", "Thick", "Thick white outline"]], p.stroke)}</div>
+            <div class="lettering-row"><span>Letters</span>${seg("color", [["black", "Black", "Black letters (outline: white)"], ["white", "White", "White letters (outline: black) - text on dark artwork"]], p.color || "black")}</div>
+            <div class="lettering-row"><span>Outline</span>${seg("stroke", [["none", "None"], ["thin", "Thin", "Thin outline in the other colour"], ["thick", "Thick", "Thick outline in the other colour"]], p.stroke)}</div>
+            ${p.stroke !== "none" && (p.color || "black") === "black" ? '<p class="text-muted lettering-note">The outline is white: in a white bubble it is invisible - it shows where the text lies over artwork.</p>' : ""}
+            <div class="lettering-row lettering-style-row">
+                <label class="checkbox-label" title="Font, bold / italic, letters and outline chosen here are given to the next bubbles you open (that have no style of their own)">
+                    <input type="checkbox" id="letterCarry" ${carryOn() ? "checked" : ""}> Next bubbles get this style</label>
+                <button type="button" data-act="styleToPage" title="Font, bold / italic, letters and outline of this bubble on every bubble of this page">Use on whole page</button>
+            </div>
             <div class="detail-actions detail-bottom">
                 <button type="button" data-act="fit" title="Text area = the inside of the bubble, centred both ways, largest size that fits (font, outline and angle stay)">Fit to bubble</button>
                 <button type="button" data-act="reset" title="Everything of this bubble back to automatic">Reset bubble</button>
@@ -384,6 +487,13 @@ export function renderLetteringPanel() {
     act("fit", () => patchLayout(id, { box: null, font_size: null, align: "center", valign: "middle" }));
     act("bold", () => patchLayout(id, { bold: !p.bold }));
     act("italic", () => patchLayout(id, { italic: !p.italic }));
+    act("styleToPage", () => styleToPage(b));
+    panel.querySelector("#letterCarry").addEventListener("change", (e) => {
+        try { localStorage.setItem(CARRY_KEY, e.target.checked ? "1" : "0"); } catch { /* this page only */ }
+        if (e.target.checked) {      // what is on this bubble now is what carries over
+            try { localStorage.setItem(styleKey(), JSON.stringify(styleOfPlacement(p))); } catch { /* ignore */ }
+        }
+    });
     panel.querySelector("#letterFont").addEventListener("change", (e) => {
         rememberFont(e.target.value);
         patchLayout(id, { font: e.target.value || null });

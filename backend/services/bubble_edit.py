@@ -497,6 +497,7 @@ def bubble_text_rect(ocr_data: dict, bubble: dict) -> list | None:
 LAYOUT_ALIGNS = ("center", "left", "right")
 LAYOUT_VALIGNS = ("middle", "top", "bottom")
 LAYOUT_STROKES = ("none", "thin", "thick")
+LAYOUT_COLORS = ("black", "white")
 
 
 def set_layout(ocr_data: dict, bubble_id: str, changes: dict) -> dict:
@@ -506,7 +507,8 @@ def set_layout(ocr_data: dict, bubble_id: str, changes: dict) -> dict:
       font_size  px; null = automatic (largest size that fits)
       angle      degrees clockwise, -180..180
       align      center | left | right
-      stroke     none | thin | thick (white outline, for text over artwork)
+      stroke     none | thin | thick (outline in the other colour than the letters, for text over artwork)
+      color      black | white (the letters)
       valign     middle | top | bottom
       font       font family name (services/font_service.py); null = the default font (Settings)
       bold / italic  true / false (imitated when the family has no such file)
@@ -562,7 +564,7 @@ def set_layout(ocr_data: dict, bubble_id: str, changes: dict) -> dict:
             else:
                 layout.pop(key, None)
     for key, allowed, default in (("align", LAYOUT_ALIGNS, "center"), ("stroke", LAYOUT_STROKES, "none"),
-                                  ("valign", LAYOUT_VALIGNS, "middle")):
+                                  ("valign", LAYOUT_VALIGNS, "middle"), ("color", LAYOUT_COLORS, "black")):
         if key in changes:
             if changes[key] not in allowed:
                 raise BubbleEditError(f"{key} must be one of {', '.join(allowed)}", 400)

@@ -24,7 +24,7 @@ import cv2
 import numpy as np
 import os
 from core.config import TYPESETTING_PADDING_RATIO, get_setting
-from utils.bubble_interior import detect_bubble_interior   # one shared flood-fill implementation (also used by inpainting)
+from utils.bubble_interior import find_interior   # one shared flood-fill implementation (also used by inpainting)
 import pyphen
 
 
@@ -168,12 +168,60 @@ def auto_text_area(image_original: np.ndarray, b: dict, img_w: int, img_h: int, 
     flood fill, 10 % in from its edges, or - without an interior - the OCR box grown a little; then the uniform
     TYPESETTING_PADDING_RATIO margin and clamping to the canvas. (x1, y1, x2, y2) or None (mostly outside the page).
     """
+    return auto_text_shape(image_original, b, img_w, img_h, to_original_coords)[0]
+
+
+SHAPE_MARGIN = 0.07         # shape fit: letters keep this share of the bubble's smaller side away from the outline
+SHAPE_MIN_SIZE = 11         # below this the shape fit gives up and the rectangle (with syllable splitting) is used
+
+
+def _shape_rows(interior, margin_px: int):
+    """
+    Per image row of the bubble: the widest run of inside pixels after shrinking the inside by margin_px -
+    (y0, lefts, rights) in image coordinates, or None. An oval gives short rows at the top and bottom, long ones in
+    the middle: the text can be as wide as the bubble where the bubble is wide.
+    """
+    hull = interior.hull
+    if margin_px > 0:
+        k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * margin_px + 1, 2 * margin_px + 1))
+        hull = cv2.erode(hull, k)
+    inside = hull > 0
+    rows = np.flatnonzero(inside.any(axis=1))
+    if len(rows) < 10:
+        return None
+    lefts, rights = [], []
+    for r in range(rows[0], rows[-1] + 1):
+        line = np.concatenate(([False], inside[r], [False]))
+        edges = np.flatnonzero(np.diff(line.astype(np.int8)))
+        starts, ends = edges[::2], edges[1::2]
+        if not len(starts):
+            lefts.append(0)
+            rights.append(0)
+            continue
+        i = int(np.argmax(ends - starts))
+        lefts.append(int(starts[i]))
+        rights.append(int(ends[i]))
+    ox, oy = interior.origin
+    return oy + int(rows[0]), np.array(lefts) + ox, np.array(rights) + ox
+
+
+def auto_text_shape(image_original: np.ndarray, b: dict, img_w: int, img_h: int, to_original_coords=lambda box: box):
+    """auto_text_area() plus the bubble's shape: (area, shape). shape = (y0, lefts, rights) per row (see _shape_rows) or
+    None (no interior found - the OCR box is used)."""
     orig_box = to_original_coords(b["box_coords"])
     xs = [p[0] for p in orig_box]
     ys = [p[1] for p in orig_box]
     cx, cy = int(sum(xs) / len(xs)), int(sum(ys) / len(ys))
     ocr_bbox = (int(min(xs)), int(min(ys)), int(max(xs)), int(max(ys)))
-    mask, bbox = detect_bubble_interior(image_original, (cx, cy), ocr_bbox)
+    why: list = []
+    interior = find_interior(image_original, (cx, cy), ocr_bbox, why=why)
+    if interior is None:
+        print(f"[BUBBLE GUARD] {why[0] if why else 'rejected'} - falling back to the OCR bounding box.")
+        bbox, shape = None, None
+    else:
+        bbox = interior.bbox
+        side = min(bbox[2] - bbox[0], bbox[3] - bbox[1])
+        shape = _shape_rows(interior, max(3, int(side * SHAPE_MARGIN)))
 
     if bbox:
         bx1, by1, bx2, by2 = bbox
@@ -195,7 +243,55 @@ def auto_text_area(image_original: np.ndarray, b: dict, img_w: int, img_h: int, 
     clamped = _clamp_bbox(x1 + pad_x, y1 + pad_y, x2 - pad_x, y2 - pad_y, img_w, img_h)
     if clamped is None:
         print(f"[BUBBLE CLAMP FAIL] bubble_id={b.get('bubble_id')}: text area is mostly outside the canvas - not drawn")
-    return clamped
+    return clamped, shape
+
+
+def fit_text_shape(text: str, font_path: str, shape) -> dict | None:
+    """
+    Like fit_text, but every line gets the width the bubble has at that line's height (shape from _shape_rows), the
+    block centred vertically in the shape - the classic lettering of an oval bubble: short lines at the top and the
+    bottom, long ones in the middle. The largest size from 40 px down where the words fit WITHOUT splitting a word;
+    None when nothing fits down to SHAPE_MIN_SIZE (the caller keeps the rectangle). Extra keys: "box" (the shape's
+    bounding box), "slots" [(dx, width)] per line and "top" (dy of the first line), both relative to "box".
+    """
+    words = text.split()
+    if not words:
+        return None
+    y0, lefts, rights = shape
+    widths = rights - lefts
+    used = np.flatnonzero(widths > 0)
+    if len(used) < 10:
+        return None
+    H = int(used[-1]) + 1
+    box = (int(lefts[used].min()), y0, int(rights[used].max()), y0 + H)
+    for size in range(40, SHAPE_MIN_SIZE - 1, -2):
+        font = _load_font(font_path, size)
+        word_w = [font.getbbox(w)[2] - font.getbbox(w)[0] for w in words]
+        line_h, gap, _ = _block_metrics(font, size, 1)
+        max_n = (H + gap) // (line_h + gap)
+        for n in range(1, min(max_n, len(words)) + 1):
+            total = n * line_h + (n - 1) * gap
+            top = (H - total) // 2
+            slots = []
+            for i in range(n):
+                r1 = top + i * (line_h + gap)
+                lo, hi = int(lefts[r1:r1 + line_h].max()), int(rights[r1:r1 + line_h].min())
+                slots.append((lo, max(0, hi - lo)))
+            lines, k = [], 0
+            for lo, w in slots:
+                cur = []
+                while k < len(words):
+                    test = " ".join(cur + [words[k]])
+                    tw = font.getbbox(test)[2] - font.getbbox(test)[0] if cur else word_w[k]
+                    if tw > w:
+                        break
+                    cur.append(words[k])
+                    k += 1
+                lines.append(" ".join(cur))
+            if k == len(words) and all(lines):
+                return {"lines": lines, "font": font, "line_h": line_h, "gap": gap, "total_h": total, "size": size,
+                        "overflow": False, "box": box, "slots": [(lo - box[0], w) for lo, w in slots], "top": top}
+    return None
 
 
 def _load_font(font_path: str, size: int):
@@ -271,7 +367,18 @@ def fit_text(text: str, font_path: str, target_w: int, target_h: int, font_size:
 
 ALIGNS = ("center", "left", "right")
 VALIGNS = ("middle", "top", "bottom")
-STROKE_WIDTHS = {"none": 0, "thin": 2, "thick": 4}     # white outline around the letters (text over artwork)
+STROKE_WIDTHS = {"none": 0, "thin": 2, "thick": 4}     # outline around the letters (text over artwork), at 24 px text
+STROKE_PER_PX = {"none": 0, "thin": 0.08, "thick": 0.16}   # ... and growing with the text: thick = 1/6 of the size
+TEXT_COLORS = ("black", "white")                       # the letters; the outline is always the other colour
+_RGB = {"black": (0, 0, 0), "white": (255, 255, 255)}
+
+
+def stroke_width(stroke: str, size: int) -> int:
+    """Outline width in px for this text size: the old fixed 2 / 4 px at small sizes, proportional above (a 4 px outline
+    on 40 px letters was hard to see)."""
+    if not STROKE_WIDTHS.get(stroke):
+        return 0
+    return max(STROKE_WIDTHS[stroke], round(size * STROKE_PER_PX[stroke]))
 
 
 def _clean_layout(layout) -> dict:
@@ -301,6 +408,7 @@ def _clean_layout(layout) -> dict:
     out["align"] = layout.get("align") if layout.get("align") in ALIGNS else "center"
     out["stroke"] = layout.get("stroke") if layout.get("stroke") in STROKE_WIDTHS else "none"
     out["valign"] = layout.get("valign") if layout.get("valign") in VALIGNS else "middle"
+    out["color"] = layout.get("color") if layout.get("color") in TEXT_COLORS else "black"
     if isinstance(layout.get("font"), str) and layout["font"].strip():
         out["font"] = layout["font"].strip()
     out["bold"] = layout.get("bold") is True
@@ -334,7 +442,7 @@ def _font_for(layout: dict, default_path: str) -> tuple[str, bool, bool, str | N
 
 
 def plan_bubble(image_original: np.ndarray, b: dict, img_w: int, img_h: int, font_path: str,
-                to_original_coords=lambda box: box, auto_area=None) -> dict | None:
+                to_original_coords=lambda box: box, auto_area=None, auto_shape=None) -> dict | None:
     """
     Everything needed to draw one bubble's text: area, lines, font, alignment, angle, outline. The area is the user's
     Lettering box when there is one (b["layout"]["box"]), else auto_text_area(). None = nothing to draw.
@@ -344,19 +452,28 @@ def plan_bubble(image_original: np.ndarray, b: dict, img_w: int, img_h: int, fon
         text = text.upper()          # manga lettering is upper case; switch off for sentence-case lettering
     layout = _clean_layout(b.get("layout"))
     tilt = b.get("text_rect")                       # tilted original text (map label): [cx, cy, w, h, angle]
+    shape = None
     if "box" in layout:
         area = _clamp_bbox(*layout["box"], img_w, img_h, min_size=8)
     elif auto_area is not None:
-        area = auto_area
+        area, shape = auto_area, auto_shape
     elif tilt:
         area = tilted_area(tilt, img_w, img_h)
     else:
-        area = auto_text_area(image_original, b, img_w, img_h, to_original_coords)
+        area, shape = auto_text_shape(image_original, b, img_w, img_h, to_original_coords)
     if area is None:
         return None
     x1, y1, x2, y2 = area
     font_path, fake_bold, fake_italic, family = _font_for(layout, font_path)
     fit = fit_text(text, font_path, x2 - x1, y2 - y1, layout.get("font_size"))
+    # oval bubble: lines as wide as the bubble at their height - used only when the size is automatic, the text is
+    # level and centred vertically, and the result is LARGER than the rectangle's (never a smaller text)
+    if (shape is not None and fit is not None and get_setting("typesetting_shape_fit", True)
+            and "font_size" not in layout and not layout.get("angle") and layout.get("valign", "middle") == "middle"):
+        shaped = fit_text_shape(text, font_path, shape)
+        if shaped and (fit["overflow"] or shaped["size"] > fit["size"]):
+            fit, area = shaped, (_clamp_bbox(*shaped["box"], img_w, img_h, min_size=8) or area)
+            x1, y1, x2, y2 = area
     if fit is None:
         print(f"[BUBBLE SKIP] bubble_id={b.get('bubble_id')}: area too small ({x2 - x1}x{y2 - y1}px) - text not drawn")
         return None
@@ -366,8 +483,9 @@ def plan_bubble(image_original: np.ndarray, b: dict, img_w: int, img_h: int, fon
     angle = layout["angle"] if "angle" in layout else (tilt[4] if tilt else 0.0)
     return {"bubble_id": b.get("bubble_id"), "box": area, "manual_box": "box" in layout,
             "manual_size": "font_size" in layout, "angle": angle, "manual_angle": "angle" in layout,
+            "slots": fit.get("slots"), "top": fit.get("top"),
             "align": layout.get("align", "center"), "stroke": layout.get("stroke", "none"),
-            "valign": layout.get("valign", "middle"), "font_name": family, "bold": layout.get("bold", False),
+            "valign": layout.get("valign", "middle"), "color": layout.get("color", "black"), "font_name": family, "bold": layout.get("bold", False),
             "italic": layout.get("italic", False), "fake_bold": fake_bold, "fake_italic": fake_italic, **fit}
 
 
@@ -384,31 +502,37 @@ def tilted_area(rect, img_w: int, img_h: int):
 
 def _draw_lines(draw, plan: dict, x1: int, y1: int, w: int, h: int) -> None:
     """The plan's lines in the w x h area at (x1, y1): vertically centred, aligned as the plan says."""
-    stroke = STROKE_WIDTHS.get(plan["stroke"], 0)
+    stroke = stroke_width(plan["stroke"], plan["size"])
+    ink = _RGB[plan.get("color", "black")]
+    edge = _RGB["white" if plan.get("color", "black") == "black" else "black"]
     # imitated bold: an outline in the text colour (none below 14 px - one pixel there already fills the letters in)
     bold_w = max(1, round(plan["size"] / 24)) if plan.get("fake_bold") and plan["size"] >= 14 else 0
     # automatic size: as before Lettering (an overflowing block starts at the top); a fixed size the user chose is
     # centred on the area even when it overflows, so the text grows evenly up and down. Top / bottom from Lettering.
     valign = plan.get("valign", "middle")
-    if valign == "top":
+    slots = plan.get("slots")
+    if slots:                                       # shape fit: every line in its own width, the block placed by fit
+        y = y1 + plan["top"]
+    elif valign == "top":
         y = y1
     elif valign == "bottom":
         y = y1 + h - plan["total_h"] if plan["manual_size"] else y1 + max(0, h - plan["total_h"])
     else:
         y = y1 + ((h - plan["total_h"]) // 2 if plan["manual_size"] else max(0, (h - plan["total_h"]) // 2))
-    for line in plan["lines"]:
+    for i, line in enumerate(plan["lines"]):
         bbox = plan["font"].getbbox(line)
         line_w = bbox[2] - bbox[0]
+        lx, lw = (x1 + slots[i][0], slots[i][1]) if slots else (x1, w)
         if plan["align"] == "left":
-            x = x1
+            x = lx
         elif plan["align"] == "right":
-            x = x1 + w - line_w
+            x = lx + lw - line_w
         else:
-            x = x1 + max(0, (w - line_w) // 2)
-        if stroke and bold_w:                       # white outline first, the thickened letters on top of it
-            draw.text((x, y), line, fill=(0, 0, 0), font=plan["font"], stroke_width=stroke + bold_w, stroke_fill=(255, 255, 255))
-        draw.text((x, y), line, fill=(0, 0, 0), font=plan["font"],
-                  stroke_width=bold_w or stroke, stroke_fill=(0, 0, 0) if bold_w else ((255, 255, 255) if stroke else None))
+            x = lx + max(0, (lw - line_w) // 2)
+        if stroke and bold_w:                       # the outline first, the thickened letters on top of it
+            draw.text((x, y), line, fill=ink, font=plan["font"], stroke_width=stroke + bold_w, stroke_fill=edge)
+        draw.text((x, y), line, fill=ink, font=plan["font"],
+                  stroke_width=bold_w or stroke, stroke_fill=ink if bold_w else (edge if stroke else None))
         y += plan["line_h"] + plan["gap"]
 
 
@@ -463,19 +587,21 @@ def plan_page(image_clean: np.ndarray, image_original: np.ndarray, bubbles: List
     """
     img_h, img_w = image_clean.shape[:2]
     font_path = resolve_font_path()
-    autos = {}
+    autos, shapes = {}, {}
     for i, b in enumerate(bubbles):
         if "box" not in _clean_layout(b.get("layout")) and not b.get("text_rect"):
-            autos[i] = auto_text_area(image_original, b, img_w, img_h, to_original_coords)
+            autos[i], shapes[i] = auto_text_shape(image_original, b, img_w, img_h, to_original_coords)
     keys = [i for i in autos if autos[i] is not None]
     shared = {i for i in keys for j in keys if i != j and _overlap_of_smaller(autos[i], autos[j]) >= SHARED_AREA_OVERLAP}
     for i in shared:
         autos[i] = _own_part(bubbles[i], autos[i], img_w, img_h, to_original_coords)
+        shapes[i] = None                                              # a part of a shared outline: the rectangle
     plans = []
     for i, b in enumerate(bubbles):
         if i in autos and autos[i] is None:
             continue                                                  # mostly outside the page: not drawn
-        plan = plan_bubble(image_original, b, img_w, img_h, font_path, to_original_coords, auto_area=autos.get(i))
+        plan = plan_bubble(image_original, b, img_w, img_h, font_path, to_original_coords, auto_area=autos.get(i),
+                           auto_shape=shapes.get(i))
         if plan is not None:
             plans.append(plan)
     return plans

@@ -205,6 +205,45 @@
                 <p class="text-muted" id="memorySettingsStatus" style="margin-top:10px;"></p>
             </div>
 
+            <div class="card" id="ocr-engine">
+                <h2 data-toc="OCR engine">OCR engine (CPU / GPU)</h2>
+                <p class="text-muted" id="ocrRuntimeNow">Loading what the OCR uses now…</p>
+                <div class="row">
+                    <div class="text-muted" title="auto = the GPU when this Paddle build and the computer have CUDA, else the CPU">Device</div>
+                    <select id="ocrDeviceSelect" style="max-width:260px;">
+                        <option value="auto">Automatic</option>
+                        <option value="cpu">CPU</option>
+                        <option value="gpu">GPU (NVIDIA, CUDA build of Paddle)</option>
+                    </select>
+                </div>
+                <div class="row">
+                    <div class="text-muted" title="The network that finds where text is. Recognition (reading the letters) is the same either way.">Text detection model</div>
+                    <select id="ocrDetModelSelect" style="max-width:320px;">
+                        <option value="auto">Automatic (server on GPU, mobile on CPU)</option>
+                        <option value="server">Server - most accurate, slow on a CPU</option>
+                        <option value="mobile">Mobile - about 3x faster on a CPU, less memory</option>
+                    </select>
+                </div>
+                <div class="row">
+                    <div class="text-muted" title="0 = the library decides. On a laptop 2-4 keeps the computer usable and cooler.">CPU threads (0 = automatic)</div>
+                    <input type="text" id="ocrThreadsInput" style="max-width:80px;" inputmode="numeric">
+                </div>
+                <div class="row">
+                    <label style="display:flex; align-items:center; gap:6px; margin:0;" title="Intel oneDNN acceleration on the CPU. Faster with Paddle 3.0; with Paddle 3.3 the OCR fails with 'ConvertPirAttribute2RuntimeAttribute not support' - leave it off there.">
+                        <input type="checkbox" id="ocrMkldnnCheckbox"> oneDNN acceleration on the CPU (only with Paddle 3.0)
+                    </label>
+                </div>
+                <p class="text-muted"><b>Applies after a restart of the backend</b> (the OCR model is loaded once at start).</p>
+                <div class="quick-start">
+                    <b>OCR crashes or the backend disappears?</b> Stop the backend and run in <code>backend</code>:
+                    <code>python scripts/ocr_selftest.py</code> - it tests OpenCV, Paddle and the OCR step by step in
+                    separate processes and says what to change. Its last report:
+                    <div id="ocrSelftestReport" class="text-muted" style="margin-top:6px;">none yet</div>
+                </div>
+                <button id="saveOcrEngineBtn" class="primary">Save</button>
+                <p class="text-muted" id="ocrEngineStatus" style="margin-top:10px;"></p>
+            </div>
+
             <div class="card">
                 <h2>OCR: bubble handling</h2>
                 <div class="row">
@@ -288,6 +327,11 @@
                 <div class="row">
                     <label style="display:flex; align-items:center; gap:6px; margin:0;">
                         <input type="checkbox" id="typesettingUpperCheckbox"> UPPER CASE lettering (manga style)
+                    </label>
+                </div>
+                <div class="row">
+                    <label style="display:flex; align-items:center; gap:6px; margin:0;" title="Each line is as wide as the bubble at its height: short lines at the top and bottom of an oval, long ones in the middle - usually a larger text. Used only when it gives a larger size than the rectangle, and not for areas you drew in Lettering.">
+                        <input type="checkbox" id="typesettingShapeCheckbox"> Follow the bubble's shape (oval bubbles get larger text)
                     </label>
                 </div>
                 <button id="saveTypesettingBtn" class="primary">Save</button>

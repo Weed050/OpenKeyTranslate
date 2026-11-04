@@ -78,6 +78,13 @@ def run_checks(check_network: bool = True) -> list[dict]:
                     add("error", "api_unreachable",
                         f"Can't resolve {host} ({err}). No internet / DNS / VPN? OCR still works; translation will fail until this is fixed.")
 
+    from core.app_logging import LAST_CRASH
+    if LAST_CRASH:
+        add("warn", "native_crash",
+            "The last run of the backend crashed inside a library (" + LAST_CRASH.splitlines()[0] + "). "
+            "If it was the OCR: Settings > OCR engine (detection model, oneDNN) and backend/scripts/ocr_selftest.py. "
+            "Details: logs/crash.log.")
+
     if not (0.0 <= MEMORY_SIMILARITY_THRESHOLD <= 1.0):
         add("warn", "bad_threshold", f"memory_similarity_threshold={MEMORY_SIMILARITY_THRESHOLD} is outside 0..1.")
     if MEMORY_TOP_K < 1:

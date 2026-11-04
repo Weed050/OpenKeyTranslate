@@ -21,7 +21,9 @@
 #pagePicker,
 #pagePicker * { box-sizing: border-box; }
 
-.page-picker-inner { width: 100%; }
+.page-picker-inner { width: 100%; max-width: 1280px; margin: 0 auto; }   /* very wide screens: rows stay readable */
+.page-picker-back { display: inline-block; margin-bottom: 6px; font-size: 13px; color: var(--text-muted); text-decoration: none; }
+.page-picker-back:hover { color: var(--accent); }
 
 .page-picker-controls {
   display: flex;
@@ -102,7 +104,6 @@
 .page-picker-chapter[open] { grid-column: 1 / -1; border-color: var(--border-strong); }
 
 .page-picker-chapter summary {
-  --done: 0%;                           /* set from JS: share of processed pages -> green fill behind the title */
   display: flex;
   align-items: center;
   gap: 8px;
@@ -113,7 +114,7 @@
   cursor: pointer;
   list-style: none;
   user-select: none;
-  background: linear-gradient(90deg, var(--success-soft) var(--done), var(--tint-rest) var(--done));
+  background: var(--tint-rest);
   transition: filter 0.15s ease;
 }
 .page-picker-chapter summary::-webkit-details-marker { display: none; }
@@ -214,3 +215,12 @@
 #scrollToTopBtn svg { width: 24px; height: 24px; }
 #scrollToTopBtn.visible { opacity: 1; pointer-events: auto; transform: translateY(0); }
 #scrollToTopBtn.visible:hover { background-color: var(--fab-hover); transform: translateY(-3px) scale(1.05); }
+
+/* chapter progress: the same colours as the project cards (css/dashboard.css) + exported */
+.chapter-progress { display: inline-flex; align-items: center; gap: 8px; margin-left: auto; flex-shrink: 0; }
+.chapter-bar { display: flex; width: 120px; height: 8px; border-radius: 5px; overflow: hidden; background: var(--border-strong); }
+.chapter-bar .seg { display: block; height: 100%; }
+.seg.exported { background: var(--accent); }
+.seg.reviewed { background: var(--success); }
+.seg.translated { background: var(--warn); }
+.seg.ocr { background: color-mix(in srgb, var(--warn) 45%, var(--border-strong)); }
