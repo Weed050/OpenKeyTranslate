@@ -115,18 +115,27 @@ def export_one_page(page, content: str = "translated", fmt: str = "png", quality
         with open(target, "wb") as f:
             f.write(blob)
         written.append(target)
+    if content != "clean":       # a clean-only export is material for lettering elsewhere, not a finished page
+        from services.page_progress import record_exports
+        record_exports(page.chapter.project, [page.id], out_dir)
     return written
 
 
 def export_chapters(job: dict, project_id: int, chapter_ids: list[int] | None, dest_root: str | None,
                     include_untranslated: bool = False, content: str = "translated", fmt: str = "png",
-                    quality: int = 92, as_zip: bool = False) -> dict:
+                    quality: int = 92, as_zip: bool = False, only_reviewed: bool = False) -> dict:
     """
     Background job: every processed page of the chosen chapters, as files in <dest>/<chapter>/ or one ZIP in <dest>.
     dest_root None / "" = <project folder>/exported; a folder the user picked gets a <project> sub-folder.
     Pages without a single translation are skipped unless include_untranslated (then the clean page is exported),
     except for content "clean", which exports every processed page.
+    only_reviewed: pages not fully reviewed by the user (AI drafts, partly translated) are skipped too - the default of
+    the export dialog; exporting AI drafts is a conscious choice there (with a warning).
+    Every page written with its translation is stamped in <project>/export_log.json (services/page_progress.py), so the
+    "exported" stage also knows exports to another folder or a ZIP.
     """
+    from services.page_progress import record_exports
+    from services.page_export import page_stage
     from core.database import SessionLocal
     from models.models import Project
     from services.backup_service import BackupError
@@ -157,7 +166,8 @@ def export_chapters(job: dict, project_id: int, chapter_ids: list[int] | None, d
             os.makedirs(target_root, exist_ok=True)
             zip_path = os.path.join(target_root, f"{project.name}_export_{datetime.now():%Y%m%d-%H%M%S}.zip")
             archive = zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_STORED)   # PNG / JPG are compressed already
-        written = skipped = 0
+        written = skipped = unreviewed = 0
+        stamped = []
         try:
             for chapter, page in work:
                 paths = page_paths(page)
@@ -166,6 +176,9 @@ def export_chapters(job: dict, project_id: int, chapter_ids: list[int] | None, d
                     translated = any((b.get("translation") or "").strip() and not b.get("skip") for b in data.get("bubbles", []))
                     if not (translated or include_untranslated or content == "clean"):
                         skipped += 1
+                        continue
+                    if only_reviewed and content != "clean" and page_stage(paths["json"])["stage"] not in ("reviewed", "checked"):
+                        unreviewed += 1
                         continue
                     # a page without any translation has only one picture to give: the clean one, without a suffix
                     files = page_exports(paths, os.path.splitext(page.file_name)[0],
@@ -179,6 +192,8 @@ def export_chapters(job: dict, project_id: int, chapter_ids: list[int] | None, d
                             with open(os.path.join(out_dir, name), "wb") as f:
                                 f.write(blob)
                     written += 1
+                    if translated and content != "clean":
+                        stamped.append(page.id)
                 except FileNotFoundError:
                     skipped += 1
                 finally:
@@ -187,7 +202,9 @@ def export_chapters(job: dict, project_id: int, chapter_ids: list[int] | None, d
             if archive is not None:
                 archive.close()
         where = zip_path or target_root
-        return {"message": f"Exported {written} page(s) to {where}" + (f" ({skipped} without translation skipped)" if skipped else ""),
-                "written": written, "skipped": skipped, "path": where}
+        record_exports(project, stamped, where)
+        notes = ([f"{skipped} without translation"] if skipped else []) + ([f"{unreviewed} not reviewed"] if unreviewed else [])
+        return {"message": f"Exported {written} page(s) to {where}" + (f" (skipped: {', '.join(notes)})" if notes else ""),
+                "written": written, "skipped": skipped, "unreviewed": unreviewed, "path": where}
     finally:
         db.close()

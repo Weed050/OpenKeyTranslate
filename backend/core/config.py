@@ -24,7 +24,7 @@ _DOCS_BUILD = bool(os.environ.get("OKT_DOCS_BUILD"))
 
 # Bump manually on release. Stamped into every log file header (see
 # core/app_logging.py) so a bug report's log always says which version produced it.
-APP_VERSION = "0.2.1"
+APP_VERSION = "0.3.0"
 
 
 def get_default_app_root():
@@ -79,14 +79,13 @@ DEFAULT_SETTINGS = {
     "ocr_marker_margin_y": 40,
     "ocr_marker_score_threshold": 0.4,
 
-    # External APIs and Services (translation providers - see services/providers/)
-    # active_provider selects which entry below is used. Each provider holds
-    # a *pool* of keys (see _migrate_provider_keys below for the one-time
-    # upgrade from the old single-key shape) - GroqProvider / GeminiProvider
-    # rotate through them automatically on a rate limit, so quota from
-    # multiple accounts/keys can be pooled without manual key-swapping.
-    # Add a new provider by giving it its own entry here plus a class in
-    # services/providers/.
+    # External APIs and Services (translation providers - see services/providers/__init__.py)
+    # Every key lives under its provider (keys[] with label / api_key / optional model, base_url, enabled - see
+    # _migrate_provider_keys below for the one-time upgrade from the old single-key shape). Translation uses ONE pool
+    # of keys across providers, in the order of "key_order" (written by the Settings page, which also sets
+    # active_provider = "pool"); the pool rotates on rate limits, so quota from several accounts / providers backs
+    # each other up. An older active_provider value ("groq" / "gemini") still means "only that provider's keys".
+    # Add a new provider: a client module in services/providers/ + an entry here and in PROVIDERS_INFO.
     "translation_on": True,
     "active_provider": "groq",
     "providers": {
@@ -97,6 +96,12 @@ DEFAULT_SETTINGS = {
         "gemini": {
             "model": "gemini-2.5-flash",
             "keys": [{"label": "default", "api_key": ""}],
+        },
+        # any OpenAI-compatible chat API (OpenRouter, Mistral, DeepSeek, Ollama, LM Studio); key may be empty locally.
+        # The server address is stored PER KEY (keys[].base_url), never here - see routers/settings.py.
+        "openai_compat": {
+            "model": "",
+            "keys": [],
         },
     },
     "translation_temperature": 0.4,
@@ -271,6 +276,11 @@ def get_setting(key: str, default=None):
 
 
 def get_active_model_name() -> str:
+    """Model of the first key of the translation pool (fallback name for logs; each call records its own model)."""
+    from services.providers import pool_entries, unusable_reason     # lazy: providers import this module
+    usable = [e for e in pool_entries() if not unusable_reason(e)]
+    if usable:
+        return usable[0]["model"]
     provider = get_setting("active_provider", "groq")
     return (get_setting("providers", {}) or {}).get(provider, {}).get("model", provider)
 

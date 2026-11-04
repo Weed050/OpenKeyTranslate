@@ -5,6 +5,8 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="icon" href="img/okt-logo.svg" type="image/svg+xml">
+    <link rel="alternate icon" href="img/okt.ico">
     <title>OpenKeyTranslate - Memory</title>
     <link rel="stylesheet" href="css/tokens.css">
     <script src="js/theme.js"></script>
@@ -42,7 +44,12 @@
         .tool-panel-head .icon-btn { margin-left: auto; font-size: 16px; line-height: 1; padding: 2px 9px; }
         .tool-panel-label { font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--accent); border: 1px solid var(--accent); border-radius: 8px; padding: 0 6px; }
 
-        .list-heading { display: flex; align-items: baseline; gap: 8px; margin: 4px 0 8px; font-size: 12px; color: var(--text-muted); }
+        .list-heading { display: flex; align-items: baseline; gap: 8px; margin: 8px 0 14px; font-size: 12px; color: var(--text-muted); }
+        .list-heading > strong { color: var(--text-secondary); font-weight: 600; }
+        /* toolbar selects: as wide as their text (base.css makes selects 100 % wide) */
+        .list-toolbar { display: flex; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; align-items: center; }
+        .list-toolbar select { width: auto; }
+        .list-more { display: flex; align-items: center; gap: 10px; margin-top: 6px; font-size: 12px; }
         .item-row summary {
             display: flex; align-items: center; gap: 12px; padding: 10px 12px;
             cursor: pointer; list-style: none; font-size: 13px;
@@ -51,6 +58,26 @@
         .item-row summary::before { content: "\25B8  "; color: var(--text-muted); }
         .item-row[open] summary::before { content: "\25BE  "; }
         .item-summary-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-secondary); }
+
+        /* column headers above the lists: click to sort, again to reverse (js/memory.js, js/glossary.js).
+           Rows and header share one grid so the columns line up. */
+        .list-cols, .item-row.cols > summary { display: grid; grid-template-columns: var(--cols); align-items: center; gap: 12px; }
+        #correctionList, #correctionCols { --cols: 14px minmax(0, 1fr) 96px 64px 104px; }
+        #glossaryList, #glossaryCols { --cols: 14px minmax(0, 1fr) minmax(0, 1fr) 56px 64px 104px; }
+        .list-cols { padding: 8px 12px; margin-top: 4px; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border-strong);
+                     margin-bottom: 10px; background: var(--bg-panel-2); border-radius: var(--radius-sm) var(--radius-sm) 0 0; }
+        .list-cols button { all: unset; cursor: pointer; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .05em;
+                            color: var(--text-muted); white-space: nowrap; }
+        .list-cols button:hover, .list-cols button.sorted { color: var(--text-primary); }
+        .list-cols button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 3px; }
+        .list-cols button .arrow { display: inline-block; width: 10px; margin-left: 3px; }
+        /* a faint arrow on hover: the column names are sort buttons, not just labels */
+        .list-cols button:not(.sorted):hover .arrow::after { content: "▾"; opacity: .45; }
+        .item-row.cols > summary::before { width: 14px; }
+        .item-row.cols .cell { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; color: var(--text-muted); }
+        .item-row.cols .cell.main { font-size: 13px; color: var(--text-secondary); display: flex; gap: 6px; align-items: center; }
+        .item-row.cols .cell.main > span:first-child { overflow: hidden; text-overflow: ellipsis; }
+        .item-row.cols .cell.num { font-variant-numeric: tabular-nums; }
         .item-body { padding: 0 12px 12px; display: flex; flex-direction: column; gap: 8px; }
  
         .usage-toggle { align-self:flex-start; }
@@ -70,15 +97,21 @@
         .suggestion-example { color:var(--text-muted); font-size:11px; flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
  
         .usage-variant { display:flex; gap:6px; font-size:12px; padding:2px 0; }
-        .usage-variant-label { color:var(--text-muted); flex-shrink:0; min-width:190px; }
+        .usage-variant-label { color:var(--text-muted); flex-shrink:0; min-width:150px; }
         .usage-source { margin-bottom:4px; }
+        .usage-head { font-size: 12px; color: var(--text-muted); }
+        .usage-where { display: flex; gap: 8px; align-items: baseline; font-size: 11.5px; color: var(--text-muted); margin-bottom: 4px; }
+        .usage-where b { color: var(--text-secondary); font-weight: 600; }
+        .usage-where a { margin-left: auto; }
+        /* the glossary term inside the texts of "Show usage" */
+        mark.term { background: color-mix(in srgb, var(--warn) 22%, transparent); color: inherit; font-weight: 700; padding: 0 1px; border-radius: 2px; }
     </style>
 </head>
 <body>
  
     <div class="app-shell">
         <nav class="sidebar">
-            <div class="sidebar-brand">OpenKeyTranslate</div>
+            <div class="sidebar-brand"><img src="img/okt-logo.svg" alt="" class="brand-icon">OpenKeyTranslate</div>
             <div class="sidebar-section">
                 <div class="sidebar-label">Active</div>
                 <div id="sidebarActive"></div>
@@ -110,18 +143,12 @@
             <div id="correctionsTab">
                 <p class="text-muted">Every stored correction is a candidate hint for future translations in this project. Delete an entry to stop it from being suggested.</p>
  
-                <div style="display:flex; gap:8px; margin-bottom:12px; flex-wrap:wrap; align-items:center;">
+                <div class="list-toolbar">
                     <input type="text" id="memorySearchInput" placeholder="Search source or translation..." style="max-width:280px;">
                     <select id="memoryKindSelect" title="corrected = you changed the AI text; approved = you accepted it unchanged">
                         <option value="all">All entries</option>
                         <option value="corrected">Corrected only</option>
                         <option value="approved">Approved only</option>
-                    </select>
-                    <select id="memorySortSelect">
-                        <option value="newest">Newest first</option>
-                        <option value="oldest">Oldest first</option>
-                        <option value="most_used">Most used as hint</option>
-                        <option value="least_used">Least used as hint</option>
                     </select>
                     <span class="badge" id="correctionsCountBadge"></span>
                     <button id="exportMemoryBtn">Export JSON</button>
@@ -153,8 +180,19 @@
                     </div>
                 </section>
 
-                <div class="list-heading">Stored entries <span>- click one to see, edit or delete it</span></div>
+                <div class="list-heading"><strong>Stored entries</strong> <span>- click one to see, edit or delete it; click a column name to sort</span></div>
+                <div class="list-cols" id="correctionCols">
+                    <span></span>
+                    <button data-sort="text" title="Sort by your final translation, A-Z (again: Z-A)">Translation<span class="arrow"></span></button>
+                    <button data-sort="kind" title="corrected first (again: approved first)">Type<span class="arrow"></span></button>
+                    <button data-sort="used" title="Most used as a hint first (again: least used)">Used<span class="arrow"></span></button>
+                    <button data-sort="saved" title="Newest first (again: oldest first)">Saved<span class="arrow"></span></button>
+                </div>
                 <div id="correctionList"></div>
+                <div class="list-more hidden" id="correctionMore">
+                    <button type="button" id="correctionMoreBtn"></button>
+                    <span class="text-muted" id="correctionMoreNote"></span>
+                </div>
             </div>
  
             <div id="glossaryTab" class="hidden">
@@ -179,6 +217,15 @@
                     <div id="suggestionsList"></div>
                 </div>
  
+                <div class="list-heading"><strong>Terms</strong> <span>- click one to see where it fired or to delete it; click a column name to sort</span></div>
+                <div class="list-cols" id="glossaryCols">
+                    <span></span>
+                    <button data-sort="en" title="Sort by the English term, A-Z (again: Z-A)">English<span class="arrow"></span></button>
+                    <button data-sort="pl" title="Sort by the Polish term, A-Z (again: Z-A)">Polish<span class="arrow"></span></button>
+                    <button data-sort="used" title="Translated bubbles where the term fired (was given to the AI) - most first (again: least)">Used<span class="arrow"></span></button>
+                    <button data-sort="auto" title="Accepted from a suggestion first (again: typed by you first)">Source<span class="arrow"></span></button>
+                    <button data-sort="added" title="Newest first (again: oldest first)">Added<span class="arrow"></span></button>
+                </div>
                 <div id="glossaryList"></div>
             </div>
           </div>

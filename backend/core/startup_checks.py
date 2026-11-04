@@ -14,12 +14,9 @@ level: "error" = translation will not work, "warn" = works but suspicious, "info
 import re
 import socket
 
-from core.config import SETTINGS_FILE, get_setting
+from core.config import get_setting
 
-_PROVIDER_HOSTS = {
-    "gemini": "generativelanguage.googleapis.com",
-    "groq": "api.groq.com",
-}
+_LOCAL_HOSTS = ("localhost", "127.0.0.1", "::1", "0.0.0.0")
 
 
 def _dns_ok(host: str, timeout: float = 3.0) -> tuple[bool, str]:
@@ -37,8 +34,6 @@ def _dns_ok(host: str, timeout: float = 3.0) -> tuple[bool, str]:
 def run_checks(check_network: bool = True) -> list[dict]:
     issues: list[dict] = []
     # LIVE values: /system/health is polled by the UI, so it must reflect the Settings page immediately.
-    ACTIVE_PROVIDER = get_setting("active_provider", "groq")
-    PROVIDERS = get_setting("providers", {}) or {}
     TRANSLATION_ON = get_setting("translation_on", True)
     MEMORY_SIMILARITY_THRESHOLD = get_setting("memory_similarity_threshold", 0.67)
     MEMORY_TOP_K = get_setting("memory_top_k", 3)
@@ -50,33 +45,36 @@ def run_checks(check_network: bool = True) -> list[dict]:
     if not TRANSLATION_ON:
         add("info", "translation_off", "translation_on=false: pages are OCR'd but not translated.")
     else:
-        cfg = PROVIDERS.get(ACTIVE_PROVIDER)
-        if cfg is None:
-            add("error", "unknown_provider",
-                f"active_provider '{ACTIVE_PROVIDER}' has no entry under 'providers' in {SETTINGS_FILE}.")
+        # the key pool (services/providers): keys switched on, in order of use, possibly of several providers
+        from services.providers import pool_entries, unusable_reason, host_of
+        switched_on = pool_entries()
+        usable = [e for e in switched_on if not unusable_reason(e)]
+        if not usable:
+            add("error", "no_api_key",
+                "No usable translation key - translation will fail. Paste a key (or switch one on) in Settings > "
+                "Translation & API keys (saved at once, no restart).")
         else:
-            keys = cfg.get("keys", [])
-            filled = [k for k in keys if (k.get("api_key") or "").strip()]
-            if not cfg.get("model"):
-                add("error", "no_model", f"providers.{ACTIVE_PROVIDER}.model is empty.")
-            if not filled:
-                add("error", "no_api_key",
-                    f"No API key for '{ACTIVE_PROVIDER}' - translation will fail. Paste one in Settings > Translation & API keys (saved at once, no restart).")
-            else:
-                labels = [k.get("label", "default") for k in filled]
-                if len(set(labels)) != len(labels):
-                    add("warn", "duplicate_key_labels",
-                        "Two keys share the same label - rotation marks BOTH exhausted when one hits a rate limit.")
-                add("info", "keys_ok", f"{len(filled)} {ACTIVE_PROVIDER} key(s) configured.")
-            if len(filled) < len(keys):
-                add("warn", "empty_key_slot", f"{len(keys) - len(filled)} key slot(s) in '{ACTIVE_PROVIDER}' have no key - fill or remove them in Settings > Translation & API keys.")
+            kinds = {}
+            for e in usable:
+                kinds[e["provider"]] = kinds.get(e["provider"], 0) + 1
+            add("info", "keys_ok", f"{len(usable)} key(s) in the translation pool ("
+                + ", ".join(f"{n} {p}" for p, n in kinds.items()) + ").")
+        broken = [e for e in switched_on if unusable_reason(e)]
+        if broken:
+            add("warn", "empty_key_slot", "Switched on but not usable: "
+                + ", ".join(f"{e['label']} ({e['provider']}: {unusable_reason(e)})" for e in broken)
+                + " - fix, switch off or remove them in Settings > Translation & API keys.")
 
-            host = _PROVIDER_HOSTS.get(ACTIVE_PROVIDER)
-            if check_network and host:
-                ok, err = _dns_ok(host)
-                if not ok:
-                    add("error", "api_unreachable",
-                        f"Can't resolve {host} ({err}). No internet / DNS / VPN? OCR still works; translation will fail until this is fixed.")
+        hosts = sorted({host_of(e) for e in usable} - {""} - set(_LOCAL_HOSTS))
+        if check_network and hosts:
+            failed = [(h, err) for h in hosts for ok, err in [_dns_ok(h)] if not ok]
+            if failed and len(failed) == len(hosts):
+                add("error", "api_unreachable",
+                    f"Can't resolve {', '.join(h for h, _ in failed)} ({failed[0][1]}). No internet / DNS / VPN? "
+                    f"OCR still works; translation will fail until this is fixed.")
+            elif failed:
+                add("warn", "api_unreachable",
+                    f"Can't resolve {', '.join(h for h, _ in failed)} - keys on that server are skipped, the others still work.")
 
     from core.app_logging import LAST_CRASH
     if LAST_CRASH:

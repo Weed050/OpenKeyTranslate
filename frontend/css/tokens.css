@@ -205,3 +205,29 @@
   --sidebar-w: 200px;
   --panel-w: 320px;
 }
+
+/* ---------- work stages of a page (js/stages.js: page list, chapter bars, project cards, Help) ----------
+   Fixed, muted colours of their own - NOT the palette accent. A ramp of the accent was tried first (no clash with a
+   green / orange palette), but with a near-black or near-white accent (Mono, Slate light) it became six greys nobody
+   could tell apart. Now: one hue per stage, in pipeline order cool -> warm -> green, each a little stronger than the
+   one before, so the order still reads as "more done" and every stage is its own colour. Muted (low chroma) so they
+   sit next to any accent; a separate set for the light scheme (darker, so they hold on white).
+   "exported" = the "fully reviewed" green with stripes. The empty track (not started) stays neutral. */
+:root, [data-theme="dark"] {
+  --stage-todo: #34353d;
+  --stage-ocr: #7c74b8;            /* violet  - OCR done */
+  --stage-partial: #c99a45;        /* amber   - partly translated */
+  --stage-translated: #4f8fd6;     /* blue    - translated by the AI */
+  --stage-reviewed: #3aa89c;       /* teal    - translation reviewed */
+  --stage-checked: #4cb56c;        /* green   - fully reviewed (text + bubbles) */
+  --stage-exported: repeating-linear-gradient(135deg, #4cb56c 0 4px, #2d7a46 4px 7px);
+}
+[data-theme="light"] {
+  --stage-todo: #d3d6de;
+  --stage-ocr: #8f86cc;
+  --stage-partial: #d4993a;
+  --stage-translated: #3d7fd0;
+  --stage-reviewed: #23958a;
+  --stage-checked: #2f9a52;
+  --stage-exported: repeating-linear-gradient(135deg, #2f9a52 0 4px, #8acb9d 4px 7px);
+}

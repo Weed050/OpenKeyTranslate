@@ -24,6 +24,7 @@ Nothing in the user's data or settings is changed.
 
 import argparse
 import json
+import re
 import os
 import platform
 import subprocess
@@ -255,8 +256,9 @@ def _advice(info: dict, steps: list[dict]) -> list[str]:
     tips = []
     v = info["packages"]
     if v.get("opencv-python") and v.get("opencv-contrib-python"):
-        tips.append("Both opencv-python and opencv-contrib-python are installed - they overwrite the same cv2 module. "
-                    "Keep ONE: pip uninstall -y opencv-python opencv-contrib-python && pip install opencv-contrib-python==4.10.0.84")
+        tips.append("Both opencv-python and opencv-contrib-python are installed - they overwrite the same cv2 module "
+                    "(whichever was installed last wins, an update can silently swap it). Stop the backend, then keep ONE: "
+                    "pip uninstall -y opencv-python opencv-contrib-python && pip install opencv-contrib-python==4.10.0.84")
     if v.get("paddlepaddle") and v.get("paddlepaddle-gpu"):
         tips.append("Both paddlepaddle and paddlepaddle-gpu are installed - uninstall both and install the one for this machine.")
     by = {s["step"]: s for s in steps}
@@ -265,6 +267,8 @@ def _advice(info: dict, steps: list[dict]) -> list[str]:
         tips.append("Every step passed. If the app still crashes, run with --image on the page that crashed.")
         return tips
     first = failed[0]["step"]
+    # which device the OCR steps really ran on ("device cpu" / "device gpu" in their detail line)
+    tested = {m.group(1) for s in steps for m in [re.search(r"device (\w+)", s.get("detail") or "")] if m}
     if first == "opencv":
         tips.append("OpenCV / numpy itself fails: reinstall them (one opencv package, numpy from setup/requirements_cpu_only.txt).")
     elif first == "paddle":
@@ -276,6 +280,13 @@ def _advice(info: dict, steps: list[dict]) -> list[str]:
     elif first in ("ocr_mobile", "ocr_server", "ocr_page"):
         if by.get("ocr_mobile", {}).get("ok") and not by.get("ocr_server", {}).get("ok", True):
             tips.append("The mobile detection model works and the server one does not: Settings > OCR engine > Detection model: mobile.")
+        elif v.get("paddlepaddle-gpu") and "gpu" not in tested:
+            # the CPU-only advice below would REPLACE the GPU build on a machine with a graphics card
+            tips.append("This run tested the CPU path only, but paddlepaddle-gpu is installed. With Settings > OCR engine > "
+                        "Device = Automatic (or GPU) the app runs the OCR on the graphics card, so this CPU crash does not "
+                        "affect it. Do NOT install the CPU Paddle from setup/requirements_cpu_only.txt on this machine - it "
+                        "would replace the GPU build. To check the GPU path: Device = Automatic, then run the self-test "
+                        "again without --cpu.")
         else:
             tips.append("The OCR model crashes while basic Paddle works. Try the pinned Paddle version from "
                         "setup/requirements_cpu_only.txt, fewer threads (--threads 1) and oneDNN off.")

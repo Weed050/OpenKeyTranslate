@@ -8,6 +8,7 @@
  */
  
 import { api } from "./api.js";
+import { PAGE_BADGES, shownStage } from "./stages.js";
 import { renderSidebar } from "./nav.js";
 import { params, pageId, state, el, escapeHtml, showToast, openOrAlert, groupByChapter, compareChapterNames } from "./editor-shared.js";
 import { showPagePicker } from "./pagepicker.js";
@@ -17,6 +18,8 @@ import { initSplit, startSplit, cancelSplit, isSplitting, renderSplitOverlay } f
 import { initLettering, isLettering, setMode, toggleMode, enterCurrentMode, checkReviewedOnLoad, renderLetteringOverlay,
          renderLetteringPanel, letteringAction, exportPage } from "./editor-lettering.js";
 import { actionFor, currentBindings, formatCombo } from "./shortcuts.js";
+import { initReview, renderReviewControls, reviewBeforeNextPage, offerUndoFromPreviousPage, reviewMode } from "./editor-review.js";
+import { initOcrDebug, renderOcrDebug, invalidateOcrDebug } from "./editor-ocrdebug.js";
  
 const enterAt = params.get("enterAt"); // "first" | "last" | null - set when arriving via cross-page nav
 const resumeBubbleIndex = params.get("bubble"); // set by the dashboard's "Resume where I left off" link
@@ -154,7 +157,14 @@ async function init() {
         status: savedStatus,
         navigate: navigateBubble,
         shortcutLabel: (id) => { const c = currentBindings()[id]; return c ? formatCombo(c) : ""; },
+        renderReview: renderReviewControls,
     });
+    initReview({
+        status: savedStatus,
+        rerender: () => { renderBubbleList(); applyZoom(); },
+        saveIfChanged: saveIfChanged,
+    });
+    initOcrDebug();            // "OCR debug" button when switched on in Settings > Editor (js/editor-ocrdebug.js)
  
     if (!pageId && !state.projectId) {
         document.querySelector(".main-content").innerHTML = "<p>Missing ?project= or ?page= in the URL.</p>";
@@ -181,6 +191,7 @@ async function init() {
     el.imageCanvas.addEventListener("mousedown", onDrawStart);
     document.getElementById("prevPageBtn").addEventListener("click", () => goToAdjacentPage(-1));
     document.getElementById("nextPageBtn").addEventListener("click", () => goToAdjacentPage(1));
+    document.getElementById("nextToReviewBtn").addEventListener("click", goToNextToReview);
     el.imageViewport.addEventListener("wheel", onWheelZoom, { passive: false });
     window.addEventListener("keydown", onGlobalKeydown);
     // typed text that is not saved yet (the "unsaved" marker): leaving through a link would drop it silently
@@ -228,6 +239,7 @@ async function loadPage() {
     state.detectRotation = !!data.detect_rotation;
     state.cleanups = data.cleanups || [];
     state.bubbleOrder = data.bubble_order || "ttb";
+    state.layoutCheckedAt = data.layout_checked_at || null;     // "Layout checked" (js/editor-review.js)
     document.getElementById("orderSelect").value = state.bubbleOrder;
     renderCleanupButton();
     state.projectId = String(data.project_id);
@@ -262,6 +274,7 @@ async function loadPage() {
     }
     // Lettering mode on a page that is not fully reviewed switches to Translate (editor-lettering.js)
     await checkReviewedOnLoad();
+    offerUndoFromPreviousPage();        // review mode "Next page: accept ...": Undo for the page just left
 }
  
 /**
@@ -575,7 +588,10 @@ async function loadChapterNav() {
             const row = document.createElement("a");
             row.href = `editor.html?project=${state.projectId}&page=${p.page_id}`;
             row.className = "page-nav-row" + (String(p.page_id) === String(pageId) ? " selected" : "");
-            row.innerHTML = `${escapeHtml(p.file_name)} <span class="badge" data-status="${escapeHtml(p.status)}">${escapeHtml(p.status)}</span>`;
+            const stage = shownStage(p.stage || p.status, p.layout);
+            const [label, what] = PAGE_BADGES[stage] || [stage, ""];
+            row.title = what;
+            row.innerHTML = `${escapeHtml(p.file_name)} <span class="badge stage-badge" data-status="${escapeHtml(stage)}">${escapeHtml(label)}</span>`;
             el.chapterNavBody.appendChild(row);
         });
     }
@@ -663,6 +679,7 @@ function applyZoom() {
     el.imageCanvas.style.height = `${h}px`;
     el.zoomLabel.textContent = `${Math.round(state.zoomFactor * 100)}%`;
     renderBubbleOutlines(scale);
+    renderOcrDebug();                   // OCR debug view on top (labels follow the zoom)
 }
  
 function bubbleRect(bubble, scale) {
@@ -773,6 +790,7 @@ function renderBubbleListHeader() {
         </span>
         <button type="button" class="help-chip" id="markersHelpBtn" title="What do the markers mean? (Help)">?</button>`;
     document.getElementById("markersHelpBtn").addEventListener("click", () => window.oktHelp?.open("markers"));
+    renderReviewControls(document.getElementById("reviewSlot"));   // "Accept page (N)" follows the markers
 }
 
 function renderBubbleList() {
@@ -1088,6 +1106,7 @@ async function reloadBubbles(selectId) {
     const fresh = await api.pages.get(pageId);
     state.bubbles = fresh.bubbles;
     state.hasLines = !!fresh.has_lines;
+    state.layoutCheckedAt = fresh.layout_checked_at || null;     // a Re-OCR writes a new page JSON without it
     const idx = state.bubbles.findIndex((b) => b.bubble_id === selectId);
     state.selectedIndex = idx === -1 ? null : idx;
     renderBubbleList();
@@ -1095,6 +1114,7 @@ async function reloadBubbles(selectId) {
     applyZoom();
     refreshPageImage();
     renderMergeBar();
+    invalidateOcrDebug();                             // a Re-OCR / bubble edit changed the readings
     if (isLettering()) await enterCurrentMode();      // text areas follow the new bubbles
 }
 
@@ -1608,6 +1628,7 @@ async function navigateToAdjacentPage(direction) {
     }
  
     const target = state.flatPageList[targetIdx];
+    if (direction > 0) await reviewBeforeNextPage();    // review mode "Next page: accept ..." (editor-review.js)
     const enter = direction > 0 ? "first" : "last";
     window.location.href = `editor.html?project=${state.projectId}&page=${target.page_id}&enterAt=${enter}`;
 }
@@ -1620,6 +1641,32 @@ async function goToAdjacentPage(direction) {
     await navigateToAdjacentPage(direction);
 }
  
+/**
+ * "Next page to review" (&raquo; next to the page arrows): the first page AFTER this one (then from the start) that still
+ * needs the user - its translation is not reviewed (not started, OCR done, partly translated, translated by the AI);
+ * with the review mode "accept text + layout" also pages whose layout is not checked yet. Done pages are skipped, so
+ * the review goes on where it is needed without the page list. The fast review modes accept this page first, as
+ * Next page does (editor-review.js). Stages: the page list loaded with the chapter nav (services/page_progress.py).
+ */
+async function goToNextToReview() {
+    const list = state.flatPageList || [];
+    if (!list.length) return;
+    const withLayout = reviewMode() === "all";
+    const done = (p) => (withLayout
+        ? p.stage === "checked" || (p.stage === "exported" && p.layout)
+        : ["reviewed", "checked", "exported"].includes(p.stage));
+    const idx = list.findIndex((p) => String(p.page_id) === String(pageId));
+    const order = [...list.slice(idx + 1), ...list.slice(0, Math.max(idx, 0))];
+    const target = order.find((p) => p.status !== "excluded" && !done(p));
+    if (!target) {
+        showToast(withLayout ? "Every other page is fully reviewed" : "The translation of every other page is reviewed", 4000);
+        return;
+    }
+    if (state.selectedIndex !== null && !(await saveCurrentBubble())) return;
+    await reviewBeforeNextPage();
+    window.location.href = `editor.html?project=${state.projectId}&page=${target.page_id}&enterAt=first`;
+}
+
 /**
  * Keys of the editor through the shortcut registry (js/shortcuts.js; the user's own keys from Settings). Fixed:
  * Escape cancels a drawing / merge picks / split. While typing in a text field only the "also while typing"
@@ -1640,6 +1687,7 @@ function onGlobalKeydown(event) {
         nextBubble: () => navigateBubble(1),
         prevPage: () => goToAdjacentPage(-1),
         nextPage: () => goToAdjacentPage(1),
+        nextToReview: () => goToNextToReview(),
         toggleMode: () => toggleMode(),
         cleanArea: () => setDrawMode(state.drawMode === "clean" ? false : "clean"),
         exportPage: () => exportPage(),

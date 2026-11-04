@@ -1,11 +1,15 @@
 /* frontend/css/dashboard.css
-   Project list (index.html, js/dashboard.js): one card per project with a three-colour progress bar
-   (green = reviewed by you, orange = processed by the system only, grey = not processed yet), the main actions as
-   buttons and the rare ones (copy path, open folder, delete) in a "..." menu. Same column width and card look as
-   the Settings page. */
+   Project list (index.html, js/dashboard.js): one card per project with the stage bar of its pages (colours: the
+   --stage-* ramp of the theme accent, css/tokens.css + css/base.css .stage-bar), the main actions as buttons and the
+   rare ones (copy path, open folder, delete) in a "..." menu. Same column width and card look as the Settings page. */
 
 .dash-column { max-width: 980px; width: 100%; margin: 0 auto; }
-.dash-column .page-header { justify-content: flex-start; }
+.dash-column .page-header { justify-content: space-between; align-items: center; }
+.dash-sort { width: auto; border-top-right-radius: 0; border-bottom-right-radius: 0; }
+.dash-column .sort-group { display: inline-flex; align-items: center; }
+.dash-column .sort-label { font-size: 12px; color: var(--text-muted); margin-right: 6px; }
+.dash-column .sort-dir { width: 36px; align-self: stretch; padding: 0; font-size: 16px; margin-left: -1px;
+  border-top-left-radius: 0; border-bottom-left-radius: 0; }
 .dash-section-title { font-size: 13px; font-weight: 600; color: var(--text-muted); text-transform: uppercase;
   letter-spacing: .06em; margin: var(--space-lg) 0 var(--space-sm); }
 
@@ -15,18 +19,10 @@
 .project-title h2 { margin: 0 0 2px; font-size: 18px; }
 .project-path { display: block; font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 760px; }
 
-.progress-bar { display: flex; height: 10px; margin: var(--space-md) 0 6px; border-radius: 6px; overflow: hidden;
-  background: var(--border-strong); }
-.progress-bar .seg { display: block; height: 100%; transition: width .4s ease; }
-.progress-bar .seg.reviewed { background: var(--success); }
-.progress-bar .seg.processed { background: var(--warn); }
+.progress-bar { height: 10px; margin: var(--space-md) 0 6px; border-radius: 6px; }
 .progress-legend { display: flex; flex-wrap: wrap; gap: 6px 18px; font-size: 12px; }
 .progress-legend span { display: inline-flex; align-items: center; gap: 6px; }
 .progress-legend .legend-total { margin-left: auto; }
-.progress-legend .dot { width: 10px; height: 10px; border-radius: 3px; display: inline-block; }
-.progress-legend .dot.reviewed { background: var(--success); }
-.progress-legend .dot.processed { background: var(--warn); }
-.progress-legend .dot.todo { background: var(--border-strong); }
 
 .project-actions { display: flex; gap: var(--space-sm); margin-top: var(--space-md); }
 .btn { display: inline-flex; align-items: center; justify-content: center; min-width: 96px; height: 32px; padding: 0 14px;

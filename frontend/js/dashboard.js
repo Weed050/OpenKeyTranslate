@@ -2,13 +2,36 @@
  * @file frontend/js/dashboard.js
  * @description Project list and "create new project" flow for index.html.
  *
- * One card per project: a three-colour progress bar (reviewed by you / processed by the system only / not processed
- * yet - GET /projects/{id}/progress), the main actions (Resume, Open, Export) and the rare ones in a "..." menu
- * (copy path, open folder, delete - kept apart so a slip of the mouse does not hit it).
+ * One card per project: the stage bar of its pages (same stages and colours as the chapter bars of the page list -
+ * js/stages.js, GET /projects/{id}/progress), the main actions (Resume, Open, Export) and the rare ones in a "..."
+ * menu (copy path, open folder, delete - kept apart so a slip of the mouse does not hit it). Sortable by last
+ * activity (newest page change), name, progress or creation date; the choice is remembered.
  */
 
 import { api } from "./api.js";
 import { renderSidebar } from "./nav.js";
+import { countGroups, doneScore, stageBarHtml, stageLegendHtml } from "./stages.js";
+
+const SORT_KEY = "okt-project-sort";          // {"field", "dir"} (older versions: a bare mode string)
+const byName = (a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: "base" });
+/** Sort fields: ascending comparator + the natural direction picked when the field changes. */
+const SORT_FIELDS = {
+    updated: { dir: "desc", cmp: (a, b) => (a.progress?.last_activity || 0) - (b.progress?.last_activity || 0) },
+    name: { dir: "asc", cmp: byName },
+    progress: { dir: "desc", cmp: (a, b) => a.score - b.score },
+    created: { dir: "desc", cmp: (a, b) => new Date(a.created_at || 0) - new Date(b.created_at || 0) },
+};
+
+function loadSort() {
+    const raw = localStorage.getItem(SORT_KEY);
+    let s;
+    try { s = JSON.parse(raw); } catch { s = raw; }
+    const legacy = { recent: ["updated", "desc"], name: ["name", "asc"], least: ["progress", "asc"], most: ["progress", "desc"], created: ["created", "desc"] };
+    if (!s || typeof s !== "object") s = legacy[s] ? { field: legacy[s][0], dir: legacy[s][1] } : { field: "updated", dir: "desc" };
+    if (!SORT_FIELDS[s.field]) s = { field: "updated", dir: "desc" };
+    if (s.dir !== "asc" && s.dir !== "desc") s.dir = SORT_FIELDS[s.field].dir;
+    return s;
+}
 
 window.addEventListener("DOMContentLoaded", () => {
     renderSidebar(null); // no project is "open" on the dashboard itself
@@ -33,8 +56,31 @@ async function loadProjects() {
         return;
     }
 
-    list.innerHTML = "";
-    for (const p of projects) list.appendChild(projectCard(p));
+    // progress first (for sorting by it), then the cards in the chosen order
+    await Promise.all(projects.map(async (p) => {
+        try {
+            p.progress = await api.projects.progress(p.id);
+            p.score = doneScore(countGroups(p.progress.stages || {}));
+        } catch {
+            p.progress = null;
+            p.score = 0;
+        }
+    }));
+    const select = document.getElementById("projectSortSelect");
+    const dirBtn = document.getElementById("projectSortDir");
+    const render = () => {
+        const { field, dir } = loadSort();
+        select.value = field;
+        dirBtn.textContent = dir === "asc" ? "↑" : "↓";
+        dirBtn.title = `${dir === "asc" ? "Ascending" : "Descending"} - click to reverse`;
+        const sign = dir === "asc" ? 1 : -1;
+        list.innerHTML = "";
+        for (const p of [...projects].sort((a, b) => sign * SORT_FIELDS[field].cmp(a, b) || byName(a, b))) list.appendChild(projectCard(p));
+    };
+    const save = (s) => { localStorage.setItem(SORT_KEY, JSON.stringify(s)); render(); };
+    select.onchange = () => save({ field: select.value, dir: SORT_FIELDS[select.value].dir });
+    dirBtn.onclick = () => { const s = loadSort(); save({ field: s.field, dir: s.dir === "asc" ? "desc" : "asc" }); };
+    render();
     document.addEventListener("click", (e) => {        // close an open "..." menu on a click elsewhere
         document.querySelectorAll(".dash-menu[open]").forEach((m) => { if (!m.contains(e.target)) m.open = false; });
     });
@@ -63,9 +109,7 @@ function projectCard(p) {
                 </div>
             </details>
         </div>
-        <div class="progress-bar" aria-hidden="true">
-            <span class="seg reviewed" style="width:0%"></span><span class="seg processed" style="width:0%"></span>
-        </div>
+        <div class="stage-bar progress-bar" aria-hidden="true"></div>
         <div class="progress-legend text-muted">Loading…</div>
         <div class="project-actions">
             ${resumeHref ? `<a class="btn primary" href="${resumeHref}" title="Back to the bubble you edited last">Resume</a>` : ""}
@@ -98,31 +142,28 @@ function projectCard(p) {
         }
     });
 
-    fillProgress(card, p.id);
+    fillProgress(card, p.progress);
     return card;
 }
 
-async function fillProgress(card, projectId) {
+function fillProgress(card, progress) {
     const legend = card.querySelector(".progress-legend");
-    try {
-        const { total, processed, reviewed } = await api.projects.progress(projectId);
-        const pct = (n) => (total ? (100 * n) / total : 0);
-        card.querySelector(".seg.reviewed").style.width = `${pct(reviewed)}%`;
-        card.querySelector(".seg.processed").style.width = `${pct(processed - reviewed)}%`;
-        legend.innerHTML = `
-            <span><i class="dot reviewed"></i>${reviewed} reviewed by you</span>
-            <span><i class="dot processed"></i>${processed - reviewed} processed, not reviewed</span>
-            <span><i class="dot todo"></i>${total - processed} not processed</span>
-            <span class="legend-total">${total} pages</span>`;
-        if (!processed) {
-            const exp = card.querySelector(".export-link");
-            exp.classList.add("disabled");
-            exp.setAttribute("aria-disabled", "true");
-            exp.title = "Nothing to export yet - process (OCR) some pages first";
-            exp.addEventListener("click", (e) => e.preventDefault());
-        }
-    } catch {
+    if (!progress) {
         legend.textContent = "Progress unavailable";
+        return;
+    }
+    const counts = countGroups(progress.stages || {});
+    card.querySelector(".progress-bar").innerHTML = stageBarHtml(counts);
+    const when = progress.last_activity
+        ? new Date(progress.last_activity * 1000).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" }) : "";
+    legend.innerHTML = stageLegendHtml(counts, esc)
+        + `<span class="legend-total" title="Last change on any page">${when ? `last change ${esc(when)} &middot; ` : ""}${progress.total} pages</span>`;
+    if (!progress.processed) {
+        const exp = card.querySelector(".export-link");
+        exp.classList.add("disabled");
+        exp.setAttribute("aria-disabled", "true");
+        exp.title = "Nothing to export yet - process (OCR) some pages first";
+        exp.addEventListener("click", (e) => e.preventDefault());
     }
 }
 

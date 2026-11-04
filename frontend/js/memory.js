@@ -41,6 +41,12 @@ function setupTabs() {
  
 let allCorrections = [];
 const usageCache = new Map();
+const SORT_KEY = "okt-memory-sort";          // one of COLUMN_SORTS (column headers above the list)
+const CHUNK = 200;                           // rows drawn at once ("Show more" for the rest)
+const COLUMN_SORTS = { text: ["text_asc", "text_desc"], kind: ["kind_asc", "kind_desc"], used: ["most_used", "least_used"],
+                       saved: ["newest", "oldest"] };
+let sortMode = (() => { try { return localStorage.getItem(SORT_KEY) || "newest"; } catch { return "newest"; } })();
+let shownCount = CHUNK;
  
 async function loadCorrections() {
     const listEl = document.getElementById("correctionList");
@@ -70,7 +76,7 @@ function updateCountBadge() {
 function renderList() {
     const listEl = document.getElementById("correctionList");
     const query = (document.getElementById("memorySearchInput").value || "").toLowerCase();
-    const sortMode = document.getElementById("memorySortSelect").value;
+    if (!Object.values(COLUMN_SORTS).flat().includes(sortMode)) sortMode = "newest";
     const kindFilter = document.getElementById("memoryKindSelect")?.value || "all";
  
     let items = allCorrections.filter((c) =>
@@ -80,34 +86,50 @@ function renderList() {
         c.final_translation.toLowerCase().includes(query))
     );
  
+    const cmpText = (a, b) => a.final_translation.localeCompare(b.final_translation, "pl", { sensitivity: "base" });
+    const kindRank = (c) => ((c.kind || "corrected") === "corrected" ? 0 : 1);
     const sorters = {
         newest: (a, b) => new Date(b.created_at) - new Date(a.created_at),
         oldest: (a, b) => new Date(a.created_at) - new Date(b.created_at),
         most_used: (a, b) => (b.reuse_count || 0) - (a.reuse_count || 0),
         least_used: (a, b) => (a.reuse_count || 0) - (b.reuse_count || 0),
+        text_asc: cmpText,
+        text_desc: (a, b) => cmpText(b, a),
+        kind_asc: (a, b) => kindRank(a) - kindRank(b) || cmpText(a, b),
+        kind_desc: (a, b) => kindRank(b) - kindRank(a) || cmpText(a, b),
     };
     items = [...items].sort(sorters[sortMode] || sorters.newest);
+    markSortedColumn(sortMode);
  
     listEl.innerHTML = "";
+    const more = document.getElementById("correctionMore");
     if (!items.length) {
         listEl.innerHTML = `<p class="text-muted">No corrections match "${escapeHtml(query)}".</p>`;
+        more.classList.add("hidden");
         return;
     }
-    items.forEach((c) => listEl.appendChild(correctionRow(c)));
+    // drawn in chunks: a long memory (thousands of entries) does not build every row at once
+    items.slice(0, shownCount).forEach((c) => listEl.appendChild(correctionRow(c)));
+    const left = items.length - Math.min(shownCount, items.length);
+    more.classList.toggle("hidden", left <= 0);
+    document.getElementById("correctionMoreBtn").textContent = `Show ${Math.min(CHUNK, left)} more`;
+    document.getElementById("correctionMoreBtn").onclick = () => { shownCount += CHUNK; renderList(); };
+    document.getElementById("correctionMoreNote").textContent = `${Math.min(shownCount, items.length)} of ${items.length} shown`;
 }
  
 function correctionRow(c) {
     const details = document.createElement("details");
-    details.className = "item-row";
+    details.className = "item-row cols";
     details.dataset.correctionId = c.id;
     details.innerHTML = `
         <summary>
-            <span class="item-summary-text">${escapeHtml(c.final_translation)}</span>
-            ${(c.kind || "corrected") === "approved"
+            <span class="cell main"><span title="${escapeHtml(c.final_translation)}">${escapeHtml(c.final_translation)}</span>
+                ${c.edited_at ? `<span class="badge" title="Edited on the Memory page ${escapeHtml(formatDate(c.edited_at))}. First saved as: ${escapeHtml(c.final_before_edit || "")}">edited</span>` : ""}</span>
+            <span class="cell">${(c.kind || "corrected") === "approved"
                 ? '<span class="badge" title="Accepted unchanged - a plain translation-memory entry">approved</span>'
-                : '<span class="badge" title="You changed the AI text - ranked first, the AI text is shown to the model as rejected">corrected</span>'}
-            ${c.edited_at ? `<span class="badge" title="Edited on the Memory page ${escapeHtml(formatDate(c.edited_at))}. First saved as: ${escapeHtml(c.final_before_edit || "")}">edited</span>` : ""}
-            <span class="badge" title="Times used as a hint">used ${c.reuse_count || 0}×</span>
+                : '<span class="badge" title="You changed the AI text - ranked first, the AI text is shown to the model as rejected">corrected</span>'}</span>
+            <span class="cell num" title="Times used as a hint">${c.reuse_count || 0}×</span>
+            <span class="cell num" title="${escapeHtml(formatDate(c.created_at))}">${escapeHtml(shortDate(c.created_at))}</span>
         </summary>
         <div class="item-body">
             <div>
@@ -196,6 +218,10 @@ function setupInlineEdit(details, c) {
 
 function applyUrlTargets() {
     const targetId = params.get("correction");
+    if (targetId && !document.querySelector(`[data-correction-id="${CSS.escape(targetId)}"]`)) {
+        shownCount = Infinity;                // the entry may be further down than the first chunk
+        renderList();
+    }
     if (targetId) {
         const row = document.querySelector(`[data-correction-id="${CSS.escape(targetId)}"]`);
         if (row) {
@@ -382,8 +408,31 @@ function escapeHtml(text) {
     return div.innerHTML;
 }
  
-document.getElementById("memorySearchInput")?.addEventListener("input", renderList);
-document.getElementById("memorySortSelect")?.addEventListener("change", renderList);
+document.getElementById("memorySearchInput")?.addEventListener("input", () => { shownCount = CHUNK; renderList(); });
+
+/* column headers: first click = the natural direction, second click = reversed (the old sort dropdown is gone -
+   it offered exactly these orders) */
+document.querySelectorAll("#correctionCols button[data-sort]").forEach((btn) => btn.addEventListener("click", () => {
+    const [first, second] = COLUMN_SORTS[btn.dataset.sort];
+    sortMode = sortMode === first ? second : first;
+    try { localStorage.setItem(SORT_KEY, sortMode); } catch { /* this visit only */ }
+    shownCount = CHUNK;
+    renderList();
+}));
+
+function markSortedColumn(mode) {
+    document.querySelectorAll("#correctionCols button[data-sort]").forEach((btn) => {
+        const pair = COLUMN_SORTS[btn.dataset.sort];
+        const i = pair.indexOf(mode);
+        btn.classList.toggle("sorted", i >= 0);
+        btn.querySelector(".arrow").textContent = i < 0 ? "" : i === 0 ? "\u25BE" : "\u25B4";
+    });
+}
+
+/** "4 Nov 2026" - the full date + time stays in the tooltip. */
+function shortDate(iso) {
+    return iso ? new Date(iso).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" }) : "";
+}
  
 document.getElementById("exportMemoryBtn")?.addEventListener("click", async () => {
     const data = await api.corrections.export(projectId);
@@ -413,7 +462,7 @@ document.getElementById("importMemoryFile")?.addEventListener("change", async (e
     e.target.value = "";
 });
 
-document.getElementById("memoryKindSelect")?.addEventListener("change", renderList);
+document.getElementById("memoryKindSelect")?.addEventListener("change", () => { shownCount = CHUNK; renderList(); });
 
 document.getElementById("reembedMemoryBtn")?.addEventListener("click", async (event) => {
     const btn = event.currentTarget;

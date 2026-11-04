@@ -211,7 +211,7 @@ def merge_bubbles(ocr_data: dict, bubble_id: str, other_ids, image=None, order=N
              line_count=sum(p.get("line_count", 0) for p in parts))
     if text_raw:
         a["text_raw"] = text_raw
-    for key in ("skip", "skip_reason", "confirmed_translation", "confirmed_at", "layout"):   # layout: the area changed
+    for key in ("skip", "skip_reason", "confirmed_translation", "confirmed_at", "confirmed_via", "layout"):   # layout: the area changed
         a.pop(key, None)
     a["merged_by_user"] = True
     for line in ocr_data.get("lines", []):
@@ -402,7 +402,7 @@ def split_bubble(ocr_data: dict, bubble_id: str, new_line_ids, image=None, ocr_r
     made = []
     for k, piece in enumerate(plan["pieces"]):
         b = {key: v for key, v in bubble.items()
-             if key not in ("confirmed_translation", "confirmed_at", "text_raw", "merged_by_user", "missed_text", "interior_box", "layout")}
+             if key not in ("confirmed_translation", "confirmed_at", "confirmed_via", "text_raw","merged_by_user", "missed_text", "interior_box", "layout")}
         b.update(bubble_id=bubble_id if k == 0 else new_id, text=piece["text"], translation=piece["translation"],
                  ai_translation=piece["ai_translation"], box=rect_poly(piece["bbox"]), line_count=len(piece["line_ids"]),
                  split_from=bubble_id)

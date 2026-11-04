@@ -111,6 +111,27 @@ async def health():
     return {"issues": issues}
 
 
+@router.get("/storage")
+def storage():
+    """Settings > Storage & uninstall: every place the app keeps data, with sizes (services/storage_service.py)."""
+    from services.storage_service import storage_report
+    return storage_report()
+
+
+class StorageDeleteRequest(BaseModel):
+    id: str
+
+
+@router.post("/storage/delete")
+def storage_delete(payload: StorageDeleteRequest):
+    """Delete one item of /system/storage that comes back by itself (caches, logs, spare copies) - never the work."""
+    from services.storage_service import delete_item
+    try:
+        return delete_item(payload.id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
 @router.get("/tail-log")
 async def tail_log(lines: int = 200, errors_only: bool = False):
     """Last N lines of today's log file (errors.log when errors_only, else app.log) - for the in-app log viewer."""

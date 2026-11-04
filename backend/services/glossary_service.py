@@ -171,16 +171,9 @@ def suggest_glossary_terms(project_id: int, db: Session, min_occurrences: int = 
     return sorted(suggestions, key=lambda s: -s["occurrences"])
 
 
-def get_term_usage(term: "GlossaryTerm", project_id: int, db: Session) -> list[dict]:
-    """
-    Every logged bubble where this glossary term fired, with both the
-    zero-shot and memory-injected outputs (when both were logged for that
-    bubble) and whatever the user eventually saved for that exact source
-    text - mirrors memory_service.get_correction_usage's shape so the two
-    usage panels (Memory / Glossary) read the same way.
-    """
+def _fired_logs(project_id: int, db: Session) -> list:
+    """(log, [source terms lower-cased]) of every logged translation of the project where a glossary term fired."""
     from models.models import TranslationLog, Page, Chapter
-
     logs = (
         db.query(TranslationLog)
         .join(Page, TranslationLog.page_id == Page.id)
@@ -189,16 +182,54 @@ def get_term_usage(term: "GlossaryTerm", project_id: int, db: Session) -> list[d
         .order_by(TranslationLog.created_at.desc())
         .all()
     )
-
-    matching = []
+    out = []
     for log in logs:
         try:
             terms = json.loads(log.glossary_terms_used)
         except (TypeError, ValueError):
             continue
-        if any(t.get("source_term", "").lower() == term.source_term.lower() for t in terms):
-            matching.append(log)
+        out.append((log, {(t.get("source_term") or "").lower() for t in terms if isinstance(t, dict)}))
+    return out
 
+
+def term_usage_counts(project_id: int, db: Session) -> dict[str, dict]:
+    """
+    {source term lower-cased: {"used": n, "last_used": iso}} - "Used" column of the glossary (Memory page).
+    n = translated bubbles where the term fired (one translation pass of a bubble counts once: its zero-shot and
+    memory-injected rows are the same request pair). Read from TranslationLog.glossary_terms_used, nothing is written.
+    """
+    seen: dict[str, set] = {}
+    last: dict[str, str] = {}
+    for log, terms in _fired_logs(project_id, db):
+        for t in terms:
+            seen.setdefault(t, set()).add((log.run_id, log.page_id, log.bubble_id))
+            if log.created_at and t not in last:          # newest first
+                last[t] = log.created_at.isoformat()
+    return {t: {"used": len(keys), "last_used": last.get(t)} for t, keys in seen.items()}
+
+
+def _bubble_now(page) -> dict:
+    """bubble id -> {"no": position on the page now, "translation": current text} (page JSON; {} when unreadable)."""
+    from services.page_export import page_paths, load_page_json
+    try:
+        data = load_page_json(page_paths(page)["json"])
+    except Exception:
+        return {}
+    return {b.get("bubble_id"): {"no": i + 1, "translation": b.get("translation") or ""}
+            for i, b in enumerate(data.get("bubbles", []))}
+
+
+def get_term_usage(term: "GlossaryTerm", project_id: int, db: Session) -> list[dict]:
+    """
+    Every logged bubble where this glossary term FIRED (was injected into the prompt) - "Show usage" on the Memory
+    page. Per bubble: where it is (chapter, page file, its number on the page now), the source, the zero-shot and
+    memory-injected outputs, and what the bubble holds NOW (page JSON - the user's final text, also an unchanged
+    acceptance; the old "final_correction" from the correction memory is kept for comparison).
+    """
+    from models.models import Page
+
+    wanted = term.source_term.lower()
+    matching = [log for log, terms in _fired_logs(project_id, db) if wanted in terms]
     if not matching:
         return []
 
@@ -220,12 +251,22 @@ def get_term_usage(term: "GlossaryTerm", project_id: int, db: Session) -> list[d
     for c in corrections:
         final_by_source.setdefault(c.source_text, c.final_translation)
 
+    pages: dict[int, tuple] = {}
     result = []
     for variants in grouped.values():
         base = variants.get("zero_shot") or variants.get("memory_injected")
+        if base.page_id not in pages:
+            page = db.query(Page).filter(Page.id == base.page_id).first()
+            pages[base.page_id] = (page, _bubble_now(page) if page else {})
+        page, now = pages[base.page_id]
+        bubble = now.get(base.bubble_id)
         result.append({
             "source_text": base.source_text,
             "page_id": base.page_id,
+            "chapter": page.chapter.number if page and page.chapter else None,
+            "file_name": page.file_name if page else None,
+            "bubble_no": bubble["no"] if bubble else None,                  # None: deleted / merged since
+            "current_translation": bubble["translation"] if bubble else None,
             "created_at": base.created_at.isoformat() if base.created_at else None,
             "zero_shot_output": variants["zero_shot"].output_text if "zero_shot" in variants else None,
             "memory_injected_output": variants["memory_injected"].output_text if "memory_injected" in variants else None,

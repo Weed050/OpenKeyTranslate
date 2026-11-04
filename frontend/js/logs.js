@@ -9,6 +9,10 @@
  * memory-injected output, lane / similarity / key badges and the summary numbers of the memory experiment.
  * The A/B comparison uses the MODEL output of both variants (injection_json.model_output, i.e. before the
  * terminology post-edit and the ALL-CAPS normalization), so only the memory differs between them.
+ *
+ * Sorting: click a column name (Time, Where, Source, In the bubble now). By time the rows are grouped by day, by
+ * Where by chapter; both groups fold with a click. Rows are DRAWN in chunks (50 / 100 / 250 / all) - the whole
+ * history is loaded once, so filters, sorting and the summary always see every bubble.
  * Display only: nothing here changes what is logged.
  */
 
@@ -19,10 +23,19 @@ import { diffHtml as sharedDiffHtml } from "./diff.js";
 const params = new URLSearchParams(window.location.search);
 const projectId = params.get("project");
 const RESEARCH_KEY = "okt-logs-research";
-const PAGE_SIZE = 200;
+const SORT_KEY = "okt-logs-sort";             // {"key": time | where | source | now, "dir": asc | desc}
+const PAGE_SIZE_KEY = "okt-logs-page-size";   // 50 | 100 | 250 | 0 (= all)
 
 let allRows = [];
-let shownCount = PAGE_SIZE;
+let shownCount = 0;
+const folded = new Set(JSON.parse(sessionStorage.getItem("okt-logs-folded") || "[]"));   // group labels folded in this tab
+const saveFolded = () => sessionStorage.setItem("okt-logs-folded", JSON.stringify([...folded]));
+
+function pageSize() {
+    const n = parseInt(localStorage.getItem(PAGE_SIZE_KEY) ?? "100", 10);
+    return [50, 100, 250, 0].includes(n) ? n : 100;
+}
+const resetShown = () => { shownCount = pageSize() || Infinity; };
 
 window.addEventListener("DOMContentLoaded", async () => {
     renderSidebar(projectId);
@@ -37,20 +50,56 @@ window.addEventListener("DOMContentLoaded", async () => {
         applyResearch();
         renderRows();
     });
-    ["logsFilterSelect", "logsChapterSelect"].forEach((id) => document.getElementById(id).addEventListener("change", () => { shownCount = PAGE_SIZE; renderRows(); }));
-    document.getElementById("logsSearchInput").addEventListener("input", () => { shownCount = PAGE_SIZE; renderRows(); });
+    resetShown();
+    const sizeSelect = document.getElementById("logsPageSize");
+    sizeSelect.value = String(pageSize());
+    sizeSelect.addEventListener("change", () => {
+        localStorage.setItem(PAGE_SIZE_KEY, sizeSelect.value);
+        resetShown();
+        renderRows();
+    });
+    ["logsFilterSelect", "logsChapterSelect"].forEach((id) => document.getElementById(id).addEventListener("change", () => { resetShown(); renderRows(); }));
+    document.getElementById("logsSearchInput").addEventListener("input", () => { resetShown(); renderRows(); });
+    document.getElementById("foldAllBtn").addEventListener("click", () => {
+        const labels = [...new Set(sortedRows().slice(0, shownCount).map(groupLabel).filter(Boolean))];
+        const foldAll = labels.some((d) => !folded.has(d));
+        labels.forEach((d) => (foldAll ? folded.add(d) : folded.delete(d)));
+        saveFolded();
+        renderRows();
+    });
     applyResearch();
+    watchBand();
     await loadLogs();
 });
+
+/**
+ * The sticky filter band: its height goes into --band-h (the column names stick right under it), and it gets the
+ * "stuck" class (title, count, bottom line) once the page is scrolled past its place.
+ */
+function watchBand() {
+    const band = document.getElementById("logsBand");
+    const wrap = document.querySelector(".logs-table-wrap");
+    const setHeight = () => wrap.style.setProperty("--band-h", `${band.offsetHeight}px`);
+    new ResizeObserver(setHeight).observe(band);
+    setHeight();
+    // the band sticks at the scroller's top PADDING edge, not at the window edge: "stuck" from exactly that moment, and
+    // the band covers the padding gap above itself (logs.html .logs-band.stuck::before) so no row shows through it
+    const root = document.querySelector(".main-content");
+    const gap = parseFloat(getComputedStyle(root).paddingTop) || 0;
+    band.style.setProperty("--band-gap", `${gap}px`);
+    const sentinel = document.getElementById("logsBandSentinel");
+    new IntersectionObserver(([entry]) => band.classList.toggle("stuck", !entry.isIntersecting),
+        { root, rootMargin: `-${gap}px 0px 0px 0px` }).observe(sentinel);
+}
 
 const isResearch = () => document.getElementById("researchToggle").checked;
 
 function applyResearch() {
-    document.body.classList.toggle("logs-research", isResearch());
     document.getElementById("logsSummary").classList.toggle("hidden", !isResearch() || !allRows.length);
     document.getElementById("logsIntro").textContent = isResearch()
-        ? "Research view: every zero-shot vs. memory-injected pair the correction-memory experiment is evaluated from. Read-only - never fed back into translation."
-        : "What the AI translated, where, what it was given as hints - and what the bubble says now.";
+        ? "Research view: every zero-shot vs. memory-injected pair the correction-memory experiment is evaluated from. Read-only - never fed back into translation. Click a column name to sort."
+        : "What the AI translated, where, what it was given as hints - and what the bubble says now. Click a column name to sort.";
+    renderHead();
 }
 
 async function loadLogs() {
@@ -59,7 +108,7 @@ async function loadLogs() {
     try {
         logs = await api.logs.listByProject(projectId);
     } catch (e) {
-        tableBody.innerHTML = `<tr><td colspan="8">Couldn't load logs: ${escapeHtml(e.message)}</td></tr>`;
+        tableBody.innerHTML = `<tr><td colspan="${columns().length}">Couldn't load logs: ${escapeHtml(e.message)}</td></tr>`;
         return;
     }
     const groups = new Map();
@@ -71,8 +120,7 @@ async function loadLogs() {
     });
     allRows = [...groups.values()].filter((g) => g.zero_shot || g.memory_injected);
 
-    const chapters = [...new Set(allRows.map((g) => base(g).chapter).filter(Boolean))]
-        .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+    const chapters = [...new Set(allRows.map((g) => base(g).chapter).filter(Boolean))].sort(natural);
     document.getElementById("logsChapterSelect").innerHTML = '<option value="">All chapters</option>'
         + chapters.map((c) => `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join("");
     renderSummary(allRows);
@@ -82,6 +130,7 @@ async function loadLogs() {
 
 const base = (g) => g.zero_shot || g.memory_injected;
 function shownLog(g) { return g.memory_injected || g.zero_shot; }
+const natural = (a, b) => String(a ?? "").localeCompare(String(b ?? ""), undefined, { numeric: true, sensitivity: "base" });
 
 function lane(g) {
     const log = g.memory_injected;
@@ -120,34 +169,150 @@ function filteredRows() {
     });
 }
 
+/* ------------------------------------------------------------------ columns + sorting */
+
+/** What the bubble holds now, as one word: edited / accepted / accepted with the page / not reviewed / gone. */
+function nowStatus(g) {
+    const b = base(g);
+    if (b.current_translation == null) return "gone";
+    if (!b.reviewed) return "open";
+    if (norm(b.current_translation) !== norm(shownLog(g).output_text)) return "edited";
+    return b.page_accepted ? "page" : "accepted";
+}
+const STATUS_RANK = { edited: 0, accepted: 1, page: 2, open: 3, gone: 4 };
+
+/**
+ * Columns of the current view (research: zero-shot + memory-injected instead of one "AI translation" column).
+ * width: fixed px / % - the text columns without one share what is left. sort: the comparator (ascending) of a
+ * sortable column + its natural first direction.
+ */
+function columns() {
+    const cols = [
+        { id: "time", label: "Time", width: "78px", sort: { dir: "desc", cmp: (a, b) => natural(base(a).created_at, base(b).created_at) || base(a).id - base(b).id },
+          cell: (g, ctx) => `<td class="logs-time">${timeCell(base(g).created_at, ctx.sortKey !== "time")}</td>` },
+        { id: "where", label: "Where", width: "180px",
+          sort: { dir: "asc", cmp: (a, b) => natural(base(a).chapter, base(b).chapter) || natural(base(a).file_name, base(b).file_name)
+                                             || (base(a).bubble_no || 1e9) - (base(b).bubble_no || 1e9) },
+          title: "Chapter, page and the bubble's number on the page now - sorted by chapter, then page, then bubble",
+          cell: (g) => `<td>${whereCell(base(g))}</td>` },
+        { id: "source", label: "Source (EN)", sort: { dir: "asc", cmp: (a, b) => natural(base(a).source_text, base(b).source_text) },
+          cell: (g) => `<td>${escapeHtml(base(g).source_text)}</td>` },
+    ];
+    if (isResearch()) {
+        cols.push(
+            { id: "zero", label: "Zero-shot (no memory)", cell: (g) => `<td>${zeroShotCell(g)}</td>` },
+            { id: "memory", label: "Memory-injected", cell: (g) => `<td>${memoryCell(g)}</td>` },
+        );
+    } else {
+        cols.push({ id: "ai", label: "AI translation", cell: (g) => `<td>${escapeHtml(shownLog(g).output_text || "")}</td>` });
+    }
+    cols.push(
+        { id: "now", label: "In the bubble now", title: "Sorted: edited, accepted, accepted with the page, not reviewed, bubble gone",
+          sort: { dir: "asc", cmp: (a, b) => STATUS_RANK[nowStatus(a)] - STATUS_RANK[nowStatus(b)] },
+          cell: (g) => `<td>${nowCell(g)}</td>` },
+        { id: "hints", label: "Hints given to the AI", width: "21%", cell: (g) => `<td>${injectionCell(shownLog(g))}</td>` },
+    );
+    return cols;
+}
+
+function loadSort() {
+    let s;
+    try { s = JSON.parse(localStorage.getItem(SORT_KEY) || "null"); } catch { s = null; }
+    const col = s && columns().find((c) => c.id === s.key && c.sort);
+    return col ? { key: s.key, dir: s.dir === "asc" ? "asc" : "desc" } : { key: "time", dir: "desc" };
+}
+
+function renderHead() {
+    const cols = columns();
+    const sort = loadSort();
+    document.getElementById("logsCols").innerHTML = cols.map((c) => `<col${c.width ? ` style="width:${c.width}"` : ""}>`).join("");
+    const head = document.getElementById("logsHead");
+    head.innerHTML = cols.map((c) => {
+        const sorted = c.sort && sort.key === c.id;
+        const tip = c.sort ? `${c.title ? c.title + ". " : ""}Click to sort${sorted ? " (again: reverse)" : ""}` : c.title || "";
+        return `<th data-col="${c.id}" class="${c.sort ? "sortable" : ""}${sorted ? " sorted" : ""}" title="${escapeHtml(tip)}">${escapeHtml(c.label)}${sorted
+            ? `<span class="arrow">${sort.dir === "asc" ? "▴" : "▾"}</span>` : ""}</th>`;
+    }).join("");
+    head.querySelectorAll("th.sortable").forEach((th) => th.addEventListener("click", () => {
+        const col = cols.find((c) => c.id === th.dataset.col);
+        const cur = loadSort();
+        const dir = cur.key === col.id ? (cur.dir === "asc" ? "desc" : "asc") : col.sort.dir;
+        localStorage.setItem(SORT_KEY, JSON.stringify({ key: col.id, dir }));
+        resetShown();
+        renderHead();
+        renderRows();
+    }));
+}
+
+function sortedRows() {
+    const { key, dir } = loadSort();
+    const col = columns().find((c) => c.id === key);
+    const sign = dir === "asc" ? 1 : -1;
+    return filteredRows().sort((a, b) => sign * col.sort.cmp(a, b));
+}
+
+/** Group label of a row: its day when sorted by time, its chapter when sorted by Where, none otherwise. */
+function groupLabel(g) {
+    const { key } = loadSort();
+    if (key === "time") return dayLabel(base(g).created_at);
+    if (key === "where") return base(g).chapter || "No chapter";
+    return null;
+}
+
+/* ------------------------------------------------------------------ rows */
+
 function renderRows() {
     const tableBody = document.getElementById("logsBody");
-    const rows = filteredRows();
+    const rows = sortedRows();
+    const cols = columns();
+    const span = cols.length;
     document.getElementById("countBadge").textContent = `${rows.length} bubble${rows.length === 1 ? "" : "s"}`;
+    document.getElementById("bandCount").textContent = document.getElementById("countBadge").textContent;
+    const more = document.getElementById("logsMore");
+    const note = document.getElementById("logsShownNote");
     if (!rows.length) {
-        tableBody.innerHTML = `<tr><td colspan="8" class="text-muted">${allRows.length
+        tableBody.innerHTML = `<tr><td colspan="${span}" class="text-muted">${allRows.length
             ? "No bubbles match this filter."
             : "No translations yet - process a page to fill the history."}</td></tr>`;
-        document.getElementById("logsMore").classList.add("hidden");
+        more.classList.add("hidden");
+        note.textContent = "";
         return;
     }
     tableBody.innerHTML = "";
-    let lastDay = null;
-    rows.slice(0, shownCount).forEach((g) => {
-        const day = dayLabel(base(g).created_at);
-        if (day !== lastDay) {                       // newest first: one separator row per day
+    const shown = rows.slice(0, shownCount);
+    const perGroup = new Map();
+    rows.forEach((g) => { const d = groupLabel(g); if (d) perGroup.set(d, (perGroup.get(d) || 0) + 1); });
+    const { key } = loadSort();
+    const ctx = { sortKey: key };
+    let last = null;
+    shown.forEach((g) => {
+        const label = groupLabel(g);
+        if (label && label !== last) {               // one separator row per day / chapter, a click folds it
             const sep = document.createElement("tr");
-            sep.className = "logs-day";
-            sep.innerHTML = `<td colspan="8">${escapeHtml(day)}</td>`;
+            sep.className = "logs-group" + (folded.has(label) ? " folded" : "");
+            const n = perGroup.get(label);
+            sep.innerHTML = `<td colspan="${span}"><span class="chev">&#9656;</span>${escapeHtml(label)}<span class="group-count">${n} bubble${n === 1 ? "" : "s"}</span></td>`;
+            sep.title = folded.has(label) ? `Click to show this ${key === "where" ? "chapter" : "day"}` : `Click to fold this ${key === "where" ? "chapter" : "day"}`;
+            sep.addEventListener("click", () => {
+                if (folded.has(label)) folded.delete(label); else folded.add(label);
+                saveFolded();
+                renderRows();
+            });
             tableBody.appendChild(sep);
-            lastDay = day;
+            last = label;
         }
-        tableBody.appendChild(logRow(g));
+        if (!label || !folded.has(label)) tableBody.appendChild(logRow(g, cols, ctx));
     });
-    const more = document.getElementById("logsMore");
-    more.classList.toggle("hidden", rows.length <= shownCount);
-    more.textContent = `Show ${Math.min(PAGE_SIZE, rows.length - shownCount)} more (${rows.length - shownCount} left)`;
-    more.onclick = () => { shownCount += PAGE_SIZE; renderRows(); };
+    const foldBtn = document.getElementById("foldAllBtn");
+    foldBtn.disabled = !perGroup.size;
+    const noun = key === "where" ? "chapters" : "days";
+    foldBtn.textContent = perGroup.size && [...perGroup.keys()].every((d) => folded.has(d)) ? `Unfold all ${noun}` : `Fold all ${noun}`;
+    const left = rows.length - shown.length;
+    more.classList.toggle("hidden", left <= 0);
+    const step = pageSize() || left;
+    more.textContent = `Show ${Math.min(step, left)} more`;
+    more.onclick = () => { shownCount += step; renderRows(); };
+    note.textContent = left > 0 ? `${shown.length} of ${rows.length} shown` : `all ${rows.length} shown`;
 }
 
 function dayLabel(iso) {
@@ -160,51 +325,63 @@ function dayLabel(iso) {
     return d.toLocaleDateString(undefined, { weekday: "short", year: "numeric", month: "long", day: "numeric" });
 }
 
-function timeLabel(iso) {
-    return iso ? new Date(iso).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" }) : "";
+/** Time of day; the date under it when the rows are not grouped by day (sorted by something else than Time). */
+function timeCell(iso, withDate) {
+    if (!iso) return "";
+    const d = new Date(iso);
+    const t = escapeHtml(d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" }));
+    return withDate ? `${t}<div class="logs-date">${escapeHtml(d.toLocaleDateString(undefined, { day: "numeric", month: "short" }))}</div>` : t;
 }
 
 function whereCell(b) {
     const page = (b.file_name || "").replace(/\.[^.]+$/, "");
-    const bubble = b.bubble_no ? `bubble ${b.bubble_no}` : '<span class="text-muted" title="Deleted, merged or split since">bubble gone</span>';
+    const bubble = b.bubble_no ? `#${b.bubble_no}` : '<span title="Deleted, merged or split since">bubble gone</span>';
     const href = `editor.html?project=${encodeURIComponent(projectId)}&page=${b.page_id}${b.bubble_no ? `&bubble=${b.bubble_no - 1}` : ""}`;
-    return `<div class="logs-where">${escapeHtml(b.chapter || "?")}</div>
-        <div>${escapeHtml(page)} &middot; ${bubble}</div>
-        <a href="${href}" title="Open this bubble in the editor">Open &rarr;</a>`;
+    return `<div class="logs-where">
+        <span class="w-chapter">${escapeHtml(b.chapter || "?")}</span>
+        <a class="w-open" href="${href}" title="Open this bubble in the editor">Open</a>
+        <span class="w-page">${escapeHtml(page)} &middot; ${bubble}</span>
+    </div>`;
+}
+
+/** Text + badges on their own line under it (badges never squeeze the text). */
+const withMeta = (text, badges = "") => `<div>${text}</div><div class="cell-meta">${badges}</div>`;
+
+function zeroShotCell(g) {
+    const ab = !!(g.memory_injected && g.zero_shot);
+    return g.zero_shot
+        ? withMeta(escapeHtml(g.zero_shot.output_text), ab ? '<span class="badge" title="Same payload without memory (A/B counterfactual)">A/B</span>' : "")
+        : '<span class="cell-none">-</span>';
+}
+
+function memoryCell(g) {
+    return g.memory_injected
+        ? withMeta(escapeHtml(g.memory_injected.output_text), laneBadge(g) + similarityBadge(g.memory_injected.similarity_score) + keyBadge(g.memory_injected.key_label))
+        : '<span class="cell-none" title="No memory entry was similar enough - only the zero-shot translation exists">-</span>';
 }
 
 function nowCell(g) {
     const b = base(g);
-    if (b.current_translation == null) return '<span class="text-muted">bubble no longer on the page</span>';
+    const status = nowStatus(g);
+    if (status === "gone") return '<span class="cell-none">bubble no longer on the page</span>';
     const ai = shownLog(g).output_text || "";
     const now = b.current_translation;
+    const badge = {
+        open: '<span class="badge stage-badge" data-status="translated" title="Not reviewed in the editor yet">not reviewed</span>',
+        accepted: '<span class="badge stage-badge" data-status="reviewed" title="You accepted the AI text unchanged">accepted</span>',
+        page: '<span class="badge stage-badge" data-status="reviewed" title="Accepted together with the whole page (Accept page / review mode) - maybe not read on its own">accepted with page</span>',
+        edited: '<span class="badge stage-badge" data-status="checked" title="You edited the AI text">edited</span>',
+    }[status];
     if (norm(now) === norm(ai)) {
-        return b.reviewed
-            ? `${escapeHtml(now)} <span class="badge" data-status="reviewed" title="You accepted the AI text unchanged">accepted</span>`
-            : `<span class="text-muted">same as the AI</span> <span class="badge" data-status="translated" title="Not reviewed in the editor yet">not reviewed</span>`;
+        return status === "open" ? withMeta('<span class="cell-none">same as the AI</span>', badge) : withMeta(escapeHtml(now), badge);
     }
-    const tag = b.reviewed ? "" : ' <span class="badge" data-status="translated">not reviewed</span>';
-    return `<div title="Changes from the AI text to what the bubble says now">${sharedDiffHtml(ai, now, escapeHtml)}</div>${tag}`;
+    return withMeta(`<span title="Changes from the AI text to what the bubble says now">${sharedDiffHtml(ai, now, escapeHtml)}</span>`, badge);
 }
 
-function logRow(group) {
-    const b = base(group);
-    const shown = shownLog(group);
-    const ab = !!(group.memory_injected && group.zero_shot);
+function logRow(group, cols, ctx) {
     const tr = document.createElement("tr");
-    tr.innerHTML = `
-        <td class="logs-time">${escapeHtml(timeLabel(b.created_at))}</td>
-        <td>${whereCell(b)}</td>
-        <td class="text-mono">${escapeHtml(b.source_text)}</td>
-        <td class="col-simple">${escapeHtml(shown.output_text || "")}</td>
-        <td class="col-research">${group.zero_shot
-            ? escapeHtml(group.zero_shot.output_text) + (ab ? ' <span class="badge" title="Same payload without memory (A/B counterfactual)">A/B</span>' : "")
-            : '<span class="text-muted">-</span>'}</td>
-        <td class="col-research">${group.memory_injected
-            ? escapeHtml(group.memory_injected.output_text) + laneBadge(group) + similarityBadge(group.memory_injected.similarity_score) + keyBadge(group.memory_injected.key_label)
-            : '<span class="text-muted">no memory match</span>'}</td>
-        <td>${nowCell(group)}</td>
-        <td>${injectionCell(shown)}</td>`;
+    tr.className = "log-row";
+    tr.innerHTML = cols.map((c) => c.cell(group, ctx)).join("");
     return tr;
 }
 
@@ -222,13 +399,20 @@ function injectionCell(log) {
 
     if (examples && examples.length) {
         chips.push(`${examples.length} from memory`);
-        parts.push(`<div><div class="inj-label">Your earlier translations shown as examples (best first)</div>${examples.map((ex) => `
-            <div class="inj-ex ${ex.kind === "corrected" ? "corrected" : ""}">
-                ${ex.en ? `<div class="text-mono">${escapeHtml(ex.en)}</div>` : ""}
-                <div>&rarr; ${escapeHtml(ex.pl || "")}</div>
-                ${ex.rejected ? `<div class="inj-rejected" title="AI text the user replaced">${escapeHtml(ex.rejected)}</div>` : ""}
-                <div class="text-muted" style="font-size:11px;">${ex.similarity != null ? `similarity ${Math.round(ex.similarity * 100)}%` : ""}${ex.kind ? ` · ${ex.kind}` : ""}</div>
-            </div>`).join("")}</div>`);
+        // one card per example: EN source, then the user's Polish - for a corrected one as a diff from the AI text
+        // the user replaced (what the model was shown as "rejected"), so the change is visible at a glance
+        parts.push(`<div><div class="inj-label">Your earlier translations shown as examples (best first)</div>${examples.map((ex) => {
+            const meta = [ex.similarity != null ? `${Math.round(ex.similarity * 100)}% similar` : "",
+                          ex.kind === "corrected" ? "you corrected the AI" : ex.kind === "approved" ? "you approved it" : ex.kind || ""].filter(Boolean).join(" · ");
+            const pl = ex.rejected && ex.rejected !== ex.pl
+                ? `<span title="AI text you replaced -> your text">${sharedDiffHtml(ex.rejected, ex.pl || "", escapeHtml)}</span>`
+                : escapeHtml(ex.pl || "");
+            return `<div class="inj-ex ${ex.kind === "corrected" ? "corrected" : ""}">
+                ${meta ? `<div class="ex-meta">${escapeHtml(meta)}</div>` : ""}
+                ${ex.en ? `<span class="k">EN</span><span>${escapeHtml(ex.en)}</span>` : ""}
+                <span class="k">PL</span><span>${pl}</span>
+            </div>`;
+        }).join("")}</div>`);
     }
     if (exact !== undefined && exact !== null) {
         chips.push("exact phrase");
@@ -262,10 +446,10 @@ function injectionCell(log) {
     if (inj.ab) meta.push(`A/B: ${inj.ab.replace("_", " ")}`);
     if (log.model_used) meta.push(log.model_used);
     if (log.key_label) meta.push(`key ${log.key_label}`);
-    if (meta.length) parts.push(`<div class="text-muted" style="font-size:11px;">${meta.map(escapeHtml).join(" · ")}</div>`);
+    if (meta.length) parts.push(`<div class="inj-meta">${meta.map(escapeHtml).join(" · ")}</div>`);
 
-    if (!chips.length && !parts.length) return '<span class="text-muted">no hints</span>';
-    return `<details class="inj"><summary>${chips.length ? chips.map(escapeHtml).join(", ") : "no hints - details"}</summary>
+    if (!chips.length && !parts.length) return '<span class="cell-none">-</span>';
+    return `<details class="inj"><summary class="${chips.length ? "" : "inj-empty"}" title="${chips.length ? "What the AI got with this bubble" : "No memory or glossary hints - click for the request details"}">${chips.length ? chips.map(escapeHtml).join(", ") : "no hints"}</summary>
         <div class="inj-body">${parts.join("")}</div></details>`;
 }
 

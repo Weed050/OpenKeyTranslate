@@ -4,7 +4,48 @@ All notable changes to OpenKeyTranslate. Versions follow `APP_VERSION` in `backe
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-11-04
+
+### Research data - read before comparing with older logs
+- The A/B counterfactual (same payload without memory) is now sent **pinned to the key - and so the model - of the
+  shown translation**. Before, a rate limit could move it to another key or provider. A busy pinned key skips the pair
+  (`injection_json.ab = "failed"`). `key_label` keeps its meaning; with several providers `model_used` tells them apart.
+- A bubble can carry `confirmed_via: "page"` = accepted together with the whole page ("Accept page" / the
+  "Next page: accept ..." mode), possibly without being read on its own. Without the field = accepted one by one as
+  before. `confirmed_at` / `confirmed_translation` are unchanged.
+
+### Added
+- **Key pool** (Settings > Translation & API keys): one ordered list of keys across Groq, Gemini and
+  **OpenAI-compatible** servers (beta: OpenRouter, Mistral, DeepSeek, OpenAI, local Ollama / LM Studio - no key needed
+  there). Per key: on / off, order, provider, model (suggestions + "Models" asks the server), **Test** with a result box
+  (works / rejected / rate limit / no connection + a hint), and "Test the pool". Rotation: rate limit -> 65 s pause,
+  rejected key -> 10 min, server unreachable -> keys on other hosts. Old settings keep working unchanged.
+- **OCR debug view** in the editor (switch in Settings > Editor): over the page, what OCR kept (by confidence), what the
+  second reading rescued, readings under the threshold, what later steps removed and why (duplicate, noise, ignore
+  pattern, line cut at a slice edge), and the slice cuts of tall strips; layer panel + "Not used" list. Full data for
+  pages OCR'd from this version on (`ocr_debug` in the page JSON, `GET /pages/{id}/ocr-debug`).
+- **Settings > Storage & uninstall**: every folder of the app with its size and an Open button; deletes only what comes
+  back by itself or is a spare copy (model caches, logs, old settings copies, import leftovers - never projects, the
+  database or settings); uninstall steps with the folders to remove.
+- **Page review**: "Accept page", "Layout checked", a review mode ("Next page: ...") in the mode bar with Undo on the
+  next page, and » next to the page arrows = the next page still to review.
+- **Page stages** everywhere from one rule (`services/page_progress.py`): Not started -> OCR done -> partly translated
+  -> Translated (AI) -> Translation reviewed -> Fully reviewed -> exported; exports to another folder or a ZIP are
+  remembered too (`<project>/export_log.json`). Fixed stage colours per light / dark theme.
+- Pages list: the legend is a quick filter, a **Status** filter (hides tiles only, bars count everything, "Open first
+  matching page"), sort field + direction; tiles are built when a chapter is opened. Project cards: stage bar and sort.
+- Bulk export skips pages not fully reviewed by default (exporting AI drafts is a conscious choice, with a warning).
+- **History**: sort by clicking a column name (Time / Where / Source / In the bubble now), rows grouped by day or
+  chapter (fold a group, "Fold all"), rows drawn in chunks (50 / 100 / 250 / all - filters and the summary still use
+  everything), the filter bar and the column names stick to the top, "accepted with the page" status.
+- **Memory / Glossary**: sort by column names, long lists in chunks ("Show more"); glossary **Used** = translated
+  bubbles where the term was given to the AI, with "Show where it fired".
+- Logo and window icon (`frontend/img/`, `backend/scripts/make_icon.py`).
+- Help: key pool, OpenAI-compatible, A/B and keys, Storage & uninstall, OCR debug, page review, sorting.
+
 ### Fixed
+- OCR self-test: on a PC with `paddlepaddle-gpu` a CPU-only run no longer advises installing the CPU Paddle (it would
+  replace the GPU build).
 - **OCR on a computer without a GPU**: the default detection model on the CPU is now "mobile" (`ocr_det_model`:
   auto = server on the GPU, mobile on the CPU). Measured on a 1612 px page: server 979 s with Paddle 3.3 CPU and an
   access violation with Paddle 3.0 CPU; mobile 19 s with both. The CPU flags of `ocr_runtime` are applied for every

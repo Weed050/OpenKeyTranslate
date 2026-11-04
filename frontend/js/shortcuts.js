@@ -34,6 +34,7 @@ export const ACTIONS = [
     { id: "nextBubble", label: "Next bubble", scope: "editor", keys: "ArrowRight" },
     { id: "prevPage", label: "Previous page", scope: "editor", keys: "Ctrl+ArrowLeft" },
     { id: "nextPage", label: "Next page", scope: "editor", keys: "Ctrl+ArrowRight" },
+    { id: "nextToReview", label: "Next page to review", scope: "editor", keys: "Ctrl+Shift+ArrowRight" },
     { id: "toggleMode", label: "Switch Translate / Lettering", scope: "editor", keys: "Alt+L", whileTyping: true },
     { id: "cleanArea", label: "Clean area (draw)", scope: "editor", keys: "C" },
     { id: "exportPage", label: "Export this page", scope: "editor", keys: "Alt+E", whileTyping: true },

@@ -5,6 +5,8 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="icon" href="img/okt-logo.svg" type="image/svg+xml">
+    <link rel="alternate icon" href="img/okt.ico">
     <title>OpenKeyTranslate - Editor</title>
     <link rel="stylesheet" href="css/tokens.css">
     <script src="js/theme.js"></script>
@@ -20,7 +22,7 @@
  
     <div class="app-shell">
         <nav class="sidebar">
-            <div class="sidebar-brand">OpenKeyTranslate</div>
+            <div class="sidebar-brand"><img src="img/okt-logo.svg" alt="" class="brand-icon">OpenKeyTranslate</div>
  
             <div class="sidebar-section">
                 <div class="sidebar-label">Active</div>
@@ -47,6 +49,7 @@
                         <button id="prevPageBtn" class="icon-btn" title="Previous page">&larr;</button>
                         <span id="pageLabel"></span>
                         <button id="nextPageBtn" class="icon-btn" title="Next page">&rarr;</button>
+                        <button id="nextToReviewBtn" class="icon-btn" title="Next page to review: the first page after this one whose translation is not reviewed yet (with the review mode &quot;accept text + layout&quot;: not fully reviewed). Skips pages that are done.">&raquo;</button>
                         <span class="toolbar-sep"></span>
                         <!-- most used first; rare page tools in More (nothing wraps out of sight) -->
                         <button id="retranslateBtn" class="icon-btn" title="Re-run translation only. Bubbles you edited are kept (Shift+click overwrites them too)">Retranslate</button>
@@ -64,6 +67,7 @@
                             <option value="project">Use this order for the whole project…</option>
                         </select>
                         <button id="previewBtn" class="icon-btn" title="Show the page with the translation typeset into the bubbles (the clean page is shown otherwise). Download from the page list: Export translated pages.">Preview text</button>
+                        <button id="ocrDebugBtn" class="icon-btn hidden" title="OCR debug view: every raw OCR reading with its confidence, second-chance readings, readings under the threshold, what later steps removed and the slice cuts. (This button: Settings &gt; Editor.)">OCR debug</button>
                         <span class="toolbar-sep"></span>
                         <button id="zoomOutBtn" class="icon-btn" title="Zoom out (Ctrl + scroll down)">&minus;</button>
                         <span id="zoomLabel">100%</span>
@@ -136,6 +140,28 @@
                             <button id="expandAllBtn">Expand all</button>
                             <button id="goToNextUnprocessedBtn">Go to next unprocessed</button>
                             <button id="chapterViewBtn" title="Switch between a grid of chapter cards and a single column">Layout: grid</button>
+                        </div>
+
+                        <!-- view tools at the right edge: what is shown and in which order (accent outline when not default) -->
+                        <div class="page-view-tools" id="pageViewTools">
+                            <details class="stage-filter" id="stageFilter">
+                                <summary id="stageFilterBtn" class="stage-filter-btn" title="Show only pages in chosen stages (OCR done, translated by the AI, reviewed...)">
+                                    <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 5h18l-7 8.5V19l-4 2v-7.5z"/></svg>
+                                    Status <span class="filter-count"></span>
+                                </summary>
+                                <div class="stage-filter-menu" id="stageFilterMenu"></div>
+                            </details>
+                            <span class="sort-group">
+                                <label for="chapterSortSelect" class="sort-label">Sort</label>
+                                <select id="chapterSortSelect" class="chapter-sort" title="Order of the chapter cards">
+                                    <option value="number">Chapter number</option>
+                                    <option value="progress">Progress</option>
+                                    <option value="reviewed">Share reviewed</option>
+                                    <option value="updated">Last worked on</option>
+                                    <option value="name">Name</option>
+                                </select>
+                                <button type="button" id="chapterSortDir" class="sort-dir" title="Ascending - click to reverse">&uarr;</button>
+                            </span>
                         </div>
 
                         <div class="controls-right">

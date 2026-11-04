@@ -29,9 +29,9 @@ const SECTION_STATUS = {
     translation: "translationStatus", memory: "memorySettingsStatus", ocr: "ocrOptionsStatus", engine: "ocrEngineStatus",
     typesetting: "typesettingStatus", ignore: "ignorePatternsStatus",
 };
-// fields whose change saves their section (key rows of the translation section are wired in renderKeyRows)
+// fields whose change saves their section (key rows of the translation section are wired in keyRowElement)
 const SECTION_FIELDS = {
-    translation: ["translationOnCheckbox", "providerSelect", "providerModelGroq", "providerModelGemini",
+    translation: ["translationOnCheckbox", "providerModelGroq", "providerModelGemini", "providerModelCompat",
                   "temperatureInput", "translationMaxTokensInput", "geminiThinkingInput"],
     memory: ["memoryMinWordsInput", "memorySimilarityInput", "memoryTopKInput", "memoryShortPhraseInput",
              "memoryLexicalInput", "memoryAbRateInput", "memoryStoreApprovedCheckbox", "memoryAbCheckbox",
@@ -492,106 +492,246 @@ if (spellcheckCheckbox) {
 
 /* ----------------------------- translation (BYOK) ----------------------------- */
 
-const KNOWN_PROVIDERS = ["groq", "gemini"];
-const PROVIDER_MODEL_INPUT = { groq: "providerModelGroq", gemini: "providerModelGemini" };
+/*
+ * ONE pool of keys (backend: services/providers - KeyPool): rows in order of use, providers may be mixed, each row
+ * switched on / off. A row: {provider, label, api_key, model, base_url, enabled, from_provider, from_label}.
+ * api_key is the masked string the server returned (= "keep the stored secret") or what the user typed; from_provider /
+ * from_label say where that stored secret lives. The server keeps a stored secret only while the row stays with the
+ * same provider and (OpenAI-compatible) the same server address - so moving a row there clears its key field here.
+ */
+const PROVIDER_ORDER = ["groq", "gemini", "openai_compat"];
+const PROVIDER_MODEL_INPUT = { groq: "providerModelGroq", gemini: "providerModelGemini", openai_compat: "providerModelCompat" };
+const GITHUB_ISSUES = "https://github.com/Weed050/OpenKeyTranslate/issues";
+const isMasked = (value) => String(value || "").startsWith("•");
 
-// working copy: ONE ROW PER KEY across providers - {provider, label, api_key, model, from_provider, from_label}.
-// api_key is either the masked string the server returned (= "keep the stored secret") or what the user typed;
-// from_provider / from_label say where that stored secret lives, so a row moved to another provider keeps its key.
 let keyRows = [];
+let providerInfo = {};
+const fetchedModels = {};            // key id -> model ids from the server (Models button)
+
+function providerLabel(name) {
+    return providerInfo[name]?.label || name;
+}
+
+function defaultModel(provider) {
+    return document.getElementById(PROVIDER_MODEL_INPUT[provider])?.value.trim() || "";
+}
+
+function keyId(row) {
+    return `${row.provider}/${row.label.trim() || "default"}`;
+}
+
+/** Why a row cannot be used ("" = fine) - the same rules as services/providers.unusable_reason. */
+function rowProblem(row) {
+    if (!(row.model.trim() || defaultModel(row.provider))) return "no model";
+    if (row.provider === "openai_compat") return row.base_url.trim() ? "" : "no server address";
+    return row.api_key.trim() ? "" : "no key";
+}
 
 function fillTranslationForm() {
+    providerInfo = appSettings.known_providers || {};
     const providers = appSettings.providers || {};
-    keyRows = [];
-    for (const name of KNOWN_PROVIDERS) {
-        const cfg = providers[name] || {};
-        document.getElementById(PROVIDER_MODEL_INPUT[name]).value = cfg.model || "";
-        const keys = cfg.keys || [];
-        for (const k of keys) {
-            if (!k.api_key && keys.length === 1) continue;          // the empty placeholder slot of an unused provider
-            keyRows.push({ provider: name, label: k.label || "default", api_key: k.api_key || "", model: k.model || "",
-                           from_provider: name, from_label: k.label || "default" });
-        }
+    for (const name of PROVIDER_ORDER) {
+        const input = document.getElementById(PROVIDER_MODEL_INPUT[name]);
+        if (input) input.value = providers[name]?.model || "";
     }
+    fillDatalist("modelsGroq", providerInfo.groq?.models || []);
+    fillDatalist("modelsGemini", providerInfo.gemini?.models || []);
+    const presets = document.getElementById("compatPresets");
+    presets.innerHTML = "";
+    (providerInfo.openai_compat?.presets || []).forEach((p) => {
+        const o = document.createElement("option");
+        o.value = p.base_url; o.label = p.name;
+        presets.appendChild(o);
+    });
+    keyRows = (appSettings.key_pool || [])
+        // the empty "default" slot of a provider nobody uses (fresh settings) is not worth a row
+        .filter((k) => !(k.label === "default" && !k.api_key && !k.enabled && k.provider !== "openai_compat"))
+        .map((k) => ({
+            provider: k.provider, label: k.label, api_key: k.api_key || "", model: k.model || "", base_url: k.base_url || "",
+            enabled: k.enabled !== false, from_provider: k.provider, from_label: k.label,
+        }));
     document.getElementById("translationOnCheckbox").checked = appSettings.translation_on !== false;
-    document.getElementById("providerSelect").value = appSettings.active_provider || "groq";
     document.getElementById("temperatureInput").value = appSettings.translation_temperature ?? 0.4;
     document.getElementById("translationMaxTokensInput").value = appSettings.translation_max_tokens ?? 4096;
     document.getElementById("geminiThinkingInput").value = appSettings.gemini_thinking_budget ?? 0;
     renderKeyRows();
 }
 
-function currentProviderName() {
-    return document.getElementById("providerSelect").value;
+function fillDatalist(id, values) {
+    const list = document.getElementById(id);
+    if (!list) return;
+    list.innerHTML = "";
+    [...new Set(values)].forEach((v) => {
+        const o = document.createElement("option");
+        o.value = v;
+        list.appendChild(o);
+    });
+}
+
+function keyChanged() {
+    markDirty("translation");
+    scheduleSave("translation");
 }
 
 function renderKeyRows() {
     const list = document.getElementById("keyList");
     list.innerHTML = "";
-    const active = currentProviderName();
-    keyRows.forEach((row, i) => {
-        const line = document.createElement("div");
-        line.style.cssText = "display:flex; gap:6px; margin-bottom:6px; align-items:center; flex-wrap:wrap;";
-        line.style.opacity = row.provider === active ? "1" : "0.6";
-        line.title = row.provider === active ? "Used (active provider)" : "Not used until you switch the active provider";
+    if (!keyRows.length) {
+        list.innerHTML = `<p class="text-muted">No keys yet - <b>+ Add key</b> below.</p>`;
+        return;
+    }
+    keyRows.forEach((row, i) => list.appendChild(keyRowElement(row, i)));
+}
 
-        const label = document.createElement("input");
-        label.type = "text"; label.value = row.label; label.placeholder = "name"; label.style.maxWidth = "110px";
-        label.addEventListener("input", () => { row.label = label.value; });
+function keyRowElement(row, i) {
+    const wrap = document.createElement("div");
+    wrap.className = "key-row" + (row.enabled ? "" : " off");
+    row._el = wrap;
 
-        const provider = document.createElement("select");
-        provider.style.maxWidth = "110px";
-        KNOWN_PROVIDERS.forEach((name) => provider.add(new Option(name[0].toUpperCase() + name.slice(1), name)));
-        provider.value = row.provider;
-        provider.addEventListener("change", () => { row.provider = provider.value; renderKeyRows(); });
+    const main = document.createElement("div");
+    main.className = "key-main";
 
-        const model = document.createElement("input");
-        model.type = "text"; model.value = row.model; model.spellcheck = false; model.style.maxWidth = "190px";
-        model.placeholder = `default: ${document.getElementById(PROVIDER_MODEL_INPUT[row.provider]).value || "?"}`;
-        model.title = "Model for this key only - empty = the provider's default model";
-        model.addEventListener("input", () => { row.model = model.value; });
+    const on = document.createElement("input");
+    on.type = "checkbox"; on.checked = row.enabled; on.className = "key-on";
+    on.title = "Use this key for translation (off = kept, but skipped)";
+    on.addEventListener("change", () => { row.enabled = on.checked; wrap.classList.toggle("off", !on.checked); keyChanged(); });
 
-        const key = document.createElement("input");
-        key.type = "text"; key.value = row.api_key; key.placeholder = "paste API key"; key.spellcheck = false;
-        key.autocomplete = "off"; key.className = "text-mono"; key.style.flex = "1"; key.style.minWidth = "160px";
-        key.addEventListener("input", () => { row.api_key = key.value; });
-        row._keyInput = key;
+    const order = document.createElement("span");
+    order.className = "key-order";
+    const up = document.createElement("button");
+    up.type = "button"; up.textContent = "▲"; up.title = "Use earlier"; up.disabled = i === 0;
+    const down = document.createElement("button");
+    down.type = "button"; down.textContent = "▼"; down.title = "Use later"; down.disabled = i === keyRows.length - 1;
+    const move = (delta) => {
+        const j = i + delta;
+        [keyRows[i], keyRows[j]] = [keyRows[j], keyRows[i]];
+        renderKeyRows();
+        keyChanged();
+    };
+    up.addEventListener("click", () => move(-1));
+    down.addEventListener("click", () => move(1));
+    order.append(up, down);
 
-        const del = document.createElement("button");
-        del.className = "danger"; del.textContent = "Remove";
-        del.addEventListener("click", () => {
-            keyRows.splice(i, 1);
-            renderKeyRows();
-            markDirty("translation");
-            scheduleSave("translation");
-        });
+    const label = document.createElement("input");
+    label.type = "text"; label.value = row.label; label.placeholder = "name"; label.className = "key-label";
+    label.title = "Name of the key - shown in the translation history (which key answered)";
+    label.addEventListener("input", () => { row.label = label.value; });
 
-        [label, provider, model, key].forEach((el) => wireField("translation", el));
-        line.append(label, provider, model, key, del);
-        list.appendChild(line);
+    const provider = document.createElement("select");
+    provider.className = "key-provider";
+    PROVIDER_ORDER.forEach((name) => provider.add(new Option(providerLabel(name) + (providerInfo[name]?.beta ? " (beta)" : ""), name)));
+    provider.value = row.provider;
+    provider.addEventListener("change", () => {
+        row.provider = provider.value;
+        if (isMasked(row.api_key) && row.from_provider !== row.provider) {
+            row.api_key = "";                 // the server would not move a stored key to another provider anyway
+            row._moved = true;
+        }
+        renderKeyRows();
+        keyChanged();
     });
-    if (!keyRows.length) list.innerHTML = `<p class="text-muted">No keys. Add one below.</p>`;
+
+    const modelBox = document.createElement("span");
+    modelBox.className = "key-model-box";
+    const model = document.createElement("input");
+    model.type = "text"; model.value = row.model; model.spellcheck = false; model.className = "key-model";
+    const listId = `keyModels${i}`;
+    model.setAttribute("list", listId);
+    model.placeholder = `default: ${defaultModel(row.provider) || "?"}`;
+    model.title = "Model for this key only - empty = the provider's default model below. Click to pick from the list, or type any name.";
+    model.addEventListener("input", () => { row.model = model.value; });
+    const models = document.createElement("datalist");
+    models.id = listId;
+    const known = [...(fetchedModels[keyId(row)] || []), ...(providerInfo[row.provider]?.models || [])];
+    [...new Set(known)].forEach((v) => { const o = document.createElement("option"); o.value = v; models.appendChild(o); });
+    const modelsBtn = document.createElement("button");
+    modelsBtn.type = "button"; modelsBtn.textContent = "Models"; modelsBtn.className = "key-small";
+    modelsBtn.title = "Ask the server which models this key can use (fills the Model list)";
+    modelsBtn.addEventListener("click", () => fetchKeyModels(row));
+    modelBox.append(model, models, modelsBtn);
+
+    const key = document.createElement("input");
+    key.type = "text"; key.value = row.api_key; key.spellcheck = false; key.autocomplete = "off";
+    key.className = "text-mono key-secret";
+    key.placeholder = row._moved ? "paste the key again (moved)"
+        : row.provider === "openai_compat" ? "API key (empty for Ollama / LM Studio)" : "paste API key";
+    key.addEventListener("input", () => { row.api_key = key.value; row._moved = false; });
+    row._keyInput = key;
+
+    const test = document.createElement("button");
+    test.type = "button"; test.textContent = "Test"; test.className = "key-small";
+    test.title = "One tiny translation through this key only (also when it is switched off)";
+    test.addEventListener("click", () => testOneKey(row));
+
+    const del = document.createElement("button");
+    del.type = "button"; del.className = "danger key-small"; del.textContent = "Remove";
+    del.addEventListener("click", () => {
+        if (row.api_key && !confirm(`Remove the key "${row.label}"? Its secret is deleted from the settings.`)) return;
+        keyRows.splice(i, 1);
+        renderKeyRows();
+        keyChanged();
+    });
+
+    [label, model, key].forEach((el) => wireField("translation", el));
+    main.append(on, order, label, provider, modelBox, key, test, del);
+    wrap.appendChild(main);
+
+    if (row.provider === "openai_compat") {
+        const extra = document.createElement("div");
+        extra.className = "key-extra";
+        const base = document.createElement("input");
+        base.type = "text"; base.value = row.base_url; base.spellcheck = false; base.className = "text-mono key-base";
+        base.setAttribute("list", "compatPresets");
+        base.placeholder = "server address, e.g. https://openrouter.ai/api/v1 or http://localhost:11434/v1";
+        base.title = "Base URL of the OpenAI-compatible API (ends with /v1). Pick a preset or type it. Changing it for a saved key means pasting the key again - a key is never sent to a new address silently.";
+        base.addEventListener("input", () => { row.base_url = base.value; });
+        base.addEventListener("change", () => {
+            if (isMasked(row.api_key)) {
+                row.api_key = ""; row._moved = true;
+                key.value = ""; key.placeholder = "paste the key again (new address)";
+            }
+        });
+        wireField("translation", base);
+        const note = document.createElement("span");
+        note.className = "key-beta text-muted";
+        note.innerHTML = `Server address <span class="key-beta-tag">beta</span> - not tested with every server; if one misbehaves, <a href="${GITHUB_ISSUES}" target="_blank" rel="noopener">report it on GitHub</a>.`;
+        extra.append(note, base);
+        wrap.appendChild(extra);
+    }
+
+    const problem = rowProblem(row);
+    if (problem) {
+        const warn = document.createElement("div");
+        warn.className = "key-problem";
+        warn.textContent = row.enabled ? `Not usable yet: ${problem}.` : `Switched off - and ${problem}.`;
+        wrap.appendChild(warn);
+    }
+
+    const result = document.createElement("div");
+    result.className = "key-result hidden";
+    result.setAttribute("role", "status");
+    wrap.appendChild(result);
+    row._result = result;
+    if (row._lastResult) showKeyResult(result, row._lastResult);
+    return wrap;
 }
 
-document.getElementById("providerSelect")?.addEventListener("change", renderKeyRows);
-for (const name of KNOWN_PROVIDERS) {
-    document.getElementById(PROVIDER_MODEL_INPUT[name])?.addEventListener("input", renderKeyRowPlaceholders);
-}
-
-function renderKeyRowPlaceholders() {
-    // the "default: <model>" hints follow the provider default models without re-rendering (keeps focus)
-    document.querySelectorAll("#keyList select").forEach((sel) => {
-        const modelInput = sel.nextElementSibling;
-        if (modelInput) modelInput.placeholder = `default: ${document.getElementById(PROVIDER_MODEL_INPUT[sel.value]).value || "?"}`;
+for (const name of PROVIDER_ORDER) {
+    document.getElementById(PROVIDER_MODEL_INPUT[name])?.addEventListener("input", () => {
+        // the "default: <model>" hints follow the provider default models without re-rendering (keeps focus)
+        keyRows.forEach((row) => {
+            const input = row._el?.querySelector(".key-model");
+            if (input && row.provider === name) input.placeholder = `default: ${defaultModel(name) || "?"}`;
+        });
     });
 }
 
 document.getElementById("addKeyBtn")?.addEventListener("click", () => {
-    const provider = currentProviderName();
+    const provider = keyRows.length ? keyRows[keyRows.length - 1].provider : "groq";
     const used = new Set(keyRows.filter((r) => r.provider === provider).map((r) => r.label));
     let n = keyRows.length + 1;
     while (used.has(`key${n}`)) n += 1;
-    keyRows.push({ provider, label: `key${n}`, api_key: "", model: "", from_provider: null, from_label: null });
+    keyRows.push({ provider, label: `key${n}`, api_key: "", model: "", base_url: "", enabled: true, from_provider: null, from_label: null });
     renderKeyRows();
     markDirty("translation");
     keyRows[keyRows.length - 1]._keyInput?.focus();
@@ -607,48 +747,46 @@ async function saveTranslation() {
     if (!Number.isFinite(thinking) || thinking < -1) { status("Not saved: thinking budget must be -1 or more."); return false; }
     const maxTokens = parseInt(document.getElementById("translationMaxTokensInput").value, 10);
     if (!Number.isFinite(maxTokens) || maxTokens < 256 || maxTokens > 65536) { status("Not saved: max output tokens must be 256-65536."); return false; }
-    if (keyRows.some((r) => !r.api_key.trim())) {
-        status("Not saved yet: paste the key into the empty row (or remove the row). Leaving the page will ask first.");
+    const waiting = keyRows.find((r) => r.enabled && r.provider !== "openai_compat" && !r.api_key.trim());
+    if (waiting) {
+        status(`Not saved yet: paste the key into "${waiting.label}" (or switch it off / remove it). Leaving the page will ask first.`);
         return false;
     }
-    for (const name of KNOWN_PROVIDERS) {
+    for (const name of PROVIDER_ORDER) {
         const labels = keyRows.filter((r) => r.provider === name).map((r) => r.label.trim() || "default");
         const dup = labels.find((l, i) => labels.indexOf(l) !== i);
-        if (dup) { status(`Not saved: two ${name} keys are named "${dup}" - names must differ.`); return false; }
+        if (dup) { status(`Not saved: two ${providerLabel(name)} keys are named "${dup}" - names must differ.`); return false; }
     }
 
-    const providers = {};
-    for (const name of KNOWN_PROVIDERS) {
-        providers[name] = {
-            model: document.getElementById(PROVIDER_MODEL_INPUT[name]).value.trim(),
-            keys: keyRows.filter((r) => r.provider === name).map((r) => ({
-                label: r.label.trim() || "default", api_key: r.api_key.trim(), model: r.model.trim(),
-                from_provider: r.from_provider, from_label: r.from_label,
-            })),
-        };
-    }
+    const sent = keyRows.slice();
     try {
         const result = await api.settings.updateTranslation({
             translation_on: document.getElementById("translationOnCheckbox").checked,
-            active_provider: currentProviderName(),
             translation_temperature: temperature,
             translation_max_tokens: maxTokens,
             gemini_thinking_budget: thinking,
-            providers,
+            provider_models: Object.fromEntries(PROVIDER_ORDER.map((n) => [n, defaultModel(n)])),
+            pool: sent.map((r) => ({
+                provider: r.provider, label: r.label.trim() || "default", api_key: r.api_key.trim(), model: r.model.trim(),
+                base_url: r.provider === "openai_compat" ? r.base_url.trim() : "", enabled: r.enabled,
+                from_provider: r.from_provider, from_label: r.from_label,
+            })),
         });
-        // the stored state now: masked keys, and every row's secret lives under its current provider + name
-        appSettings.providers = result.providers;
-        for (const row of keyRows) {
-            row.label = row.label.trim() || "default";
-            const stored = (result.providers[row.provider]?.keys || []).find((k) => k.label === row.label);
-            if (stored && !row.api_key.startsWith("\u2022")) {
+        // the stored state now, in the same order: masked keys, and every row's secret lives under its current name
+        (result.key_pool || []).forEach((stored, i) => {
+            const row = sent[i];
+            if (!row) return;
+            row.label = stored.label;
+            row.from_provider = stored.provider;
+            row.from_label = stored.label;
+            if (!isMasked(row.api_key) || !row.api_key.trim()) {
                 row.api_key = stored.api_key;
                 if (row._keyInput && document.activeElement !== row._keyInput) row._keyInput.value = stored.api_key;
             }
-            row.from_provider = row.provider;
-            row.from_label = row.label;
-        }
-        markClean("translation", `${savedNow()} - ${result.message}`);
+        });
+        const notes = (result.notes || []).join(" ");
+        markClean("translation", `${savedNow()} - ${result.message}${notes ? ` ${notes}` : ""}`);
+        if (!document.activeElement || !document.getElementById("keyList").contains(document.activeElement)) renderKeyRows();
         document.getElementById("healthBanner")?.remove();
         renderSidebar(null);       // health banner: a "no API key" warning disappears right away
         return true;
@@ -658,16 +796,105 @@ async function saveTranslation() {
     }
 }
 
+/** Save first when the section has unsaved input: tests and model lists use the STORED key. */
+async function savedForServer() {
+    if (!dirtySections.has("translation")) return true;
+    clearTimeout(saveTimers.translation);
+    return saveTranslation();
+}
+
+const RESULT_KIND = {
+    RateLimited: ["Rate limit", "The key works, but its limit is used up for now - wait a minute, or add another key below it."],
+    KeyRejected: ["Rejected", "Check the key (copy it again), the model name (Models lists what this key can use) and the server address."],
+    Unreachable: ["No connection", "The server did not answer."],
+    Transient: ["Server error", "The provider has a problem right now - try again in a moment."],
+    unusable: ["Not ready", ""],
+    error: ["Error", ""],
+};
+
+function showKeyResult(box, r) {
+    box.classList.remove("hidden", "ok", "err", "busy", "info");
+    if (r.busy) {
+        box.classList.add("busy");
+        box.textContent = r.busy;
+        return;
+    }
+    if (r.info) {
+        box.classList.add("info");
+        box.innerHTML = r.info;
+        return;
+    }
+    box.classList.add(r.ok ? "ok" : "err");
+    if (r.ok) {
+        box.innerHTML = `<b>✓ Works</b> - ${escapeHtml(r.message)}`
+            + (r.sample ? `<div class="key-sample">"${escapeHtml(r.source || "Hello! Where are you going?")}" &rarr; "${escapeHtml(r.sample)}"</div>` : "");
+        return;
+    }
+    const [title, hint] = RESULT_KIND[r.kind] || RESULT_KIND.error;
+    box.innerHTML = `<b>✗ ${title}</b> - ${escapeHtml(r.message)}` + (hint ? `<div class="key-hint">${hint}</div>` : "");
+}
+
+async function testOneKey(row) {
+    const box = row._result;
+    if (!(await savedForServer())) {
+        showKeyResult(box, { ok: false, kind: "unusable", message: "Save the key first (see the message under the section)." });
+        return;
+    }
+    const id = keyId(row);
+    row._lastResult = { busy: `Testing ${row.label} (${providerLabel(row.provider)}, ${row.model.trim() || defaultModel(row.provider) || "no model"})…` };
+    showKeyResult(box, row._lastResult);
+    try {
+        row._lastResult = await api.settings.testKey(id);
+    } catch (e) {
+        row._lastResult = { ok: false, kind: "error", message: e.message };
+    }
+    showKeyResult(row._result, row._lastResult);
+}
+
+async function fetchKeyModels(row) {
+    const box = row._result;
+    if (!(await savedForServer())) {
+        showKeyResult(box, { ok: false, kind: "unusable", message: "Save the key first." });
+        return;
+    }
+    const id = keyId(row);
+    row._lastResult = { busy: `Asking ${providerLabel(row.provider)} which models this key can use…` };
+    showKeyResult(box, row._lastResult);
+    let res;
+    try {
+        res = await api.settings.keyModels(id);
+    } catch (e) {
+        res = { error: e.message };
+    }
+    if (res.error) {
+        row._lastResult = { ok: false, kind: "error", message: res.error };
+    } else {
+        fetchedModels[id] = res.models;
+        const current = row.model.trim() || defaultModel(row.provider);
+        const missing = current && res.models.length && !res.models.includes(current);
+        row._lastResult = { info: `<b>${res.models.length} model(s)</b> available - click the Model field to pick one (or type to filter).`
+            + (missing ? ` <span class="key-warn">The model now set ("${escapeHtml(current)}") is not in this list.</span>` : "") };
+        renderKeyRows();
+    }
+    showKeyResult(row._result, row._lastResult);
+}
+
 document.getElementById("testTranslationBtn")?.addEventListener("click", async () => {
-    const status = document.getElementById("translationStatus");
+    const box = document.getElementById("poolTestResult");
     const btn = document.getElementById("testTranslationBtn");
     btn.disabled = true;
-    status.textContent = "Testing...";
     try {
+        if (!(await savedForServer())) {
+            showKeyResult(box, { ok: false, kind: "unusable", message: "Save the keys first." });
+            return;
+        }
+        showKeyResult(box, { busy: "Translating one line through the pool…" });
         const result = await api.settings.testTranslation();
-        status.textContent = (result.ok ? "\u2713 " : "\u2717 ") + result.message;
+        showKeyResult(box, result.ok
+            ? { ok: true, sample: result.sample, message: `key "${result.key}" (${result.model}) answered in ${(result.ms / 1000).toFixed(1)} s` }
+            : { ok: false, kind: "error", message: result.message });
     } catch (e) {
-        status.textContent = `Test failed: ${e.message}`;
+        showKeyResult(box, { ok: false, kind: "error", message: e.message });
     } finally {
         btn.disabled = false;
     }
@@ -942,3 +1169,141 @@ const SAVERS = {
     translation: saveTranslation, memory: saveMemorySettings, ocr: saveOcrOptions, engine: saveOcrEngine,
     typesetting: saveTypesetting, ignore: saveIgnorePatterns,
 };
+
+/* ----------------------------- storage & uninstall ----------------------------- */
+
+/*
+ * Settings > Storage & uninstall (backend: services/storage_service.py). Counting the folders takes a few seconds (the
+ * program folder holds the Python environment), so it runs on "Check sizes" or when the page is opened at #storage -
+ * not on every visit of Settings. Only caches / logs / spare copies have a Delete button; the work is shown, never deleted.
+ */
+const STORAGE_GROUPS = [
+    ["work", "Your work", "never deleted from the app"],
+    ["cache", "Caches, logs and spare copies", "safe to delete - they come back by themselves"],
+    ["program", "The program", ""],
+];
+
+function formatBytes(n) {
+    if (!n) return "0 B";
+    const units = ["B", "KB", "MB", "GB"];
+    let i = 0;
+    let v = n;
+    while (v >= 1024 && i < units.length - 1) { v /= 1024; i += 1; }
+    return `${v >= 100 || i === 0 ? Math.round(v) : v.toFixed(1)} ${units[i]}`;
+}
+
+async function loadStorage() {
+    const status = document.getElementById("storageStatus");
+    const btn = document.getElementById("storageScanBtn");
+    btn.disabled = true;
+    status.textContent = "Counting… (the program folder can take a few seconds)";
+    try {
+        const report = await api.system.storage();
+        renderStorage(report);
+        const total = report.items.reduce((sum, i) => sum + (i.bytes || 0), 0);
+        status.textContent = `${formatBytes(total)} in all - checked ${new Date().toLocaleTimeString()}`;
+    } catch (e) {
+        status.textContent = `Couldn't check: ${e.message}`;
+    } finally {
+        btn.disabled = false;
+    }
+}
+
+function renderStorage(report) {
+    const list = document.getElementById("storageList");
+    list.innerHTML = "";
+    for (const [group, title, sub] of STORAGE_GROUPS) {
+        const items = report.items.filter((i) => i.group === group);
+        if (!items.length) continue;
+        const head = document.createElement("div");
+        head.className = "storage-group";
+        head.innerHTML = `${escapeHtml(title)}${sub ? ` <span class="text-muted">- ${escapeHtml(sub)}</span>` : ""}`;
+        list.appendChild(head);
+        items.forEach((item) => list.appendChild(storageRow(item)));
+    }
+    const folders = document.getElementById("uninstallFolders");
+    folders.innerHTML = "";
+    for (const f of report.uninstall_folders || []) {
+        const line = document.createElement("div");
+        line.className = "uninstall-folder";
+        line.innerHTML = `<span>${escapeHtml(f.title)}</span><code class="text-mono">${escapeHtml(f.path)}</code>`;
+        const open = document.createElement("button");
+        open.className = "copy-btn"; open.textContent = "Open";
+        open.addEventListener("click", () => openStoragePath(f.path));
+        line.appendChild(open);
+        folders.appendChild(line);
+    }
+}
+
+function storageRow(item) {
+    const row = document.createElement("div");
+    row.className = `storage-row group-${item.group}` + (item.exists ? "" : " missing");
+    const size = item.exists
+        ? `${item.approx ? "≥ " : ""}${formatBytes(item.bytes)}<small>${item.files} file${item.files === 1 ? "" : "s"}</small>`
+        : `<small>not there</small>`;
+    const notes = [item.extra_bytes ? `${formatBytes(item.extra_bytes)} ${escapeHtml(item.extra_label || "")}` : "",
+                   item.shared ? escapeHtml(item.shared_note || "") : "", escapeHtml(item.note || ""),
+                   item.deletable ? "" : escapeHtml(item.keep || "")].filter(Boolean);
+    row.innerHTML = `
+        <div class="storage-main">
+            <div class="storage-title">${escapeHtml(item.title)}</div>
+            <div class="text-muted storage-what">${escapeHtml(item.what)}</div>
+            <code class="storage-path text-mono">${escapeHtml(item.folder)}${item.count > 1 ? ` <span class="text-muted">(${item.count} items)</span>` : ""}</code>
+            ${notes.map((n) => `<div class="storage-note">${n}</div>`).join("")}
+        </div>
+        <div class="storage-size">${size}</div>
+        <div class="storage-actions"></div>`;
+    const actions = row.querySelector(".storage-actions");
+    if (item.exists) {
+        const open = document.createElement("button");
+        open.className = "copy-btn"; open.textContent = "Open";
+        open.title = "Show in the file explorer";
+        open.addEventListener("click", () => openStoragePath(item.folder));
+        actions.appendChild(open);
+    }
+    if (item.deletable && item.exists && item.bytes > 0) {
+        const del = document.createElement("button");
+        del.className = "danger"; del.textContent = "Delete…";
+        del.addEventListener("click", async () => {
+            const text = `Delete "${item.title}" (${formatBytes(item.bytes)})?\n\n${item.what}`
+                + (item.shared ? `\n\n${item.shared_note}` : "") + (item.note ? `\n\n${item.note}` : "");
+            if (!confirm(text)) return;
+            del.disabled = true;
+            try {
+                const res = await api.system.storageDelete(item.id);
+                document.getElementById("storageStatus").textContent = `${item.title}: ${res.message}`;
+            } catch (e) {
+                document.getElementById("storageStatus").textContent = `Not deleted: ${e.message}`;
+            }
+            const message = document.getElementById("storageStatus").textContent;
+            await loadStorage();
+            document.getElementById("storageStatus").textContent = message;
+        });
+        actions.appendChild(del);
+    }
+    return row;
+}
+
+async function openStoragePath(path) {
+    try {
+        await api.system.openPath(path);
+    } catch (e) {
+        alert(`Couldn't open: ${e.message}`);
+    }
+}
+
+document.getElementById("storageScanBtn")?.addEventListener("click", loadStorage);
+if (location.hash === "#storage") loadStorage();
+document.getElementById("uninstallBox")?.addEventListener("toggle", (e) => {
+    if (e.target.open && !document.getElementById("storageList").children.length) loadStorage();
+});
+
+/* OCR debug view in the editor (js/editor-ocrdebug.js) - a browser-local preference like the spellcheck switch */
+const OCR_DEBUG_KEY = "okt-ocr-debug";
+const ocrDebugCheckbox = document.getElementById("ocrDebugSettingCheckbox");
+if (ocrDebugCheckbox) {
+    ocrDebugCheckbox.checked = localStorage.getItem(OCR_DEBUG_KEY) === "1";
+    ocrDebugCheckbox.addEventListener("change", () => {
+        localStorage.setItem(OCR_DEBUG_KEY, ocrDebugCheckbox.checked ? "1" : "0");
+    });
+}

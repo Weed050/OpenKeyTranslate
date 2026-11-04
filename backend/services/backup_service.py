@@ -371,7 +371,8 @@ def restore_backup(job: dict, path: str, mode: str = "fresh", restore_settings: 
             current = load_settings()
             keep_keys = not manifest.get("has_secrets")
             for key, value in imported.items():
-                if key in ("app_root_dir",) or (key == "providers" and keep_keys):
+                # without keys in the bundle the current key pool stays whole: its keys, order and pool switch
+                if key in ("app_root_dir",) or (key in ("providers", "key_order", "active_provider") and keep_keys):
                     continue
                 current[key] = value
             if keep_keys:

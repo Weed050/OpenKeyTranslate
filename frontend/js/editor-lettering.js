@@ -20,7 +20,7 @@ const MODE_KEY = "okt-editor-mode";
 const EXPORT_KEY = "okt-export-options";
 
 /** Callbacks from editor.js: select(i), rerender(), refreshImage(), saveIfChanged(), status(bubble), navigate(dir),
- *  shortcutLabel(actionId). */
+ *  shortcutLabel(actionId), renderReview(slot) (page review controls, js/editor-review.js). */
 let hooks = {};
 
 export function initLettering(editorHooks) {
@@ -140,6 +140,7 @@ export function renderModeBar() {
         <button type="button" id="exportPageBtn" title="Write this page into the project's exported folder (${what}, ${opts.format.toUpperCase()}) - the options are those of the last export on the project page${exportKey ? ` (${exportKey})` : ""}">Export page</button>
         ${isLettering() ? '<span class="text-muted mode-hint">Drag a box to move it, corners resize (Alt: evenly from the centre), the knob turns it</span>' : ""}
         <a class="btn" id="viewExportBtn" href="${API_BASE}/pages/${pageId}/exported" target="_blank" rel="noopener" title="Open the last exported image of this page in a new tab">View export</a>
+        <span class="review-slot" id="reviewSlot"></span>
         <span class="mode-bar-spacer"></span>
         ${toggleKey ? `<span class="text-muted mode-hint"><kbd>${escapeHtml(toggleKey)}</kbd> switches</span>` : ""}
         <div class="segmented mode-switch" role="radiogroup" aria-label="Editor mode" title="Switch the editor mode${toggleKey ? ` (${toggleKey})` : ""}">
@@ -148,6 +149,7 @@ export function renderModeBar() {
         </div>`;
     bar.querySelectorAll("[data-mode]").forEach((b) => b.addEventListener("click", () => setMode(b.dataset.mode)));
     bar.querySelector("#exportPageBtn").addEventListener("click", exportPage);
+    hooks.renderReview?.(bar.querySelector("#reviewSlot"));
 }
 
 export async function exportPage() {

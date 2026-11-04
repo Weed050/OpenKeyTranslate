@@ -92,3 +92,72 @@
 .shortcut-actions { display: flex; gap: 6px; }
 .shortcut-actions button { padding: 3px 10px; font-size: 12px; }
 .shortcut-error { grid-column: 1 / -1; color: var(--danger); font-size: 12px; }
+
+/* Translation card: the key pool (js/settings.js keyRowElement) - one block per key, used from the top */
+.key-heading { margin: var(--space-md) 0 6px; font-size: 14px; }
+.key-heading .text-muted { font-weight: 400; font-size: 12px; margin-left: 4px; }
+.key-list { display: flex; flex-direction: column; gap: 8px; }
+.key-row { border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 8px 10px; background: var(--bg-panel); }
+.key-row.off { opacity: .62; }
+.key-row.off:focus-within, .key-row.off:hover { opacity: .9; }
+.key-main { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.key-on { width: 16px; height: 16px; margin: 0 2px 0 0; flex: none; }
+.key-order { display: inline-flex; flex-direction: column; gap: 1px; }
+.key-order button { padding: 0 5px; font-size: 8px; line-height: 11px; min-width: 0; }
+.key-label { max-width: 110px; }
+.key-provider { max-width: 190px; }
+.key-model-box { display: inline-flex; gap: 4px; align-items: center; }
+.key-model { width: 210px; }
+.key-secret { flex: 1; min-width: 170px; }
+.key-small { padding: 4px 10px; font-size: 12px; }
+.key-extra { display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: center; margin: 6px 0 0 44px; }
+.key-base { flex: 1; min-width: 280px; }
+.key-beta { font-size: 12px; width: 100%; }
+.key-beta a { color: var(--accent); }
+.key-beta-tag { display: inline-block; padding: 0 5px; border-radius: 4px; font-size: 10px; font-weight: 600; text-transform: uppercase;
+                letter-spacing: .04em; color: var(--warn); background: var(--warn-soft); }
+.key-problem { margin: 6px 0 0 44px; font-size: 12px; color: var(--warn); }
+.key-actions { display: flex; gap: 8px; margin-top: 8px; }
+.key-ab-note { font-size: 12px; margin: 8px 0 0; }
+.key-ab-note b { color: var(--text-primary); font-weight: 600; }
+
+/* the result of Test / Models / Test the pool: a clear box under the key, coloured by outcome */
+.key-result { margin: 8px 0 0 44px; padding: 7px 10px; border-radius: var(--radius-sm); border-left: 3px solid var(--border-strong);
+              background: var(--bg-panel-2); font-size: 12.5px; line-height: 1.45; overflow-wrap: anywhere; }
+#poolTestResult { margin-left: 0; }
+.key-result.ok { border-left-color: var(--success); background: var(--success-soft); }
+.key-result.ok b { color: var(--success); }
+.key-result.err { border-left-color: var(--danger); background: var(--danger-soft); }
+.key-result.err b { color: var(--danger); }
+.key-result.busy { border-left-color: var(--accent); color: var(--text-muted); }
+.key-result.info { border-left-color: var(--accent); }
+.key-sample { margin-top: 3px; font-family: var(--font-mono, monospace); font-size: 12px; color: var(--text-primary); }
+.key-hint { margin-top: 3px; color: var(--text-muted); }
+.key-warn { color: var(--warn); }
+
+/* Storage & uninstall card (js/settings.js renderStorage) */
+.storage-head { display: flex; gap: 10px; align-items: center; margin: 6px 0 4px; }
+.storage-list { display: flex; flex-direction: column; }
+.storage-group { margin: 14px 0 4px; font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; color: var(--text-muted); }
+.storage-group .text-muted { text-transform: none; letter-spacing: 0; font-weight: 400; }
+.storage-row { display: grid; grid-template-columns: 1fr 96px auto; gap: 12px; align-items: start; padding: 9px 0;
+               border-top: 1px solid var(--border); }
+.storage-row.missing { opacity: .55; }
+.storage-title { font-weight: 600; font-size: 13px; }
+.storage-what { font-size: 12px; margin-top: 1px; }
+.storage-path { display: block; margin-top: 3px; font-size: 11px; color: var(--text-muted); overflow-wrap: anywhere; }
+.storage-note { font-size: 11.5px; color: var(--text-muted); margin-top: 2px; }
+.storage-row.group-cache .storage-note:first-of-type { color: var(--warn); }
+.storage-size { text-align: right; font-variant-numeric: tabular-nums; font-weight: 600; font-size: 13px; }
+.storage-size small { display: block; font-weight: 400; font-size: 11px; color: var(--text-muted); }
+.storage-actions { display: flex; gap: 6px; }
+.storage-actions .copy-btn { min-width: 0; }
+.uninstall-box { margin-top: var(--space-md); padding: 8px 12px; border: 1px solid var(--border); border-radius: var(--radius-sm); }
+.uninstall-box summary { cursor: pointer; font-weight: 600; }
+.uninstall-box ol { margin: 8px 0; padding-left: 20px; }
+.uninstall-box li { margin-bottom: 6px; }
+.uninstall-box a { color: var(--accent); }
+.uninstall-folders { display: flex; flex-direction: column; gap: 4px; margin-top: 4px; }
+.uninstall-folder { display: grid; grid-template-columns: 220px 1fr auto; gap: 8px; align-items: center; font-size: 12px; }
+.uninstall-folder code { overflow-wrap: anywhere; font-size: 11px; }
+.uninstall-folder .copy-btn { min-width: 0; }

@@ -179,3 +179,28 @@ kbd {
   border-bottom-width: 2px;
   border-radius: 4px;
 }
+
+/* ---------- work stages (js/stages.js): bar segments, legend dots, badge dots - colours in css/tokens.css ---------- */
+/* 2px gaps between the segments (the track shows through) and a minimum width: one page out of 300 stays visible */
+.stage-bar { display: flex; gap: 2px; height: 10px; border-radius: 5px; overflow: hidden; background: var(--stage-todo); }
+.stage-bar .seg { display: block; height: 100%; min-width: 4px; transition: width .4s ease; }
+.seg.stage-ocr, .dot.stage-ocr { background: var(--stage-ocr); }
+.seg.stage-partial, .dot.stage-partial { background: var(--stage-partial); }
+.seg.stage-translated, .dot.stage-translated { background: var(--stage-translated); }
+.seg.stage-reviewed, .dot.stage-reviewed { background: var(--stage-reviewed); }
+.seg.stage-checked, .dot.stage-checked { background: var(--stage-checked); }
+.seg.stage-exported, .dot.stage-exported { background: var(--stage-exported); }
+.dot.stage-todo { background: var(--stage-todo); }
+.dot[class*="stage-"] { width: 10px; height: 10px; border-radius: 3px; display: inline-block; flex-shrink: 0;
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.12); }
+/* page badges of a stage: neutral text + a dot in the stage colour (readable in every palette) */
+.badge.stage-badge { gap: 5px; color: var(--text-secondary); background: var(--bg-panel-2); }
+.badge.stage-badge::before { content: ""; width: 7px; height: 7px; border-radius: 2px; background: var(--dot, var(--stage-todo)); }
+.badge.stage-badge[data-status="ocr"] { --dot: var(--stage-ocr); }
+.badge.stage-badge[data-status="partial"] { --dot: var(--stage-partial); }
+.badge.stage-badge[data-status="translated"] { --dot: var(--stage-translated); }
+.badge.stage-badge[data-status="reviewed"] { --dot: var(--stage-reviewed); }
+.badge.stage-badge[data-status="checked"] { --dot: var(--stage-checked); }
+.badge.stage-badge[data-status="exported"] { --dot: var(--stage-exported); }
+.badge.stage-badge[data-status="failed"] { --dot: var(--danger); color: var(--danger); }
+.badge.stage-badge[data-status="queued"], .badge.stage-badge[data-status="processing"] { --dot: var(--accent); }

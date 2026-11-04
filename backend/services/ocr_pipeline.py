@@ -76,7 +76,7 @@ from utils.marker import (
     inject_marker, resolve_marker_state, detect_rotation,
     correct_boxes_by_angle, remove_marker, pad_crop_right
 )
-from utils.text_utils import parse_ocr_results
+from utils.text_utils import parse_ocr_results, passes_text_threshold, is_any_marker
 from utils.ocr_rescue import rescue_rejected, extend_tilted
 
 # Suppress PaddleOCR info and warnings; log errors only
@@ -233,7 +233,23 @@ def turn_boxes_back(items: list[dict], angle: int, turned_shape) -> list[dict]:
     return items
 
 
-def _ocr_slice(crop_original: np.ndarray, slice_id: int, y: int, marker_records: list) -> list[dict]:
+def rejected_readings(result, slice_id: int) -> list[dict]:
+    """
+    Readings of a raw PaddleOCR result that FAILED the text threshold (parse_ocr_results dropped them), as items
+    {"text", "score", "box", "slice_id"} - for the editor's OCR debug view only (Settings > Editor), never used further.
+    """
+    out = []
+    for res in result or []:
+        for text, score, poly in zip(res["rec_texts"], res["rec_scores"], res["dt_polys"]):
+            if is_any_marker(text, slice_id) or passes_text_threshold(text, score, TEXT_THRESHOLD):
+                continue
+            out.append({"text": str(text), "score": float(score), "slice_id": slice_id,
+                        "box": [[float(px), float(py)] for px, py in poly]})
+    return out
+
+
+def _ocr_slice(crop_original: np.ndarray, slice_id: int, y: int, marker_records: list,
+               rejected: list | None = None) -> list[dict]:
     """
     OCR one slice; items in slice coordinates (boxes may reach into the white margin - the caller clips them).
     White margin on the right (settings ocr_white_space / ocr_white_space_pad_width, on by default): kept as it was.
@@ -241,6 +257,7 @@ def _ocr_slice(crop_original: np.ndarray, slice_id: int, y: int, marker_records:
     way (with it "WHAT ?!" on page_014 was found, without it "RE-TREAT !!" on page_009).
     Orientation step on: PaddleOCR reports the angle it turned the slice by, the boxes are turned back. Only when it
     does not report it, the old tracking marker is used (_ocr_slice_with_marker).
+    rejected: when a list is given, the readings that failed the threshold are appended (slice coordinates, OCR debug).
     """
     pad = WHITE_SPACE_PAD_WIDTH if WHITE_SPACE else 0
     canvas = pad_crop_right(crop_original, pad) if pad else crop_original
@@ -254,9 +271,13 @@ def _ocr_slice(crop_original: np.ndarray, slice_id: int, y: int, marker_records:
     items = parse_ocr_results(result, slice_id, TEXT_THRESHOLD)
     items += rescue_rejected(turned, result, ocr, parse_ocr_results, TEXT_THRESHOLD, slice_id, items)   # boxes in `turned`
     items = extend_tilted(turned, items, ocr, parse_ocr_results, TEXT_THRESHOLD, slice_id)               # diagonal lines read whole
+    lost = rejected_readings(result, slice_id) if rejected is not None else []
     if angle:
         print(f"[SLICE {slice_id}] orientation step turned the slice by {angle} deg - boxes turned back")
         turn_boxes_back(items, angle, turned.shape)
+        turn_boxes_back(lost, angle, turned.shape)
+    if rejected is not None:
+        rejected.extend(lost)
     return items
 
 
@@ -320,7 +341,7 @@ def _ocr_slice_with_marker(crop_original: np.ndarray, slice_id: int, y: int, mar
 
 
 # ---------------- SLICING, OCR ----------------
-def run_ocr_sliced(image: np.ndarray) -> tuple[list[dict], list[tuple[int, int]], list[dict]]:
+def run_ocr_sliced(image: np.ndarray, debug: dict | None = None) -> tuple[list[dict], list[tuple[int, int]], list[dict]]:
     """
     Run OCR on an image using an overlapping horizontal slicing pipeline.
 
@@ -356,6 +377,8 @@ def run_ocr_sliced(image: np.ndarray) -> tuple[list[dict], list[tuple[int, int]]
 
     Args:
         image (np.ndarray): The pre-scaled (multiplied by SCALE) source image canvas.
+        debug (dict | None): when given, debug["rejected"] gets the readings that failed the threshold (page
+            coordinates) and debug["cut"] the pieces of lines dropped at a slice's bottom edge - the OCR debug view.
 
     :return:
     tuple: A structural tuple containing:
@@ -389,19 +412,15 @@ def run_ocr_sliced(image: np.ndarray) -> tuple[list[dict], list[tuple[int, int]]
         content_w = crop_original.shape[1]
         print(f"\n[SLICE {slice_id}] {y}:{y_end}")
 
-        slice_items = _ocr_slice(crop_original, slice_id, y, marker_records)
+        lost = [] if debug is not None else None
+        slice_items = _ocr_slice(crop_original, slice_id, y, marker_records, lost)
 
-        # Clip X coordinates to content width to discard tracking padding area
-        for item in slice_items:
-            item["box"] = [
-                [min(max(0.0, float(px)), float(content_w)), float(py)]
-                for px, py in item["box"]
-            ]
-
-        # 7. Map coordinates from localized slice space to global page coordinates
-        for item in slice_items:
-            shifted_box = [[x, y0 + y] for x, y0 in item["box"]]
-            item["box"] = shifted_box
+        # Clip X coordinates to content width to discard tracking padding area,
+        # 7. then map coordinates from localized slice space to global page coordinates
+        for item in slice_items + (lost or []):
+            item["box"] = [[min(max(0.0, float(px)), float(content_w)), float(py) + y] for px, py in item["box"]]
+        if debug is not None:
+            debug.setdefault("rejected", []).extend(lost)
 
         if y_end >= h:
             all_items.extend(slice_items)
@@ -417,6 +436,8 @@ def run_ocr_sliced(image: np.ndarray) -> tuple[list[dict], list[tuple[int, int]]
             print(f"[SLICE {slice_id}] {len(cut)} line(s) cut by the bottom edge - read whole by the next slice: "
                   + ", ".join(repr(it["text"]) for it in cut))
         all_items.extend(it for it in slice_items if not any(it is c for c in cut))
+        if debug is not None:
+            debug.setdefault("cut", []).extend(cut)
         y = next_y
         slice_id += 1
 
@@ -474,30 +495,76 @@ def process_image(image_bgr: np.ndarray, protected_terms=(), detect_rotation: bo
         return _process_image(image_bgr, protected_terms)
 
 
+def _bbox(poly) -> tuple[float, float, float, float]:
+    xs = [float(p[0]) for p in poly]
+    ys = [float(p[1]) for p in poly]
+    return min(xs), min(ys), max(xs), max(ys)
+
+
+def _covered(a, b) -> float:
+    """Share of box a covered by box b."""
+    w = max(0.0, min(a[2], b[2]) - max(a[0], b[0]))
+    h = max(0.0, min(a[3], b[3]) - max(a[1], b[1]))
+    return w * h / max(1.0, (a[2] - a[0]) * (a[3] - a[1]))
+
+
+def _removed(before: list[dict], after: list[dict], why: str, box_key: str = "box") -> list[dict]:
+    """
+    OCR debug: entries of `before` a filter took out, {"text", "score", "box", "why"}. An entry replaced by a trimmed /
+    re-read copy (dedup returns new dicts for those) is not "removed" - something in `after` still covers its place.
+    """
+    kept = {id(x) for x in after}
+    boxes = [_bbox(x[box_key]) for x in after]
+    out = []
+    for x in before:
+        if id(x) in kept:
+            continue
+        own = _bbox(x[box_key])
+        if any(_covered(own, b) > 0.6 for b in boxes):
+            continue
+        out.append({"text": x.get("text", ""), "score": float(x.get("score", x.get("avg_score", 0)) or 0),
+                    "box": [list(map(float, p)) for p in x[box_key]], "why": why})
+    return out
+
+
 def _process_image(image_bgr: np.ndarray, protected_terms=()) -> dict:
     image_scaled = cv2.resize(image_bgr, None, fx=SCALE, fy=SCALE)
     image_width = image_scaled.shape[1]
     _, overlap = get_overlap_size(image_scaled.shape[0])
 
     print("Running OCR Pipeline...\n")
-    items, slices, marker_records = run_ocr_sliced(image_scaled)
+    # what the OCR saw but did not use, for the editor's OCR debug view (cheap: the raw results are already there)
+    debug = {"rejected": [], "cut": []}
+    items, slices, marker_records = run_ocr_sliced(image_scaled, debug)
+    dropped = [{"text": it["text"], "score": float(it["score"]), "box": it["box"],
+                "why": "cut by a slice edge (read whole in the next slice)"} for it in debug["cut"]]
 
+    before = items
     items = remove_slice_boundary_duplicates(items, max_y_jitter=int(overlap * 1.5))
+    dropped += _removed(before, items, "read twice where two slices overlap")
     grouped_lines = build_text_lines(items, image_width=image_width)
 
     print("\n=== POST-PROCESSING: PAGE-LEVEL DEDUPLICATION ===")
+    before = items
     items = smart_deduplicate_by_lines(
         grouped_lines, items, image_scaled, ocr,
         word_thresh=DEDUP_WORD_THRESH,
         geo_thresh=DEDUP_GEO_THRESH,
         min_overlap_area=DEDUP_MIN_OVERLAP_PX
     )
+    dropped += _removed(before, items, "duplicate of an overlapping reading")
 
     grouped_lines = build_text_lines(items, image_width=image_width)
+    before = grouped_lines
     grouped_lines = filter_noise_lines(grouped_lines)
+    dropped += _removed(before, grouped_lines, "noise line (single letter / junk)")
     bubbles = group_lines_into_bubbles(grouped_lines)
+    before = bubbles
     bubbles = filter_noise_bubbles(bubbles)
+    dropped += _removed(before, bubbles, "noise bubble (single letter / junk)", "box_coords")
+    before = bubbles
     bubbles = filter_ignored_bubbles(bubbles)  # watermarks / URLs from settings.json -> ocr_ignore_patterns
+    dropped += _removed(before, bubbles, "matches an ignore pattern (Settings > OCR: ignored text)", "box_coords")
 
     # Bubble geometry fixes (merge bubbles OCR cut into pieces, re-read half-detected ones). Optional and fail-safe:
     # whatever goes wrong here must not cost the user the OCR result.
@@ -525,7 +592,9 @@ def _process_image(image_bgr: np.ndarray, protected_terms=()) -> dict:
         "debug": {
             "slices": slices,
             "marker_records": marker_records,
-            "image_scaled": image_scaled
+            "image_scaled": image_scaled,
+            "rejected": debug["rejected"],       # readings under the text threshold (page coordinates, scaled image)
+            "dropped": dropped,                  # readings / lines / bubbles a later step removed, with the reason
         }
     }
     # text cleanup + skip flags (numbers / symbols) -> result["inpaint_lines"] = lines that really get erased

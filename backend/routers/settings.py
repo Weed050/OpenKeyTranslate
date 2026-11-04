@@ -54,7 +54,10 @@ async def get_settings():
 
     # Explicitly default the migration flag to False for the UI
     data["migrate_data"] = False
-    data["known_providers"] = ["groq", "gemini"]
+    from services.providers import PROVIDERS_INFO
+    from services.providers.openai_compat_provider import PRESETS
+    data["known_providers"] = {**PROVIDERS_INFO, "openai_compat": {**PROVIDERS_INFO["openai_compat"], "presets": PRESETS}}
+    data["key_pool"] = _masked_pool()
     data["app_version"] = APP_VERSION
     data["log_file_path"] = os.path.join(APP_ROOT_DIR, "logs", "app.log")
     data["database_path"] = DATABASE_PATH
@@ -199,29 +202,38 @@ def _mask(key: str) -> str:
     return "\u2022\u2022\u2022\u2022" + key[-4:] if key else ""
 
 
+def _masked_pool() -> list[dict]:
+    """The key pool in order of use for the Settings page - keys masked, plus why a key cannot be used."""
+    from services.providers import pool_entries, unusable_reason
+    return [{"provider": e["provider"], "label": e["label"], "api_key": _mask(e["api_key"]), "model": e["own_model"],
+             "base_url": e["base_url"] if e["provider"] == "openai_compat" else "", "enabled": e["enabled"],
+             "problem": unusable_reason(e)}
+            for e in pool_entries(include_disabled=True)]
+
+
 @router.post("/translation")
 async def update_translation_settings(payload: dict):
     """
-    BYOK settings from the UI (before: only by hand-editing settings.json): translation on/off, active provider,
-    per-provider default model + key pool (each key may carry its own "model"), temperature, max output tokens.
-    Applied LIVE - the provider is rebuilt on the next translation.
+    BYOK settings from the UI: translation on/off, the key pool, default model per provider (+ default server address
+    of the OpenAI-compatible provider), temperature, max output tokens, Gemini thinking budget. Applied LIVE - the
+    pool is rebuilt on the next translation.
 
-    A key sent back masked ("\u2022\u2022\u2022\u20221234", exactly what GET /settings/ returned) keeps the stored secret
-    for that label, so saving the form never wipes a key the browser never saw. A row moved to another provider in
-    the UI sends from_provider / from_label, so its stored secret moves with it. Response never contains keys.
+    payload["pool"] = the keys IN ORDER OF USE: {provider, label, api_key, model, base_url, enabled, from_provider,
+    from_label}. Stored back under providers.<name>.keys (where the secrets always lived) + key_order, and
+    active_provider becomes "pool".
+
+    A key sent back masked ("\u2022\u2022\u2022\u20221234", exactly what GET /settings/ returned) keeps the stored secret of
+    from_provider / from_label - but ONLY while the key stays with the same provider and (OpenAI-compatible) the same
+    server address. With CORS open to any origin (main.py), a web page could otherwise post a new base URL for a stored
+    key and receive that key with the next translation; a moved key has to be pasted again. Response never has keys.
     """
-    from services.providers import reset_provider
+    from services.providers import reset_provider, PROVIDER_NAMES
 
     current = load_settings()
     providers = current.setdefault("providers", {})
 
     if "translation_on" in payload:
         current["translation_on"] = bool(payload["translation_on"])
-    if "active_provider" in payload:
-        name = str(payload["active_provider"])
-        if name not in ("groq", "gemini"):
-            raise HTTPException(status_code=400, detail=f"Unknown provider '{name}'")
-        current["active_provider"] = name
     if "translation_temperature" in payload:
         t = float(payload["translation_temperature"])
         if not 0.0 <= t <= 2.0:
@@ -235,53 +247,91 @@ async def update_translation_settings(payload: dict):
             raise HTTPException(status_code=400, detail="Max output tokens must be 256-65536")
         current["translation_max_tokens"] = n
 
-    # every stored secret BEFORE anything changes, by (provider, label): a row may have moved between providers
-    stored_all = {(pn, k.get("label", "default")): k.get("api_key", "")
-                  for pn, c in providers.items() for k in c.get("keys", [])}
-    for name, cfg in (payload.get("providers") or {}).items():
-        if name not in ("groq", "gemini"):
-            continue
-        slot = providers.setdefault(name, {"model": "", "keys": []})
-        if "model" in cfg:
-            slot["model"] = str(cfg["model"]).strip()
-        if "keys" in cfg:
-            new_keys, seen = [], set()
-            for k in cfg["keys"]:
-                label = (str(k.get("label") or "default")).strip() or "default"
-                if label in seen:
-                    raise HTTPException(status_code=400, detail=f"Duplicate key label '{label}' in {name}")
-                seen.add(label)
-                value = str(k.get("api_key") or "").strip()
-                if value.startswith("\u2022"):                 # untouched masked value -> keep the stored secret
-                    origin = (str(k.get("from_provider") or name), str(k.get("from_label") or label))
-                    value = stored_all.get(origin, "")
-                entry = {"label": label, "api_key": value}
-                key_model = str(k.get("model") or "").strip()
-                if key_model:                                   # empty = the provider's default model
-                    entry["model"] = key_model
-                new_keys.append(entry)
-            slot["keys"] = new_keys or [{"label": "default", "api_key": ""}]
+    for name, model in (payload.get("provider_models") or {}).items():
+        if name in PROVIDER_NAMES:
+            providers.setdefault(name, {"model": "", "keys": []})["model"] = str(model or "").strip()
+    notes = []
+    if "pool" in payload:
+        def effective_base(pname: str, k: dict) -> str:
+            # per key only: a provider-wide default address could be changed without touching the key rows
+            return (k.get("base_url") or "").strip().rstrip("/") if pname == "openai_compat" else ""
+
+        # every stored secret BEFORE anything changes, by (provider, label), with the server it was sent to
+        stored_all = {(pn, (k.get("label") or "default")): (k.get("api_key", ""), effective_base(pn, k))
+                      for pn, c in providers.items() for k in (c or {}).get("keys", [])}
+        new_keys = {name: [] for name in PROVIDER_NAMES}
+        order = []
+        for k in payload["pool"] or []:
+            name = str(k.get("provider") or "")
+            if name not in PROVIDER_NAMES:
+                raise HTTPException(status_code=400, detail=f"Unknown provider '{name}'")
+            label = (str(k.get("label") or "default")).strip() or "default"
+            if any(e["label"] == label for e in new_keys[name]):
+                raise HTTPException(status_code=400, detail=f"Two {name} keys are named '{label}' - names must differ")
+            entry = {"label": label}
+            base = str(k.get("base_url") or "").strip().rstrip("/") if name == "openai_compat" else ""
+            if base:
+                entry["base_url"] = base
+            value = str(k.get("api_key") or "").strip()
+            if value.startswith("\u2022"):                     # untouched masked value -> keep the stored secret ...
+                origin = (str(k.get("from_provider") or name), str(k.get("from_label") or label))
+                secret, sent_to = stored_all.get(origin, ("", ""))
+                new_base = effective_base(name, entry)
+                if origin[0] == name and (name != "openai_compat" or sent_to == new_base):
+                    value = secret
+                else:                                           # ... unless it would now go somewhere else
+                    value = ""
+                    if secret:
+                        notes.append(f"Key '{label}': paste it again - it moved to another provider / server address.")
+            entry["api_key"] = value
+            key_model = str(k.get("model") or "").strip()
+            if key_model:                                       # empty = the provider's default model
+                entry["model"] = key_model
+            entry["enabled"] = bool(k.get("enabled", True))
+            new_keys[name].append(entry)
+            order.append(f"{name}/{label}")
+        for name in PROVIDER_NAMES:
+            providers.setdefault(name, {"model": "", "keys": []})["keys"] = new_keys[name]
+        current["key_order"] = order
+        current["active_provider"] = "pool"
 
     save_settings(current)
     reset_provider()
-    return {"message": "Translation settings saved and applied.", "active_provider": current.get("active_provider"),
-            "providers": {n: {"model": c.get("model", ""),
-                              "keys": [{"label": k.get("label"), "api_key": _mask(k.get("api_key", "")), "model": k.get("model", "")}
-                                       for k in c.get("keys", [])]} for n, c in providers.items()}}
+    return {"message": "Translation settings saved and applied.", "notes": notes, "key_pool": _masked_pool()}
 
 
 @router.post("/test-translation")
 def test_translation():
-    """Send one tiny request through the active provider/key pool - 'Test connection' button on the Settings page."""
+    """One tiny request through the key pool as a translation would use it - 'Test the pool' on the Settings page."""
+    import time
     from services.providers import get_provider
+    start = time.monotonic()
     try:
         provider = get_provider()
-        result = provider.translate([{"id": "t", "text": "Hello!"}])
+        result = provider.translate([{"id": "t", "text": "Hello! Where are you going?"}])
     except Exception as e:
         return {"ok": False, "message": f"{type(e).__name__}: {e}"}
-    text = result.get("t", "")
-    return {"ok": bool(text.strip()), "message": f"OK via key '{provider.current_key_label}': \"Hello!\" -> \"{text}\"" if text.strip()
-            else "The provider answered but returned no translation."}
+    ms = int((time.monotonic() - start) * 1000)
+    text = result.get("t", "").strip()
+    if not text:
+        return {"ok": False, "message": "The provider answered but returned no translation."}
+    return {"ok": True, "key": provider.current_key_label, "model": provider.current_model, "ms": ms, "sample": text,
+            "message": f"Key '{provider.current_key_label}' ({provider.current_model}) answered in {ms / 1000:.1f} s: "
+                       f"\"Hello! Where are you going?\" -> \"{text}\""}
+
+
+@router.post("/test-key")
+def test_one_key(payload: dict):
+    """Test ONE key ({"id": "provider/label"}), switched on or not -> services.providers.test_key (no secrets)."""
+    from services.providers import test_key
+    return test_key(str(payload.get("id") or ""))
+
+
+@router.post("/key-models")
+def key_models(payload: dict):
+    """Models the server offers for one key ({"id": "provider/label"}) -> {"models": [...]} or {"error": "..."}."""
+    from services.providers import list_models
+    return list_models(str(payload.get("id") or ""))
 
 
 @router.post("/ocr-engine")

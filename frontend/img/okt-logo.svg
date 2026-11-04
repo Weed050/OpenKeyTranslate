@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="OpenKeyTranslate">
+  <!-- OpenKeyTranslate app icon: "OKT" in a speech bubble on a dark tile. Letters are strokes (no font), so the
+       favicon looks the same everywhere. PNG / ICO versions: backend/scripts/make_icon.py (same geometry). -->
+  <rect width="64" height="64" rx="14" fill="#1b1f2a"/>
+  <path d="M25 8h14c10.5 0 19 7.6 19 17.5S49.5 43 39 43H27l-11 10 2.5-11.2C11 39.6 6 33.2 6 25.5 6 15.6 14.5 8 25 8z" fill="#ffffff"/>
+  <g fill="none" stroke="#1b1f2a" stroke-width="3.6" stroke-linecap="round" stroke-linejoin="round">
+    <ellipse cx="17.5" cy="25.5" rx="5" ry="7"/>
+    <path d="M28 18.5v14M36 18.5l-7.2 7 7.2 7"/>
+    <path d="M40 18.5h11M45.5 18.5v14"/>
+  </g>
+</svg>

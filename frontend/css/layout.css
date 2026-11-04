@@ -19,11 +19,15 @@
 }
  
 .sidebar-brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   font-size: 13px;
-  font-weight: 500;
+  font-weight: 600;
   color: var(--text-primary);
   padding: 0 var(--space-sm) var(--space-md);
 }
+.brand-icon { width: 22px; height: 22px; flex-shrink: 0; border-radius: 5px; }   /* img/okt-logo.svg */
  
 .sidebar-section { margin-bottom: var(--space-md); }
 .sidebar-label {

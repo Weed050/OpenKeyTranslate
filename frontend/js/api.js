@@ -65,6 +65,9 @@ export const api = {
         updateIgnorePatterns: (payload) => request("/settings/ignore-patterns", { method: "POST", body: JSON.stringify(payload) }),
         updateTranslation: (payload) => request("/settings/translation", { method: "POST", body: JSON.stringify(payload) }),
         testTranslation: () => request("/settings/test-translation", { method: "POST" }),
+        // one key of the pool, by id "provider/label": a tiny translation / the models its server offers
+        testKey: (id) => request("/settings/test-key", { method: "POST", body: JSON.stringify({ id }) }),
+        keyModels: (id) => request("/settings/key-models", { method: "POST", body: JSON.stringify({ id }) }),
         updateOcrOptions: (payload) => request("/settings/ocr-options", { method: "POST", body: JSON.stringify(payload) }),
         updateOcrEngine: (payload) => request("/settings/ocr-engine", { method: "POST", body: JSON.stringify(payload) }),
     },
@@ -118,6 +121,10 @@ export const api = {
             request(`/pages/${pageId}/retranslate?overwrite_edited=${overwriteEdited}`, { method: "POST" }),
         deleteBubble: (pageId, bubbleId) =>
             request(`/pages/${pageId}/bubbles/${bubbleId}`, { method: "DELETE" }),
+        // page-level review: {layout: true|false, accept: true, unaccept: [bubble ids]} (js/editor-review.js)
+        review: (pageId, payload) => request(`/pages/${pageId}/review`, { method: "POST", body: JSON.stringify(payload) }),
+        // raw OCR readings, rejected / dropped ones and slice cuts (js/editor-ocrdebug.js)
+        ocrDebug: (pageId) => request(`/pages/${pageId}/ocr-debug`),
         exclude: (pageId) => request(`/pages/${pageId}/exclude`, { method: "POST" }),
         restore: (pageId) => request(`/pages/${pageId}/restore`, { method: "POST" }),
     },
@@ -125,6 +132,9 @@ export const api = {
     system: {
         health: () => request("/system/health"),
         ocrRuntime: () => request("/system/ocr-runtime"),
+        // Settings > Storage & uninstall: places + sizes; delete only caches / logs / spare copies (by item id)
+        storage: () => request("/system/storage"),
+        storageDelete: (id) => request("/system/storage/delete", { method: "POST", body: JSON.stringify({ id }) }),
         openPath: (path) => request("/system/open-path", { method: "POST", body: JSON.stringify({ path }) }),
         tailLog: (lines = 200, errorsOnly = false) =>
             request(`/system/tail-log?lines=${lines}&errors_only=${errorsOnly}`),

@@ -192,6 +192,7 @@ def translate_bubbles(
     ]
     model_output = provider.translate(texts_payload)
     shown_key_label = provider.current_key_label
+    shown_key_id = provider.current_key_id                         # "provider/label" - the A/B pair is pinned to it
     shown_model = provider.current_model or ACTIVE_MODEL_NAME     # a key can have its own model (Settings)
 
     # 3. Terminology check + constrained post-edit (one extra call, only for bubbles that missed a glossary term).
@@ -246,7 +247,10 @@ def translate_bubbles(
             for b in bubbles
         ]
         try:
-            zero_shot_raw = provider.translate(counterfactual_payload)
+            # pinned to the key (and so the model) of the shown translation: the pool would otherwise move on to
+            # another key - possibly another provider - on a rate limit, and the pair would compare two models.
+            # A busy pinned key fails the call -> logged as ab = "failed" (since 2026-11-04; before, the call rotated).
+            zero_shot_raw = provider.translate(counterfactual_payload, pin=shown_key_id)
             zero_shot_key_label = provider.current_key_label
             zero_shot_model = provider.current_model or ACTIVE_MODEL_NAME   # != shown_model = pair not comparable
         except Exception as e:

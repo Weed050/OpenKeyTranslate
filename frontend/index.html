@@ -5,6 +5,8 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="icon" href="img/okt-logo.svg" type="image/svg+xml">
+    <link rel="alternate icon" href="img/okt.ico">
     <title>OpenKeyTranslate - Projects</title>
     <link rel="stylesheet" href="css/tokens.css">
     <script src="js/theme.js"></script>
@@ -18,7 +20,7 @@
  
     <div class="app-shell">
         <nav class="sidebar">
-            <div class="sidebar-brand">OpenKeyTranslate</div>
+            <div class="sidebar-brand"><img src="img/okt-logo.svg" alt="" class="brand-icon">OpenKeyTranslate</div>
  
             <div class="sidebar-section">
                 <div class="sidebar-label">Active</div>
@@ -41,6 +43,16 @@
             <div class="dash-column">
                 <div class="page-header">
                     <h1>Projects</h1>
+                    <span class="sort-group">
+                        <label for="projectSortSelect" class="sort-label">Sort</label>
+                        <select id="projectSortSelect" class="dash-sort" title="Order of the project cards">
+                            <option value="updated">Last worked on</option>
+                            <option value="name">Name</option>
+                            <option value="progress">Progress</option>
+                            <option value="created">Created</option>
+                        </select>
+                        <button type="button" id="projectSortDir" class="sort-dir" title="Descending - click to reverse">&darr;</button>
+                    </span>
                 </div>
 
                 <div id="projectList"></div>

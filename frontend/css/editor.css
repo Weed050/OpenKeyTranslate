@@ -495,6 +495,15 @@
 .mode-bar-spacer { flex: 1; }
 .mode-hint kbd { font-size: 11px; }
 .mode-bar #exportPageBtn { padding: 4px 12px; font-size: 12px; }
+/* page review controls (js/editor-review.js): Accept page, Layout checked, review mode */
+.mode-bar { flex-wrap: wrap; }
+.review-slot { display: inline-flex; align-items: center; gap: 6px; padding-left: 8px; margin-left: 2px; border-left: 1px solid var(--border); }
+.review-slot button { padding: 4px 10px; font-size: 12px; }
+.review-slot button:disabled { opacity: 0.45; cursor: default; }
+.review-slot .toggle-btn.on { color: var(--text-primary); border-color: var(--stage-checked); background: color-mix(in srgb, var(--stage-checked) 16%, transparent); }
+.review-slot select.review-mode { width: auto; height: 28px; padding: 0 6px; font-size: 12px; }
+/* a fast mode (Next page accepts) is always visible as such: it is a double-edged sword */
+.review-slot select.review-mode.is-fast { border-color: var(--warn); color: var(--warn); font-weight: 600; }
 
 /* ---------- Lettering: text areas on the page ---------- */
 .letter-area {
@@ -584,3 +593,56 @@ body.lettering-mode .bubble-outline { display: none; }
 .lettering-font button{ width: 30px; padding: 4px 0; }
 .lettering-font button.selected{ background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
 .lettering-panel{ flex: 1; }          /* fills the panel: Fit / Reset + arrows sit at its bottom like in Translate mode */
+
+/* OCR debug view (js/editor-ocrdebug.js): one SVG over the page in image pixels + a floating legend panel.
+   Box colours are fixed (they sit on the page image, not on the theme): green / amber = kept reading by confidence,
+   purple = second chance, red = under the threshold, orange = removed by a later step, blue = slice cuts. */
+.image-pane { position: relative; }
+.ocr-debug-svg { position: absolute; inset: 0; width: 100%; height: 100%; z-index: 4; pointer-events: none; overflow: visible; }
+.ocrd-box .ocrd-line { fill: none; stroke-width: 1.6; vector-effect: non-scaling-stroke; }
+.ocrd-box .ocrd-hit { fill: none; stroke: transparent; stroke-width: 9; vector-effect: non-scaling-stroke; pointer-events: stroke; cursor: help; }
+.ocrd-box:hover .ocrd-line { stroke-width: 3; }
+.ocrd-read.score-high .ocrd-line { stroke: #2fa35a; }
+.ocrd-read.score-mid .ocrd-line { stroke: #d49a1c; }
+.ocrd-rescued .ocrd-line { stroke: #9a5ad6; stroke-dasharray: 6 3; stroke-width: 2; }
+.ocrd-rejected .ocrd-line { stroke: #e0474c; stroke-dasharray: 4 3; }
+.ocrd-dropped .ocrd-line { stroke: #f08c2e; stroke-dasharray: 1.5 3; stroke-width: 2.4; }
+.ocrd-score, .ocrd-slice-label { paint-order: stroke; stroke: rgba(255, 255, 255, 0.92); stroke-linejoin: round;
+                                 font-family: Consolas, "Courier New", monospace; font-weight: 600; pointer-events: none; }
+.ocrd-read.score-high .ocrd-score { fill: #1d7a40; }
+.ocrd-read.score-mid .ocrd-score { fill: #9a6b05; }
+.ocrd-rescued .ocrd-score { fill: #6e33a8; }
+.ocrd-rejected .ocrd-score { fill: #b8262b; }
+.ocrd-cut { stroke: #3d7fd0; stroke-width: 1.6; stroke-dasharray: 9 4; vector-effect: non-scaling-stroke; }
+.ocrd-cut.end { stroke-dasharray: 2 4; opacity: 0.75; }
+.ocrd-overlap { fill: rgba(61, 127, 208, 0.10); }
+.ocrd-slice-label { fill: #2c64ad; }
+.ocrd-box.flash .ocrd-line { animation: ocrd-flash 0.35s ease-in-out 6 alternate; }
+@keyframes ocrd-flash { from { stroke-width: 2; opacity: 1; } to { stroke-width: 7; opacity: 0.35; } }
+
+.ocr-debug-panel { position: absolute; top: 48px; right: 16px; z-index: 20; width: 280px; max-height: calc(100% - 120px);
+                   overflow: auto; padding: 10px 12px; font-size: 12.5px; background: var(--bg-panel);
+                   border: 1px solid var(--border-strong); border-radius: var(--radius-sm); box-shadow: 0 8px 24px var(--shadow); }
+.ocrd-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
+.ocrd-close { padding: 0 7px; font-size: 16px; line-height: 20px; }
+.ocrd-layers { display: flex; flex-direction: column; gap: 3px; }
+.ocrd-layer { display: flex; align-items: center; gap: 7px; margin: 0; cursor: pointer; }
+.ocrd-swatch { display: inline-block; width: 18px; height: 0; border-top: 2px solid; flex: none; }
+.ocrd-sw-read { border-color: #2fa35a; box-shadow: 0 4px 0 -2px #d49a1c; }
+.ocrd-sw-rescued { border-top: 2px dashed #9a5ad6; }
+.ocrd-sw-rejected { border-top: 2px dashed #e0474c; }
+.ocrd-sw-dropped { border-top: 2.5px dotted #f08c2e; }
+.ocrd-sw-slices { border-top: 2px dashed #3d7fd0; }
+.ocrd-sw-scores { border: none; height: auto; width: 18px; }
+.ocrd-sw-scores::before { content: "0.9"; font-size: 9px; font-weight: 700; color: var(--text-muted); }
+.ocrd-meta { margin-top: 8px; font-size: 11.5px; }
+.ocrd-old { margin-top: 8px; padding: 6px 8px; border-radius: var(--radius-sm); background: var(--warn-soft); font-size: 12px; }
+.ocrd-list { margin-top: 8px; }
+.ocrd-list summary { cursor: pointer; font-weight: 600; }
+.ocrd-item { display: flex; flex-direction: column; align-items: flex-start; gap: 1px; width: 100%; margin-top: 3px; padding: 4px 7px;
+             text-align: left; border: none; border-left: 3px solid; border-radius: 4px; background: var(--bg-panel-2); cursor: pointer; }
+.ocrd-item:hover { background: var(--bg-hover); }
+.ocrd-item-rejected { border-left-color: #e0474c; }
+.ocrd-item-dropped { border-left-color: #f08c2e; }
+.ocrd-text { font-family: Consolas, "Courier New", monospace; font-size: 12px; color: var(--text-primary); }
+.ocrd-why { font-size: 11px; color: var(--text-muted); }

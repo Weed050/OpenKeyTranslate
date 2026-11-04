@@ -42,7 +42,9 @@ def _page_info(page) -> dict:
         return info
     for i, b in enumerate(data.get("bubbles", [])):
         info["bubbles"][b.get("bubble_id")] = {"no": i + 1, "translation": b.get("translation") or "",
-                                               "reviewed": bubble_reviewed(b), "skip": bool(b.get("skip"))}
+                                               "reviewed": bubble_reviewed(b), "skip": bool(b.get("skip")),
+                                               # accepted only together with the whole page ("Accept page")
+                                               "page_accepted": bubble_reviewed(b) and b.get("confirmed_via") == "page"}
     return info
 
 router = APIRouter(prefix="/logs", tags=["Logs"])
@@ -81,7 +83,8 @@ async def list_translation_logs(project_id: int, db: Session = Depends(get_db)):
         return {"chapter": info["chapter"], "file_name": info["file_name"],
                 "bubble_no": bubble["no"] if bubble else None,          # None: the bubble was deleted / merged since
                 "current_translation": bubble["translation"] if bubble else None,
-                "reviewed": bubble["reviewed"] if bubble else None}
+                "reviewed": bubble["reviewed"] if bubble else None,
+                "page_accepted": bubble["page_accepted"] if bubble else None}
 
     return [
         {

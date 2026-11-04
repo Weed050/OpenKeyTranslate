@@ -5,6 +5,8 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="icon" href="img/okt-logo.svg" type="image/svg+xml">
+    <link rel="alternate icon" href="img/okt.ico">
     <title>OpenKeyTranslate - Settings</title>
     <link rel="stylesheet" href="css/tokens.css">
     <script src="js/theme.js"></script>
@@ -19,7 +21,7 @@
  
     <div class="app-shell">
         <nav class="sidebar">
-            <div class="sidebar-brand">OpenKeyTranslate</div>
+            <div class="sidebar-brand"><img src="img/okt-logo.svg" alt="" class="brand-icon">OpenKeyTranslate</div>
  
             <div class="sidebar-section">
                 <div class="sidebar-label">Active</div>
@@ -93,6 +95,12 @@
                         <input type="checkbox" id="spellcheckSettingCheckbox"> Enable
                     </label>
                 </div>
+                <div class="row">
+                    <div class="text-muted" title="Stored in this browser only. Pages read before this version show only the kept readings - Re-OCR a page to collect the rest.">OCR debug view: an <b>OCR debug</b> button over the page in the editor shows every raw OCR reading with its confidence, second-chance (rescued) readings, readings under the threshold, what the filters dropped and where a tall page was cut into slices</div>
+                    <label style="display:flex; align-items:center; gap:6px;">
+                        <input type="checkbox" id="ocrDebugSettingCheckbox"> Show
+                    </label>
+                </div>
             </div>
 
             <div class="card">
@@ -110,39 +118,41 @@
                 <div class="quick-start">
                     <b>Quick start</b>
                     <ol>
-                        <li>Get a free key: <a href="https://console.groq.com/keys" target="_blank" rel="noopener">Groq</a> or <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">Google AI Studio (Gemini)</a>.</li>
-                        <li>Pick that provider in <i>Active provider</i> below and paste the key into the key row (<i>+ Add key</i> if there is none).</li>
-                        <li>Press <i>Test connection</i>. Done - the key is saved when you leave the field, no restart.</li>
+                        <li>Get a free key: <a href="https://console.groq.com/keys" target="_blank" rel="noopener">Groq</a> or <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">Google AI Studio (Gemini)</a> - or use any OpenAI-compatible service, or a local Ollama / LM Studio.</li>
+                        <li><i>+ Add key</i> (or the empty row), pick the provider and paste the key.</li>
+                        <li>Press <i>Test</i> next to the key - the result appears right under it. Everything is saved when you leave a field, no restart.</li>
                     </ol>
                     <span class="text-muted">Only the text of the bubbles is sent to the provider - the page images never leave this computer.</span>
                 </div>
-                <p class="text-muted">Your own API keys. Every change is saved as soon as you leave the field and applied immediately - no restart. Keys are never shown again in full.</p>
                 <div class="row">
                     <label style="display:flex; align-items:center; gap:6px; margin:0;">
                         <input type="checkbox" id="translationOnCheckbox"> Translate pages (off = OCR only)
                     </label>
-                    <button id="testTranslationBtn" title="Sends one tiny request through the active provider and key pool">Test connection</button>
+                </div>
+                <h3 class="key-heading">Keys <span class="text-muted">used from the top - when a key hits its limit (or fails), the next one switched on takes over; providers can be mixed</span></h3>
+                <div id="keyList" class="key-list"></div>
+                <datalist id="compatPresets"></datalist>
+                <div class="key-actions">
+                    <button id="addKeyBtn">+ Add key</button>
+                    <button id="testTranslationBtn" title="One tiny translation exactly as a page would be translated: through the first key that is switched on and not resting after a limit">Test the pool</button>
+                </div>
+                <div id="poolTestResult" class="key-result hidden" role="status"></div>
+                <p class="text-muted key-ab-note">A/B experiment (memory vs. no memory): both versions of a bubble always go through the <b>same key and model</b>. If that key is busy at that moment, the pair is skipped instead of comparing two models.</p>
+                <h3 class="key-heading">Default model per provider <span class="text-muted">used by every key whose Model field is empty</span></h3>
+                <div class="row">
+                    <div class="text-muted">Groq</div>
+                    <input type="text" id="providerModelGroq" list="modelsGroq" style="max-width:320px;" spellcheck="false">
                 </div>
                 <div class="row">
-                    <div class="text-muted" title="Only the keys of this provider are used (in the order below); keys of the other provider are kept for when you switch">Active provider</div>
-                    <select id="providerSelect" style="max-width:200px;">
-                        <option value="groq">Groq</option>
-                        <option value="gemini">Gemini</option>
-                    </select>
+                    <div class="text-muted">Gemini</div>
+                    <input type="text" id="providerModelGemini" list="modelsGemini" style="max-width:320px;" spellcheck="false">
                 </div>
                 <div class="row">
-                    <div class="text-muted" title="Used by every key whose own Model field is empty">Default model: Groq</div>
-                    <input type="text" id="providerModelGroq" style="max-width:320px;" spellcheck="false">
+                    <div class="text-muted" title="Model names depend on the server: e.g. meta-llama/llama-3.3-70b-instruct (OpenRouter), mistral-small-latest, deepseek-chat, llama3.1 (Ollama). The Models button of a key lists them.">OpenAI-compatible</div>
+                    <input type="text" id="providerModelCompat" style="max-width:320px;" spellcheck="false" placeholder="e.g. llama3.1">
                 </div>
-                <div class="row">
-                    <div class="text-muted" title="Used by every key whose own Model field is empty">Default model: Gemini</div>
-                    <input type="text" id="providerModelGemini" style="max-width:320px;" spellcheck="false">
-                </div>
-                <div>
-                    <div class="text-muted" style="margin:8px 0 4px;" title="Several keys of the active provider = automatic rotation on rate limits. Different models in one pool make zero-shot vs memory pairs less comparable - every log row records the model that answered.">API keys - one row per key: name, provider, model (empty = provider default), key</div>
-                    <div id="keyList"></div>
-                    <button id="addKeyBtn" style="margin-top:6px;">+ Add key</button>
-                </div>
+                <datalist id="modelsGroq"></datalist>
+                <datalist id="modelsGemini"></datalist>
                 <div class="row">
                     <div class="text-muted">Temperature (0 = most repeatable; use 0 for the zero-shot vs memory experiment)</div>
                     <input type="text" id="temperatureInput" style="max-width:80px;" inputmode="decimal">
@@ -346,7 +356,7 @@
                 <p class="text-muted" id="ignorePatternsStatus" style="margin-top:10px;"></p>
             </div>
  
-            <div class="card">
+            <div class="card" id="backup">
                 <h2 data-toc="Backup &amp; moving">Backup &amp; move to another computer</h2>
                 <p class="text-muted">One zip with everything: database (projects, corrections, glossary, logs), settings (without this PC's folder path), the .env file and all page images + OCR results. On the new computer install the app, open this page and import the zip - everything is put in the right place automatically.</p>
                 <div class="row">
@@ -370,6 +380,28 @@
                 </div>
                 <progress id="backupProgress" class="hidden" max="100" value="0" style="width:100%; margin-top:10px;"></progress>
                 <p class="text-muted" id="backupStatus" style="margin-top:10px; white-space:pre-wrap;"></p>
+            </div>
+
+            <div class="card" id="storage">
+                <h2 data-toc="Storage &amp; uninstall">Storage &amp; uninstall</h2>
+                <p class="text-muted">Everything OpenKeyTranslate keeps on this computer, with sizes. Caches and logs can be deleted here - they come back by themselves. Your work (projects, database, settings) is only shown here, never deleted from the app.</p>
+                <div class="storage-head">
+                    <button id="storageScanBtn" title="Counts the folders (the program folder can take a few seconds)">Check sizes</button>
+                    <span class="text-muted" id="storageStatus"></span>
+                </div>
+                <div id="storageList" class="storage-list"></div>
+                <details class="uninstall-box" id="uninstallBox">
+                    <summary>Uninstalling OpenKeyTranslate</summary>
+                    <ol>
+                        <li>If you may come back: <a href="#backup">Export all data</a> - one zip with projects, memory, glossary and settings.</li>
+                        <li>Delete the model caches above (they lie outside the app folders), unless another program uses PaddleOCR.</li>
+                        <li>Close the app: stop the backend (its console window, Ctrl+C).</li>
+                        <li>Delete these folders by hand:
+                            <div id="uninstallFolders" class="uninstall-folders"><span class="text-muted">Press Check sizes.</span></div>
+                        </li>
+                    </ol>
+                    <p class="text-muted">A packaged version's uninstaller removes the program; the data folders stay unless you delete them - so a reinstall finds your projects again.</p>
+                </details>
             </div>
 
             <div class="card">

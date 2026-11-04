@@ -76,6 +76,8 @@ def carry_over(old_bubbles: list[dict], new_bubbles: list[dict]) -> set[str]:
                     if ob.get("confirmed_at") and ob.get("confirmed_translation") == ob["translation"]:
                         # the "reviewed" stamp (editor marker "accepted", evaluation) belongs to this text: keep it
                         nb["confirmed_translation"], nb["confirmed_at"] = ob["confirmed_translation"], ob["confirmed_at"]
+                        if ob.get("confirmed_via"):
+                            nb["confirmed_via"] = ob["confirmed_via"]   # "page" = accepted with the whole page
                 if ob.get("layout"):
                     nb["layout"] = ob["layout"]             # Lettering placement of the same text stays
                 carried.add(nb["bubble_id"])

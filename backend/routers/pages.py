@@ -72,27 +72,12 @@ async def list_pages(project_id: int, include_excluded: bool = False, db: Sessio
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
 
-    from services.page_export import page_stage
-    from services.render_service import default_export_root
+    # work stage + export state of every page: one rule for the list, the chapter bars and the project cards
+    from services.page_progress import page_progress, load_export_log
+    export_log = load_export_log(project)
 
     def progress(page, chapter) -> dict:
-        """The work stage of a processed page (services/page_export.page_stage) + whether its export is up to date."""
-        if page.status != "processed":
-            return {"stage": page.status}
-        paths = page_paths(page)
-        info = dict(page_stage(paths["json"]))
-        stem = os.path.splitext(page.file_name)[0]
-        folder = os.path.join(default_export_root(project), chapter.number)
-        exported = [os.path.getmtime(f) for f in (os.path.join(folder, f"{stem}.{ext}") for ext in ("png", "jpg"))
-                    if os.path.exists(f)]
-        if exported:
-            try:                       # changed after the export (a fix, Lettering): the exported file is outdated
-                info["export"] = "current" if max(exported) >= os.path.getmtime(paths["json"]) else "outdated"
-            except OSError:
-                info["export"] = "current"
-            if info["stage"] == "reviewed" and info["export"] == "current":
-                info["stage"] = "exported"
-        return info
+        return page_progress(page, chapter, project, export_log)
 
     return [
         {
@@ -109,6 +94,32 @@ async def list_pages(project_id: int, include_excluded: bool = False, db: Sessio
         for page in chapter.pages
         if include_excluded or page.status != "excluded"
     ]
+
+
+@router.get("/{page_id}/ocr-debug")
+async def get_page_ocr_debug(page_id: int, db: Session = Depends(get_db)):
+    """
+    The editor's OCR debug view (Settings > Editor): every reading the OCR kept (score, slice, "rescued" = second-chance
+    reading), the merged text lines, and - for pages OCR'd since 2026-11-04 - what it saw but did not use: readings under
+    the text threshold, readings / lines / bubbles a later step removed (with the reason) and the slice cuts.
+    Read only, original image coordinates.
+    """
+    from core.config import TEXT_THRESHOLD
+    page = db.query(Page).filter(Page.id == page_id).first()
+    if not page:
+        raise HTTPException(status_code=404, detail="Page not found")
+    paths = page_paths(page)
+    if not os.path.exists(paths["json"]):
+        raise HTTPException(status_code=404, detail="Page not processed yet")
+    with open(paths["json"], "r", encoding="utf-8") as f:
+        data = json.load(f)
+    return {
+        "items": data.get("items", []),
+        "lines": [{"box": l.get("box"), "text": l.get("text", ""), "bubble_id": l.get("bubble_id")}
+                  for l in data.get("lines", [])],
+        "debug": data.get("ocr_debug"),
+        "threshold": (data.get("ocr_debug") or {}).get("threshold", TEXT_THRESHOLD),
+    }
 
 
 @router.get("/{page_id}")
@@ -139,6 +150,8 @@ async def get_page(page_id: int, db: Session = Depends(get_db)):
         "cleanups": ocr_data.get("cleanups", []),                       # manual "Clean area" rectangles (editor)
         # reading order of this page: chosen in the editor, else the setting the OCR used
         "bubble_order": ocr_data.get("bubble_order") or get_setting("bubble_order", "ttb"),
+        # the user marked the bubbles of this page (boxes, order, cleaning, lettering) as checked (POST /review)
+        "layout_checked_at": ocr_data.get("layout_checked_at"),
     }
 
 
@@ -251,6 +264,28 @@ def export_page(page_id: int, payload: dict | None = Body(default=None), db: Ses
     except (ImageLoadError, ValueError) as e:
         raise HTTPException(status_code=422, detail=str(e))
     return {"files": files, "folder": os.path.dirname(files[0]) if files else None}
+
+
+@router.post("/{page_id}/review")
+def review_page_endpoint(page_id: int, payload: dict | None = Body(default=None), db: Session = Depends(get_db)):
+    """
+    Page-level review from the editor: {"layout": true | false (bubbles checked / not), "accept": true (stamp every
+    unreviewed translated bubble as accepted, confirmed_via = "page"), "unaccept": [bubble ids] (undo of an accept)}.
+    Any key may be left out. -> {"accepted", "unaccepted", "layout_checked_at"} (services/page_export.review_page).
+    """
+    from services.page_export import review_page
+    page = db.query(Page).filter(Page.id == page_id).first()
+    if not page:
+        raise HTTPException(status_code=404, detail="Page not found")
+    paths = page_paths(page)
+    if not os.path.exists(paths["json"]):
+        raise HTTPException(status_code=404, detail="Page has not been OCR-processed yet")
+    payload = payload or {}
+    layout = payload.get("layout")
+    unaccept = payload.get("unaccept") or []
+    if (layout is not None and not isinstance(layout, bool)) or not isinstance(unaccept, list):
+        raise HTTPException(status_code=400, detail="layout must be true / false, unaccept a list of bubble ids")
+    return review_page(paths["json"], layout=layout, accept=bool(payload.get("accept")), unaccept=[str(u) for u in unaccept])
 
 
 @router.get("/{page_id}/exported")

@@ -6,7 +6,7 @@ translator decides, and the AI learns from every correction.
 
 > 🇵🇱 A Polish-language README is available at [`README-pl.md`](./README-pl.md) (older; this file is the current one).
 
-**Status: working prototype, version 0.2.1** (see [`CHANGELOG.md`](./CHANGELOG.md)). The whole first chapter of a test
+**Status: working prototype, version 0.3.0** (see [`CHANGELOG.md`](./CHANGELOG.md)). The whole first chapter of a test
 series has been translated with it. It is still a thesis project: expect rough edges, and the README will be rewritten
 when the thesis is finished.
 
@@ -21,8 +21,9 @@ when the thesis is finished.
    text on plain paper with the paper colour, everything else from its surroundings (OpenCV TELEA). Leftover traces
    can be cleaned by hand ("Clean area").
 3. **Translation (cloud, your own key)** - the text of the whole page goes to an LLM in one request (neighbouring
-   bubbles are context). Groq or Gemini, several keys with automatic rotation on rate limits. **Only text leaves the
-   computer - never the page images.**
+   bubbles are context). One ordered list of keys - Groq, Gemini or any OpenAI-compatible server (OpenRouter,
+   Mistral, DeepSeek, or a local Ollama / LM Studio; beta), mixed freely - with automatic rotation on rate limits.
+   **Only text leaves the computer - never the page images.**
 4. **Review in the editor** - page + bubble list + bubble panel. Edit, accept, retranslate one bubble, re-read a
    bubble, draw a missed one, merge (Shift+click) / split / move lines between bubbles, skip page numbers and noise.
 5. **Lettering** - a second editor mode: move, resize and rotate the text box of each bubble, font per bubble (your
@@ -34,7 +35,7 @@ when the thesis is finished.
    (names, invented words) are given to the model whenever they appear, and a missing term triggers a short
    post-editing request. "Find terms with AI" proposes terms from your corrections.
 8. **Measurement** - every memory-assisted translation has a twin request with the identical payload minus the
-   memory (zero-shot). The Logs page shows both, what was injected and how it compares with your final version -
+   memory (zero-shot), sent through the same key and model. The History page (Research view) shows both, what was injected and how it compares with your final version -
    the data for the thesis question: *does the correction loop measurably improve the translation?*
 
 The memory design follows Moslem (2024), *Language Modelling Approaches to Adaptive Machine Translation*
@@ -49,7 +50,7 @@ a live correction loop.
 - **Privacy and copyright first.** Everything that touches the page image runs locally. Only extracted text is sent
   to the translation API.
 - **BYOK (Bring Your Own Key).** No bundled or paid translation service: paste your own (free tier is enough) Groq or
-  Gemini key in Settings > Translation & API keys.
+  Gemini key in Settings > Translation & API keys - or point it at a local model (Ollama / LM Studio).
 - **Modest hardware.** Developed on a GTX 1050 Ti; runs on CPU too (slower OCR).
 - **The human stays in charge.** AI output is a draft; nothing is "final" until you accept or correct it, and the
   project list shows what you have reviewed versus what was only processed by the system.
@@ -72,12 +73,13 @@ accepts pages served from `localhost` / `127.0.0.1`). See `setup/pip_install_ins
 package details. The first run downloads the OCR and embedding models.
 
 1. **Settings > Translation & API keys**: follow the Quick start box (free key from Groq or Google AI Studio, paste,
-   Test connection).
+   Test).
 2. **Projects**: create a project from a folder with one sub-folder per chapter.
 3. Open the project, process pages, review them in the editor, switch to Lettering, export.
 
 User data (database, projects, fonts, settings, logs) lives in `%APPDATA%\OpenKeyTranslate`, outside the repository.
-Settings > Backup & moving packs it into one ZIP for another computer.
+Settings > Backup & moving packs it into one ZIP for another computer; Settings > Storage & uninstall shows every
+folder with its size and what to delete when removing the app.
 
 ---
 
@@ -108,7 +110,7 @@ Settings > Backup & moving packs it into one ZIP for another computer.
 - **Backend:** Python 3.12, FastAPI, SQLite (SQLAlchemy)
 - **Vision:** PaddleOCR 3 (PP-OCRv5), OpenCV, Pillow
 - **Memory:** sentence-transformers (all-MiniLM-L6-v2)
-- **Translation:** Groq / Gemini APIs (BYOK)
+- **Translation:** Groq / Gemini / OpenAI-compatible APIs (BYOK, httpx)
 - **Frontend:** HTML, CSS, vanilla JavaScript modules (no build step)
 
 ## License

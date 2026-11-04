@@ -52,6 +52,36 @@
 
             </li>
             <li>
+                    <a class="class" href="#KeyCallError">KeyCallError</a>
+                            <ul class="memberlist">
+                </ul>
+
+            </li>
+            <li>
+                    <a class="class" href="#RateLimited">RateLimited</a>
+                            <ul class="memberlist">
+                </ul>
+
+            </li>
+            <li>
+                    <a class="class" href="#KeyRejected">KeyRejected</a>
+                            <ul class="memberlist">
+                </ul>
+
+            </li>
+            <li>
+                    <a class="class" href="#Unreachable">Unreachable</a>
+                            <ul class="memberlist">
+                </ul>
+
+            </li>
+            <li>
+                    <a class="class" href="#Transient">Transient</a>
+                            <ul class="memberlist">
+                </ul>
+
+            </li>
+            <li>
                     <a class="class" href="#TranslationProvider">TranslationProvider</a>
                             <ul class="memberlist">
                         <li>
@@ -62,6 +92,9 @@
                         </li>
                         <li>
                                 <a class="variable" href="#TranslationProvider.current_model">current_model</a>
+                        </li>
+                        <li>
+                                <a class="variable" href="#TranslationProvider.current_key_id">current_key_id</a>
                         </li>
                         <li>
                                 <a class="function" href="#TranslationProvider.request_json">request_json</a>
@@ -88,105 +121,137 @@
                     <h1 class="modulename">
 <a href="./../../services.html">services</a><wbr>.<a href="./../providers.html">providers</a><wbr>.base    </h1>
 
-                        <div class="docstring"><p>Abstract interface all translation backends must implement.</p>
+                        <div class="docstring"><p>Abstract interface of the translation backend + the shared error vocabulary of the per-provider clients.</p>
 
 <p>Two entry points:</p>
 
 <ul>
-<li>translate(texts_payload, system_prompt=None) -> {id: translation}: the page batch (and, with a different system
-prompt, the terminology post-edit pass - same output shape).</li>
-<li>request_json(system_prompt, payload, schema) -> schema instance: any other structured call (glossary term
-extraction). Key rotation / retry lives here in each provider, so both paths share it.</li>
+<li>translate(texts_payload, system_prompt=None, pin=None) -> {id: translation}: the page batch (and, with a different
+system prompt, the terminology post-edit pass - same output shape).</li>
+<li>request_json(system_prompt, payload, schema, pin=None) -> schema instance: any other structured call (glossary term
+extraction).</li>
 </ul>
 
-<p>translation_service.py only ever talks to this interface, regardless of which LLM sits behind it.
-Adding a new backend means writing one new class that implements request_json - nothing upstream changes.</p>
+<p>translation_service.py only ever talks to this interface. Since 2026-11-04 the one implementation is the key pool
+(pool.py): ONE ordered list of keys that may mix providers (Groq, Gemini, any OpenAI-compatible server). The provider
+modules (groq_provider.py, gemini_provider.py, openai_compat_provider.py) are thin clients - one request with one key -
+that translate their library's exceptions into the four classes below, so the rotation / retry rules live in one place
+instead of being copied into every provider.</p>
+
+<p><code>pin</code> = "provider/label" of one key: the call uses only that key (the A/B counterfactual must go through the SAME key
+and model as the shown translation, otherwise the pair compares two models).</p>
 </div>
 
                         <input id="mod-base-view-source" class="view-source-toggle-state" type="checkbox" aria-hidden="true" tabindex="-1">
 
                         <label class="view-source-button" for="mod-base-view-source"><span>View Source</span></label>
 
-                        <div class="pdoc-code codehilite"><pre><span></span><span id="L-1"><a href="#L-1"><span class="linenos"> 1</span></a><span class="c1"># backend/services/providers/base.py</span>
-</span><span id="L-2"><a href="#L-2"><span class="linenos"> 2</span></a>
-</span><span id="L-3"><a href="#L-3"><span class="linenos"> 3</span></a><span class="sd">&quot;&quot;&quot;</span>
-</span><span id="L-4"><a href="#L-4"><span class="linenos"> 4</span></a><span class="sd">Abstract interface all translation backends must implement.</span>
-</span><span id="L-5"><a href="#L-5"><span class="linenos"> 5</span></a>
-</span><span id="L-6"><a href="#L-6"><span class="linenos"> 6</span></a><span class="sd">Two entry points:</span>
-</span><span id="L-7"><a href="#L-7"><span class="linenos"> 7</span></a><span class="sd">- translate(texts_payload, system_prompt=None) -&gt; {id: translation}: the page batch (and, with a different system</span>
-</span><span id="L-8"><a href="#L-8"><span class="linenos"> 8</span></a><span class="sd">  prompt, the terminology post-edit pass - same output shape).</span>
-</span><span id="L-9"><a href="#L-9"><span class="linenos"> 9</span></a><span class="sd">- request_json(system_prompt, payload, schema) -&gt; schema instance: any other structured call (glossary term</span>
-</span><span id="L-10"><a href="#L-10"><span class="linenos">10</span></a><span class="sd">  extraction). Key rotation / retry lives here in each provider, so both paths share it.</span>
-</span><span id="L-11"><a href="#L-11"><span class="linenos">11</span></a>
-</span><span id="L-12"><a href="#L-12"><span class="linenos">12</span></a><span class="sd">translation_service.py only ever talks to this interface, regardless of which LLM sits behind it.</span>
-</span><span id="L-13"><a href="#L-13"><span class="linenos">13</span></a><span class="sd">Adding a new backend means writing one new class that implements request_json - nothing upstream changes.</span>
-</span><span id="L-14"><a href="#L-14"><span class="linenos">14</span></a><span class="sd">&quot;&quot;&quot;</span>
-</span><span id="L-15"><a href="#L-15"><span class="linenos">15</span></a>
-</span><span id="L-16"><a href="#L-16"><span class="linenos">16</span></a><span class="kn">import</span><span class="w"> </span><span class="nn">time</span>
-</span><span id="L-17"><a href="#L-17"><span class="linenos">17</span></a><span class="kn">from</span><span class="w"> </span><span class="nn">abc</span><span class="w"> </span><span class="kn">import</span> <span class="n">ABC</span><span class="p">,</span> <span class="n">abstractmethod</span>
-</span><span id="L-18"><a href="#L-18"><span class="linenos">18</span></a>
-</span><span id="L-19"><a href="#L-19"><span class="linenos">19</span></a><span class="kn">from</span><span class="w"> </span><span class="nn">pydantic</span><span class="w"> </span><span class="kn">import</span> <span class="n">BaseModel</span>
-</span><span id="L-20"><a href="#L-20"><span class="linenos">20</span></a>
-</span><span id="L-21"><a href="#L-21"><span class="linenos">21</span></a><span class="kn">from</span><span class="w"> </span><span class="nn">.prompts</span><span class="w"> </span><span class="kn">import</span> <span class="n">SYSTEM_PROMPT</span>
-</span><span id="L-22"><a href="#L-22"><span class="linenos">22</span></a>
-</span><span id="L-23"><a href="#L-23"><span class="linenos">23</span></a>
-</span><span id="L-24"><a href="#L-24"><span class="linenos">24</span></a><span class="k">class</span><span class="w"> </span><span class="nc">BubbleTranslation</span><span class="p">(</span><span class="n">BaseModel</span><span class="p">):</span>
-</span><span id="L-25"><a href="#L-25"><span class="linenos">25</span></a>    <span class="nb">id</span><span class="p">:</span> <span class="nb">str</span>
-</span><span id="L-26"><a href="#L-26"><span class="linenos">26</span></a>    <span class="n">translation</span><span class="p">:</span> <span class="nb">str</span>
-</span><span id="L-27"><a href="#L-27"><span class="linenos">27</span></a>
-</span><span id="L-28"><a href="#L-28"><span class="linenos">28</span></a>
-</span><span id="L-29"><a href="#L-29"><span class="linenos">29</span></a><span class="k">class</span><span class="w"> </span><span class="nc">TranslationBatch</span><span class="p">(</span><span class="n">BaseModel</span><span class="p">):</span>
-</span><span id="L-30"><a href="#L-30"><span class="linenos">30</span></a>    <span class="n">translations</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="n">BubbleTranslation</span><span class="p">]</span>
-</span><span id="L-31"><a href="#L-31"><span class="linenos">31</span></a>
-</span><span id="L-32"><a href="#L-32"><span class="linenos">32</span></a>
-</span><span id="L-33"><a href="#L-33"><span class="linenos">33</span></a><span class="k">class</span><span class="w"> </span><span class="nc">TranslationProvider</span><span class="p">(</span><span class="n">ABC</span><span class="p">):</span>
-</span><span id="L-34"><a href="#L-34"><span class="linenos">34</span></a>    <span class="n">default_system_prompt</span> <span class="o">=</span> <span class="n">SYSTEM_PROMPT</span>
-</span><span id="L-35"><a href="#L-35"><span class="linenos">35</span></a>
-</span><span id="L-36"><a href="#L-36"><span class="linenos">36</span></a>    <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
-</span><span id="L-37"><a href="#L-37"><span class="linenos">37</span></a>        <span class="c1"># Set by translate() to the label of whichever key from the pool</span>
-</span><span id="L-38"><a href="#L-38"><span class="linenos">38</span></a>        <span class="c1"># actually served the last request - read by translation_service.py</span>
-</span><span id="L-39"><a href="#L-39"><span class="linenos">39</span></a>        <span class="c1"># right after each call, for TranslationLog.key_label.</span>
-</span><span id="L-40"><a href="#L-40"><span class="linenos">40</span></a>        <span class="bp">self</span><span class="o">.</span><span class="n">current_key_label</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span>
-</span><span id="L-41"><a href="#L-41"><span class="linenos">41</span></a>        <span class="c1"># Model that served the last request: a key may carry its own &quot;model&quot; (Settings: one row per key), so the</span>
-</span><span id="L-42"><a href="#L-42"><span class="linenos">42</span></a>        <span class="c1"># provider-level model is only the default. Logged per TranslationLog row (A/B pairs must use one model).</span>
-</span><span id="L-43"><a href="#L-43"><span class="linenos">43</span></a>        <span class="bp">self</span><span class="o">.</span><span class="n">current_model</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span>
-</span><span id="L-44"><a href="#L-44"><span class="linenos">44</span></a>        <span class="c1"># label -&gt; time.monotonic() until which the key is skipped. A 429 is usually per-MINUTE; the old</span>
-</span><span id="L-45"><a href="#L-45"><span class="linenos">45</span></a>        <span class="c1"># permanent &quot;exhausted&quot; set killed translation until restart after the first burst (single-key users!).</span>
-</span><span id="L-46"><a href="#L-46"><span class="linenos">46</span></a>        <span class="bp">self</span><span class="o">.</span><span class="n">_cooldown_until</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">float</span><span class="p">]</span> <span class="o">=</span> <span class="p">{}</span>
-</span><span id="L-47"><a href="#L-47"><span class="linenos">47</span></a>
-</span><span id="L-48"><a href="#L-48"><span class="linenos">48</span></a>    <span class="k">def</span><span class="w"> </span><span class="nf">_is_cooling</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">label</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">bool</span><span class="p">:</span>
-</span><span id="L-49"><a href="#L-49"><span class="linenos">49</span></a>        <span class="k">return</span> <span class="n">time</span><span class="o">.</span><span class="n">monotonic</span><span class="p">()</span> <span class="o">&lt;</span> <span class="bp">self</span><span class="o">.</span><span class="n">_cooldown_until</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">label</span><span class="p">,</span> <span class="mf">0.0</span><span class="p">)</span>
-</span><span id="L-50"><a href="#L-50"><span class="linenos">50</span></a>
-</span><span id="L-51"><a href="#L-51"><span class="linenos">51</span></a>    <span class="k">def</span><span class="w"> </span><span class="nf">_cool_down</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">label</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">seconds</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">65.0</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-</span><span id="L-52"><a href="#L-52"><span class="linenos">52</span></a>        <span class="bp">self</span><span class="o">.</span><span class="n">_cooldown_until</span><span class="p">[</span><span class="n">label</span><span class="p">]</span> <span class="o">=</span> <span class="n">time</span><span class="o">.</span><span class="n">monotonic</span><span class="p">()</span> <span class="o">+</span> <span class="n">seconds</span>
-</span><span id="L-53"><a href="#L-53"><span class="linenos">53</span></a>
-</span><span id="L-54"><a href="#L-54"><span class="linenos">54</span></a>    <span class="k">def</span><span class="w"> </span><span class="nf">_seconds_until_any_key</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">int</span><span class="p">:</span>
-</span><span id="L-55"><a href="#L-55"><span class="linenos">55</span></a>        <span class="n">waits</span> <span class="o">=</span> <span class="p">[</span><span class="n">u</span> <span class="o">-</span> <span class="n">time</span><span class="o">.</span><span class="n">monotonic</span><span class="p">()</span> <span class="k">for</span> <span class="n">u</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">_cooldown_until</span><span class="o">.</span><span class="n">values</span><span class="p">()</span> <span class="k">if</span> <span class="n">u</span> <span class="o">&gt;</span> <span class="n">time</span><span class="o">.</span><span class="n">monotonic</span><span class="p">()]</span>
-</span><span id="L-56"><a href="#L-56"><span class="linenos">56</span></a>        <span class="k">return</span> <span class="nb">int</span><span class="p">(</span><span class="nb">min</span><span class="p">(</span><span class="n">waits</span><span class="p">))</span> <span class="o">+</span> <span class="mi">1</span> <span class="k">if</span> <span class="n">waits</span> <span class="k">else</span> <span class="mi">0</span>
-</span><span id="L-57"><a href="#L-57"><span class="linenos">57</span></a>
-</span><span id="L-58"><a href="#L-58"><span class="linenos">58</span></a>    <span class="nd">@abstractmethod</span>
-</span><span id="L-59"><a href="#L-59"><span class="linenos">59</span></a>    <span class="k">def</span><span class="w"> </span><span class="nf">request_json</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">system_prompt</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">payload</span><span class="p">,</span> <span class="n">schema</span><span class="p">:</span> <span class="nb">type</span><span class="p">[</span><span class="n">BaseModel</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="n">BaseModel</span><span class="p">:</span>
-</span><span id="L-60"><a href="#L-60"><span class="linenos">60</span></a><span class="w">        </span><span class="sd">&quot;&quot;&quot;</span>
-</span><span id="L-61"><a href="#L-61"><span class="linenos">61</span></a><span class="sd">        One structured call with key rotation / retry. `payload` is JSON-serialised (or sent as-is when a str).</span>
-</span><span id="L-62"><a href="#L-62"><span class="linenos">62</span></a><span class="sd">        Raises when every configured key is unavailable (rate-limited or unset) - the caller reports it.</span>
-</span><span id="L-63"><a href="#L-63"><span class="linenos">63</span></a><span class="sd">        &quot;&quot;&quot;</span>
-</span><span id="L-64"><a href="#L-64"><span class="linenos">64</span></a>        <span class="k">raise</span> <span class="ne">NotImplementedError</span>
-</span><span id="L-65"><a href="#L-65"><span class="linenos">65</span></a>
-</span><span id="L-66"><a href="#L-66"><span class="linenos">66</span></a>    <span class="nd">@abstractmethod</span>
-</span><span id="L-67"><a href="#L-67"><span class="linenos">67</span></a>    <span class="k">def</span><span class="w"> </span><span class="nf">translate</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">texts_payload</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">dict</span><span class="p">],</span> <span class="n">system_prompt</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">]:</span>
-</span><span id="L-68"><a href="#L-68"><span class="linenos">68</span></a><span class="w">        </span><span class="sd">&quot;&quot;&quot;</span>
-</span><span id="L-69"><a href="#L-69"><span class="linenos">69</span></a><span class="sd">        Translate a batch of speech-bubble texts.</span>
-</span><span id="L-70"><a href="#L-70"><span class="linenos">70</span></a>
-</span><span id="L-71"><a href="#L-71"><span class="linenos">71</span></a><span class="sd">        :param texts_payload: List of {&quot;id&quot;, &quot;text&quot;, optional &quot;examples&quot; / &quot;exact&quot; / &quot;glossary&quot; / &quot;context_only&quot;}</span>
-</span><span id="L-72"><a href="#L-72"><span class="linenos">72</span></a><span class="sd">            - see prompts.SYSTEM_PROMPT for what each field means to the model.</span>
-</span><span id="L-73"><a href="#L-73"><span class="linenos">73</span></a><span class="sd">        :param system_prompt: None = the translation prompt; the terminology post-edit pass passes its own.</span>
-</span><span id="L-74"><a href="#L-74"><span class="linenos">74</span></a><span class="sd">        :return: Mapping of {id: translation}. A missing id is treated by the</span>
-</span><span id="L-75"><a href="#L-75"><span class="linenos">75</span></a><span class="sd">            caller as an empty-string translation, so failures should simply</span>
-</span><span id="L-76"><a href="#L-76"><span class="linenos">76</span></a><span class="sd">            omit the id rather than raise - except when every configured key</span>
-</span><span id="L-77"><a href="#L-77"><span class="linenos">77</span></a><span class="sd">            is unavailable (rate-limited or unset), which should raise, so</span>
-</span><span id="L-78"><a href="#L-78"><span class="linenos">78</span></a><span class="sd">            the caller gets a clear error instead of silent empty output.</span>
-</span><span id="L-79"><a href="#L-79"><span class="linenos">79</span></a><span class="sd">        &quot;&quot;&quot;</span>
-</span><span id="L-80"><a href="#L-80"><span class="linenos">80</span></a>        <span class="k">raise</span> <span class="ne">NotImplementedError</span>
+                        <div class="pdoc-code codehilite"><pre><span></span><span id="L-1"><a href="#L-1"><span class="linenos">  1</span></a><span class="c1"># backend/services/providers/base.py</span>
+</span><span id="L-2"><a href="#L-2"><span class="linenos">  2</span></a>
+</span><span id="L-3"><a href="#L-3"><span class="linenos">  3</span></a><span class="sd">&quot;&quot;&quot;</span>
+</span><span id="L-4"><a href="#L-4"><span class="linenos">  4</span></a><span class="sd">Abstract interface of the translation backend + the shared error vocabulary of the per-provider clients.</span>
+</span><span id="L-5"><a href="#L-5"><span class="linenos">  5</span></a>
+</span><span id="L-6"><a href="#L-6"><span class="linenos">  6</span></a><span class="sd">Two entry points:</span>
+</span><span id="L-7"><a href="#L-7"><span class="linenos">  7</span></a><span class="sd">- translate(texts_payload, system_prompt=None, pin=None) -&gt; {id: translation}: the page batch (and, with a different</span>
+</span><span id="L-8"><a href="#L-8"><span class="linenos">  8</span></a><span class="sd">  system prompt, the terminology post-edit pass - same output shape).</span>
+</span><span id="L-9"><a href="#L-9"><span class="linenos">  9</span></a><span class="sd">- request_json(system_prompt, payload, schema, pin=None) -&gt; schema instance: any other structured call (glossary term</span>
+</span><span id="L-10"><a href="#L-10"><span class="linenos"> 10</span></a><span class="sd">  extraction).</span>
+</span><span id="L-11"><a href="#L-11"><span class="linenos"> 11</span></a>
+</span><span id="L-12"><a href="#L-12"><span class="linenos"> 12</span></a><span class="sd">translation_service.py only ever talks to this interface. Since 2026-11-04 the one implementation is the key pool</span>
+</span><span id="L-13"><a href="#L-13"><span class="linenos"> 13</span></a><span class="sd">(pool.py): ONE ordered list of keys that may mix providers (Groq, Gemini, any OpenAI-compatible server). The provider</span>
+</span><span id="L-14"><a href="#L-14"><span class="linenos"> 14</span></a><span class="sd">modules (groq_provider.py, gemini_provider.py, openai_compat_provider.py) are thin clients - one request with one key -</span>
+</span><span id="L-15"><a href="#L-15"><span class="linenos"> 15</span></a><span class="sd">that translate their library&#39;s exceptions into the four classes below, so the rotation / retry rules live in one place</span>
+</span><span id="L-16"><a href="#L-16"><span class="linenos"> 16</span></a><span class="sd">instead of being copied into every provider.</span>
+</span><span id="L-17"><a href="#L-17"><span class="linenos"> 17</span></a>
+</span><span id="L-18"><a href="#L-18"><span class="linenos"> 18</span></a><span class="sd">`pin` = &quot;provider/label&quot; of one key: the call uses only that key (the A/B counterfactual must go through the SAME key</span>
+</span><span id="L-19"><a href="#L-19"><span class="linenos"> 19</span></a><span class="sd">and model as the shown translation, otherwise the pair compares two models).</span>
+</span><span id="L-20"><a href="#L-20"><span class="linenos"> 20</span></a><span class="sd">&quot;&quot;&quot;</span>
+</span><span id="L-21"><a href="#L-21"><span class="linenos"> 21</span></a>
+</span><span id="L-22"><a href="#L-22"><span class="linenos"> 22</span></a><span class="kn">import</span><span class="w"> </span><span class="nn">time</span>
+</span><span id="L-23"><a href="#L-23"><span class="linenos"> 23</span></a><span class="kn">from</span><span class="w"> </span><span class="nn">abc</span><span class="w"> </span><span class="kn">import</span> <span class="n">ABC</span><span class="p">,</span> <span class="n">abstractmethod</span>
+</span><span id="L-24"><a href="#L-24"><span class="linenos"> 24</span></a>
+</span><span id="L-25"><a href="#L-25"><span class="linenos"> 25</span></a><span class="kn">from</span><span class="w"> </span><span class="nn">pydantic</span><span class="w"> </span><span class="kn">import</span> <span class="n">BaseModel</span>
+</span><span id="L-26"><a href="#L-26"><span class="linenos"> 26</span></a>
+</span><span id="L-27"><a href="#L-27"><span class="linenos"> 27</span></a><span class="kn">from</span><span class="w"> </span><span class="nn">.prompts</span><span class="w"> </span><span class="kn">import</span> <span class="n">SYSTEM_PROMPT</span>
+</span><span id="L-28"><a href="#L-28"><span class="linenos"> 28</span></a>
+</span><span id="L-29"><a href="#L-29"><span class="linenos"> 29</span></a>
+</span><span id="L-30"><a href="#L-30"><span class="linenos"> 30</span></a><span class="k">class</span><span class="w"> </span><span class="nc">BubbleTranslation</span><span class="p">(</span><span class="n">BaseModel</span><span class="p">):</span>
+</span><span id="L-31"><a href="#L-31"><span class="linenos"> 31</span></a>    <span class="nb">id</span><span class="p">:</span> <span class="nb">str</span>
+</span><span id="L-32"><a href="#L-32"><span class="linenos"> 32</span></a>    <span class="n">translation</span><span class="p">:</span> <span class="nb">str</span>
+</span><span id="L-33"><a href="#L-33"><span class="linenos"> 33</span></a>
+</span><span id="L-34"><a href="#L-34"><span class="linenos"> 34</span></a>
+</span><span id="L-35"><a href="#L-35"><span class="linenos"> 35</span></a><span class="k">class</span><span class="w"> </span><span class="nc">TranslationBatch</span><span class="p">(</span><span class="n">BaseModel</span><span class="p">):</span>
+</span><span id="L-36"><a href="#L-36"><span class="linenos"> 36</span></a>    <span class="n">translations</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="n">BubbleTranslation</span><span class="p">]</span>
+</span><span id="L-37"><a href="#L-37"><span class="linenos"> 37</span></a>
+</span><span id="L-38"><a href="#L-38"><span class="linenos"> 38</span></a>
+</span><span id="L-39"><a href="#L-39"><span class="linenos"> 39</span></a><span class="c1"># ---------------------------------------------------------------- errors of one request with one key</span>
+</span><span id="L-40"><a href="#L-40"><span class="linenos"> 40</span></a>
+</span><span id="L-41"><a href="#L-41"><span class="linenos"> 41</span></a><span class="k">class</span><span class="w"> </span><span class="nc">KeyCallError</span><span class="p">(</span><span class="ne">Exception</span><span class="p">):</span>
+</span><span id="L-42"><a href="#L-42"><span class="linenos"> 42</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Base of the classified failures of one request. `message` is meant for the user (Settings test box).&quot;&quot;&quot;</span>
+</span><span id="L-43"><a href="#L-43"><span class="linenos"> 43</span></a>
+</span><span id="L-44"><a href="#L-44"><span class="linenos"> 44</span></a>
+</span><span id="L-45"><a href="#L-45"><span class="linenos"> 45</span></a><span class="k">class</span><span class="w"> </span><span class="nc">RateLimited</span><span class="p">(</span><span class="n">KeyCallError</span><span class="p">):</span>
+</span><span id="L-46"><a href="#L-46"><span class="linenos"> 46</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;429 / quota spent: this key cools down for a while, the next key is tried.&quot;&quot;&quot;</span>
+</span><span id="L-47"><a href="#L-47"><span class="linenos"> 47</span></a>
+</span><span id="L-48"><a href="#L-48"><span class="linenos"> 48</span></a>
+</span><span id="L-49"><a href="#L-49"><span class="linenos"> 49</span></a><span class="k">class</span><span class="w"> </span><span class="nc">KeyRejected</span><span class="p">(</span><span class="n">KeyCallError</span><span class="p">):</span>
+</span><span id="L-50"><a href="#L-50"><span class="linenos"> 50</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;401 / 403 / unknown model: retrying cannot help - the key is parked for longer, the next key is tried.&quot;&quot;&quot;</span>
+</span><span id="L-51"><a href="#L-51"><span class="linenos"> 51</span></a>
+</span><span id="L-52"><a href="#L-52"><span class="linenos"> 52</span></a>
+</span><span id="L-53"><a href="#L-53"><span class="linenos"> 53</span></a><span class="k">class</span><span class="w"> </span><span class="nc">Unreachable</span><span class="p">(</span><span class="n">KeyCallError</span><span class="p">):</span>
+</span><span id="L-54"><a href="#L-54"><span class="linenos"> 54</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;No connection (DNS, offline, VPN, local server not running): retried briefly, then keys on OTHER hosts are tried.&quot;&quot;&quot;</span>
+</span><span id="L-55"><a href="#L-55"><span class="linenos"> 55</span></a>
+</span><span id="L-56"><a href="#L-56"><span class="linenos"> 56</span></a>
+</span><span id="L-57"><a href="#L-57"><span class="linenos"> 57</span></a><span class="k">class</span><span class="w"> </span><span class="nc">Transient</span><span class="p">(</span><span class="n">KeyCallError</span><span class="p">):</span>
+</span><span id="L-58"><a href="#L-58"><span class="linenos"> 58</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;5xx / overloaded: the same key is retried a couple of times, then the next key.&quot;&quot;&quot;</span>
+</span><span id="L-59"><a href="#L-59"><span class="linenos"> 59</span></a>
+</span><span id="L-60"><a href="#L-60"><span class="linenos"> 60</span></a>
+</span><span id="L-61"><a href="#L-61"><span class="linenos"> 61</span></a><span class="k">class</span><span class="w"> </span><span class="nc">TranslationProvider</span><span class="p">(</span><span class="n">ABC</span><span class="p">):</span>
+</span><span id="L-62"><a href="#L-62"><span class="linenos"> 62</span></a>    <span class="n">default_system_prompt</span> <span class="o">=</span> <span class="n">SYSTEM_PROMPT</span>
+</span><span id="L-63"><a href="#L-63"><span class="linenos"> 63</span></a>
+</span><span id="L-64"><a href="#L-64"><span class="linenos"> 64</span></a>    <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+</span><span id="L-65"><a href="#L-65"><span class="linenos"> 65</span></a>        <span class="c1"># Set after every successful call - read by translation_service.py right after each call:</span>
+</span><span id="L-66"><a href="#L-66"><span class="linenos"> 66</span></a>        <span class="c1"># label of the key that answered (TranslationLog.key_label), its model (TranslationLog.model_used) and</span>
+</span><span id="L-67"><a href="#L-67"><span class="linenos"> 67</span></a>        <span class="c1"># &quot;provider/label&quot; (pin for the A/B counterfactual).</span>
+</span><span id="L-68"><a href="#L-68"><span class="linenos"> 68</span></a>        <span class="bp">self</span><span class="o">.</span><span class="n">current_key_label</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span>
+</span><span id="L-69"><a href="#L-69"><span class="linenos"> 69</span></a>        <span class="bp">self</span><span class="o">.</span><span class="n">current_model</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span>
+</span><span id="L-70"><a href="#L-70"><span class="linenos"> 70</span></a>        <span class="bp">self</span><span class="o">.</span><span class="n">current_key_id</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span>
+</span><span id="L-71"><a href="#L-71"><span class="linenos"> 71</span></a>        <span class="c1"># &quot;provider/label&quot; -&gt; time.monotonic() until which the key is skipped. A 429 is usually per-MINUTE; the old</span>
+</span><span id="L-72"><a href="#L-72"><span class="linenos"> 72</span></a>        <span class="c1"># permanent &quot;exhausted&quot; set killed translation until restart after the first burst (single-key users!).</span>
+</span><span id="L-73"><a href="#L-73"><span class="linenos"> 73</span></a>        <span class="bp">self</span><span class="o">.</span><span class="n">_cooldown_until</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">float</span><span class="p">]</span> <span class="o">=</span> <span class="p">{}</span>
+</span><span id="L-74"><a href="#L-74"><span class="linenos"> 74</span></a>
+</span><span id="L-75"><a href="#L-75"><span class="linenos"> 75</span></a>    <span class="k">def</span><span class="w"> </span><span class="nf">_is_cooling</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">key_id</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">bool</span><span class="p">:</span>
+</span><span id="L-76"><a href="#L-76"><span class="linenos"> 76</span></a>        <span class="k">return</span> <span class="n">time</span><span class="o">.</span><span class="n">monotonic</span><span class="p">()</span> <span class="o">&lt;</span> <span class="bp">self</span><span class="o">.</span><span class="n">_cooldown_until</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">key_id</span><span class="p">,</span> <span class="mf">0.0</span><span class="p">)</span>
+</span><span id="L-77"><a href="#L-77"><span class="linenos"> 77</span></a>
+</span><span id="L-78"><a href="#L-78"><span class="linenos"> 78</span></a>    <span class="k">def</span><span class="w"> </span><span class="nf">_cool_down</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">key_id</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">seconds</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">65.0</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+</span><span id="L-79"><a href="#L-79"><span class="linenos"> 79</span></a>        <span class="bp">self</span><span class="o">.</span><span class="n">_cooldown_until</span><span class="p">[</span><span class="n">key_id</span><span class="p">]</span> <span class="o">=</span> <span class="n">time</span><span class="o">.</span><span class="n">monotonic</span><span class="p">()</span> <span class="o">+</span> <span class="n">seconds</span>
+</span><span id="L-80"><a href="#L-80"><span class="linenos"> 80</span></a>
+</span><span id="L-81"><a href="#L-81"><span class="linenos"> 81</span></a>    <span class="k">def</span><span class="w"> </span><span class="nf">_seconds_until_any_key</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">int</span><span class="p">:</span>
+</span><span id="L-82"><a href="#L-82"><span class="linenos"> 82</span></a>        <span class="n">waits</span> <span class="o">=</span> <span class="p">[</span><span class="n">u</span> <span class="o">-</span> <span class="n">time</span><span class="o">.</span><span class="n">monotonic</span><span class="p">()</span> <span class="k">for</span> <span class="n">u</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">_cooldown_until</span><span class="o">.</span><span class="n">values</span><span class="p">()</span> <span class="k">if</span> <span class="n">u</span> <span class="o">&gt;</span> <span class="n">time</span><span class="o">.</span><span class="n">monotonic</span><span class="p">()]</span>
+</span><span id="L-83"><a href="#L-83"><span class="linenos"> 83</span></a>        <span class="k">return</span> <span class="nb">int</span><span class="p">(</span><span class="nb">min</span><span class="p">(</span><span class="n">waits</span><span class="p">))</span> <span class="o">+</span> <span class="mi">1</span> <span class="k">if</span> <span class="n">waits</span> <span class="k">else</span> <span class="mi">0</span>
+</span><span id="L-84"><a href="#L-84"><span class="linenos"> 84</span></a>
+</span><span id="L-85"><a href="#L-85"><span class="linenos"> 85</span></a>    <span class="nd">@abstractmethod</span>
+</span><span id="L-86"><a href="#L-86"><span class="linenos"> 86</span></a>    <span class="k">def</span><span class="w"> </span><span class="nf">request_json</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">system_prompt</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">payload</span><span class="p">,</span> <span class="n">schema</span><span class="p">:</span> <span class="nb">type</span><span class="p">[</span><span class="n">BaseModel</span><span class="p">],</span> <span class="n">pin</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">BaseModel</span><span class="p">:</span>
+</span><span id="L-87"><a href="#L-87"><span class="linenos"> 87</span></a><span class="w">        </span><span class="sd">&quot;&quot;&quot;</span>
+</span><span id="L-88"><a href="#L-88"><span class="linenos"> 88</span></a><span class="sd">        One structured call with key rotation / retry. `payload` is JSON-serialised (or sent as-is when a str).</span>
+</span><span id="L-89"><a href="#L-89"><span class="linenos"> 89</span></a><span class="sd">        Raises when every configured key is unavailable (rate-limited, rejected or unset) - the caller reports it.</span>
+</span><span id="L-90"><a href="#L-90"><span class="linenos"> 90</span></a><span class="sd">        &quot;&quot;&quot;</span>
+</span><span id="L-91"><a href="#L-91"><span class="linenos"> 91</span></a>        <span class="k">raise</span> <span class="ne">NotImplementedError</span>
+</span><span id="L-92"><a href="#L-92"><span class="linenos"> 92</span></a>
+</span><span id="L-93"><a href="#L-93"><span class="linenos"> 93</span></a>    <span class="k">def</span><span class="w"> </span><span class="nf">translate</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">texts_payload</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">dict</span><span class="p">],</span> <span class="n">system_prompt</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+</span><span id="L-94"><a href="#L-94"><span class="linenos"> 94</span></a>                  <span class="n">pin</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">]:</span>
+</span><span id="L-95"><a href="#L-95"><span class="linenos"> 95</span></a><span class="w">        </span><span class="sd">&quot;&quot;&quot;</span>
+</span><span id="L-96"><a href="#L-96"><span class="linenos"> 96</span></a><span class="sd">        Translate a batch of speech-bubble texts.</span>
+</span><span id="L-97"><a href="#L-97"><span class="linenos"> 97</span></a>
+</span><span id="L-98"><a href="#L-98"><span class="linenos"> 98</span></a><span class="sd">        :param texts_payload: List of {&quot;id&quot;, &quot;text&quot;, optional &quot;examples&quot; / &quot;exact&quot; / &quot;glossary&quot; / &quot;context_only&quot;}</span>
+</span><span id="L-99"><a href="#L-99"><span class="linenos"> 99</span></a><span class="sd">            - see prompts.SYSTEM_PROMPT for what each field means to the model.</span>
+</span><span id="L-100"><a href="#L-100"><span class="linenos">100</span></a><span class="sd">        :param system_prompt: None = the translation prompt; the terminology post-edit pass passes its own.</span>
+</span><span id="L-101"><a href="#L-101"><span class="linenos">101</span></a><span class="sd">        :param pin: &quot;provider/label&quot; = use only this key (A/B counterfactual).</span>
+</span><span id="L-102"><a href="#L-102"><span class="linenos">102</span></a><span class="sd">        :return: Mapping of {id: translation}. A missing id is treated by the caller as an empty-string translation;</span>
+</span><span id="L-103"><a href="#L-103"><span class="linenos">103</span></a><span class="sd">            when every key is unavailable this raises, so the caller gets a clear error instead of silent empty output.</span>
+</span><span id="L-104"><a href="#L-104"><span class="linenos">104</span></a><span class="sd">        &quot;&quot;&quot;</span>
+</span><span id="L-105"><a href="#L-105"><span class="linenos">105</span></a>        <span class="n">batch</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">request_json</span><span class="p">(</span><span class="n">system_prompt</span> <span class="ow">or</span> <span class="bp">self</span><span class="o">.</span><span class="n">default_system_prompt</span><span class="p">,</span> <span class="n">texts_payload</span><span class="p">,</span> <span class="n">TranslationBatch</span><span class="p">,</span> <span class="n">pin</span><span class="o">=</span><span class="n">pin</span><span class="p">)</span>
+</span><span id="L-106"><a href="#L-106"><span class="linenos">106</span></a>        <span class="k">return</span> <span class="p">{</span><span class="n">item</span><span class="o">.</span><span class="n">id</span><span class="p">:</span> <span class="n">item</span><span class="o">.</span><span class="n">translation</span> <span class="k">for</span> <span class="n">item</span> <span class="ow">in</span> <span class="n">batch</span><span class="o">.</span><span class="n">translations</span><span class="p">}</span>
 </span></pre></div>
 
 
@@ -202,9 +267,9 @@ Adding a new backend means writing one new class that implements request_json - 
 
     </div>
     <a class="headerlink" href="#BubbleTranslation"></a>
-            <div class="pdoc-code codehilite"><pre><span></span><span id="BubbleTranslation-26"><a href="#BubbleTranslation-26"><span class="linenos">26</span></a><span class="k">class</span><span class="w"> </span><span class="nc">BubbleTranslation</span><span class="p">(</span><span class="n">BaseModel</span><span class="p">):</span>
-</span><span id="BubbleTranslation-27"><a href="#BubbleTranslation-27"><span class="linenos">27</span></a>    <span class="nb">id</span><span class="p">:</span> <span class="nb">str</span>
-</span><span id="BubbleTranslation-28"><a href="#BubbleTranslation-28"><span class="linenos">28</span></a>    <span class="n">translation</span><span class="p">:</span> <span class="nb">str</span>
+            <div class="pdoc-code codehilite"><pre><span></span><span id="BubbleTranslation-32"><a href="#BubbleTranslation-32"><span class="linenos">32</span></a><span class="k">class</span><span class="w"> </span><span class="nc">BubbleTranslation</span><span class="p">(</span><span class="n">BaseModel</span><span class="p">):</span>
+</span><span id="BubbleTranslation-33"><a href="#BubbleTranslation-33"><span class="linenos">33</span></a>    <span class="nb">id</span><span class="p">:</span> <span class="nb">str</span>
+</span><span id="BubbleTranslation-34"><a href="#BubbleTranslation-34"><span class="linenos">34</span></a>    <span class="n">translation</span><span class="p">:</span> <span class="nb">str</span>
 </span></pre></div>
 
 
@@ -278,8 +343,8 @@ __pydantic_private__: Values of private attributes set on the model instance.
 
     </div>
     <a class="headerlink" href="#TranslationBatch"></a>
-            <div class="pdoc-code codehilite"><pre><span></span><span id="TranslationBatch-31"><a href="#TranslationBatch-31"><span class="linenos">31</span></a><span class="k">class</span><span class="w"> </span><span class="nc">TranslationBatch</span><span class="p">(</span><span class="n">BaseModel</span><span class="p">):</span>
-</span><span id="TranslationBatch-32"><a href="#TranslationBatch-32"><span class="linenos">32</span></a>    <span class="n">translations</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="n">BubbleTranslation</span><span class="p">]</span>
+            <div class="pdoc-code codehilite"><pre><span></span><span id="TranslationBatch-37"><a href="#TranslationBatch-37"><span class="linenos">37</span></a><span class="k">class</span><span class="w"> </span><span class="nc">TranslationBatch</span><span class="p">(</span><span class="n">BaseModel</span><span class="p">):</span>
+</span><span id="TranslationBatch-38"><a href="#TranslationBatch-38"><span class="linenos">38</span></a>    <span class="n">translations</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="n">BubbleTranslation</span><span class="p">]</span>
 </span></pre></div>
 
 
@@ -330,6 +395,111 @@ __pydantic_private__: Values of private attributes set on the model instance.
 
                             </div>
                 </section>
+                <section id="KeyCallError">
+                            <input id="KeyCallError-view-source" class="view-source-toggle-state" type="checkbox" aria-hidden="true" tabindex="-1">
+<div class="attr class">
+            
+    <span class="def">class</span>
+    <span class="name">KeyCallError</span><wbr>(<span class="base">builtins.Exception</span>):
+
+                <label class="view-source-button" for="KeyCallError-view-source"><span>View Source</span></label>
+
+    </div>
+    <a class="headerlink" href="#KeyCallError"></a>
+            <div class="pdoc-code codehilite"><pre><span></span><span id="KeyCallError-43"><a href="#KeyCallError-43"><span class="linenos">43</span></a><span class="k">class</span><span class="w"> </span><span class="nc">KeyCallError</span><span class="p">(</span><span class="ne">Exception</span><span class="p">):</span>
+</span><span id="KeyCallError-44"><a href="#KeyCallError-44"><span class="linenos">44</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Base of the classified failures of one request. `message` is meant for the user (Settings test box).&quot;&quot;&quot;</span>
+</span></pre></div>
+
+
+            <div class="docstring"><p>Base of the classified failures of one request. <code>message</code> is meant for the user (Settings test box).</p>
+</div>
+
+
+                </section>
+                <section id="RateLimited">
+                            <input id="RateLimited-view-source" class="view-source-toggle-state" type="checkbox" aria-hidden="true" tabindex="-1">
+<div class="attr class">
+            
+    <span class="def">class</span>
+    <span class="name">RateLimited</span><wbr>(<span class="base"><a href="#KeyCallError">KeyCallError</a></span>):
+
+                <label class="view-source-button" for="RateLimited-view-source"><span>View Source</span></label>
+
+    </div>
+    <a class="headerlink" href="#RateLimited"></a>
+            <div class="pdoc-code codehilite"><pre><span></span><span id="RateLimited-47"><a href="#RateLimited-47"><span class="linenos">47</span></a><span class="k">class</span><span class="w"> </span><span class="nc">RateLimited</span><span class="p">(</span><span class="n">KeyCallError</span><span class="p">):</span>
+</span><span id="RateLimited-48"><a href="#RateLimited-48"><span class="linenos">48</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;429 / quota spent: this key cools down for a while, the next key is tried.&quot;&quot;&quot;</span>
+</span></pre></div>
+
+
+            <div class="docstring"><p>429 / quota spent: this key cools down for a while, the next key is tried.</p>
+</div>
+
+
+                </section>
+                <section id="KeyRejected">
+                            <input id="KeyRejected-view-source" class="view-source-toggle-state" type="checkbox" aria-hidden="true" tabindex="-1">
+<div class="attr class">
+            
+    <span class="def">class</span>
+    <span class="name">KeyRejected</span><wbr>(<span class="base"><a href="#KeyCallError">KeyCallError</a></span>):
+
+                <label class="view-source-button" for="KeyRejected-view-source"><span>View Source</span></label>
+
+    </div>
+    <a class="headerlink" href="#KeyRejected"></a>
+            <div class="pdoc-code codehilite"><pre><span></span><span id="KeyRejected-51"><a href="#KeyRejected-51"><span class="linenos">51</span></a><span class="k">class</span><span class="w"> </span><span class="nc">KeyRejected</span><span class="p">(</span><span class="n">KeyCallError</span><span class="p">):</span>
+</span><span id="KeyRejected-52"><a href="#KeyRejected-52"><span class="linenos">52</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;401 / 403 / unknown model: retrying cannot help - the key is parked for longer, the next key is tried.&quot;&quot;&quot;</span>
+</span></pre></div>
+
+
+            <div class="docstring"><p>401 / 403 / unknown model: retrying cannot help - the key is parked for longer, the next key is tried.</p>
+</div>
+
+
+                </section>
+                <section id="Unreachable">
+                            <input id="Unreachable-view-source" class="view-source-toggle-state" type="checkbox" aria-hidden="true" tabindex="-1">
+<div class="attr class">
+            
+    <span class="def">class</span>
+    <span class="name">Unreachable</span><wbr>(<span class="base"><a href="#KeyCallError">KeyCallError</a></span>):
+
+                <label class="view-source-button" for="Unreachable-view-source"><span>View Source</span></label>
+
+    </div>
+    <a class="headerlink" href="#Unreachable"></a>
+            <div class="pdoc-code codehilite"><pre><span></span><span id="Unreachable-55"><a href="#Unreachable-55"><span class="linenos">55</span></a><span class="k">class</span><span class="w"> </span><span class="nc">Unreachable</span><span class="p">(</span><span class="n">KeyCallError</span><span class="p">):</span>
+</span><span id="Unreachable-56"><a href="#Unreachable-56"><span class="linenos">56</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;No connection (DNS, offline, VPN, local server not running): retried briefly, then keys on OTHER hosts are tried.&quot;&quot;&quot;</span>
+</span></pre></div>
+
+
+            <div class="docstring"><p>No connection (DNS, offline, VPN, local server not running): retried briefly, then keys on OTHER hosts are tried.</p>
+</div>
+
+
+                </section>
+                <section id="Transient">
+                            <input id="Transient-view-source" class="view-source-toggle-state" type="checkbox" aria-hidden="true" tabindex="-1">
+<div class="attr class">
+            
+    <span class="def">class</span>
+    <span class="name">Transient</span><wbr>(<span class="base"><a href="#KeyCallError">KeyCallError</a></span>):
+
+                <label class="view-source-button" for="Transient-view-source"><span>View Source</span></label>
+
+    </div>
+    <a class="headerlink" href="#Transient"></a>
+            <div class="pdoc-code codehilite"><pre><span></span><span id="Transient-59"><a href="#Transient-59"><span class="linenos">59</span></a><span class="k">class</span><span class="w"> </span><span class="nc">Transient</span><span class="p">(</span><span class="n">KeyCallError</span><span class="p">):</span>
+</span><span id="Transient-60"><a href="#Transient-60"><span class="linenos">60</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;5xx / overloaded: the same key is retried a couple of times, then the next key.&quot;&quot;&quot;</span>
+</span></pre></div>
+
+
+            <div class="docstring"><p>5xx / overloaded: the same key is retried a couple of times, then the next key.</p>
+</div>
+
+
+                </section>
                 <section id="TranslationProvider">
                             <input id="TranslationProvider-view-source" class="view-source-toggle-state" type="checkbox" aria-hidden="true" tabindex="-1">
 <div class="attr class">
@@ -341,54 +511,52 @@ __pydantic_private__: Values of private attributes set on the model instance.
 
     </div>
     <a class="headerlink" href="#TranslationProvider"></a>
-            <div class="pdoc-code codehilite"><pre><span></span><span id="TranslationProvider-35"><a href="#TranslationProvider-35"><span class="linenos">35</span></a><span class="k">class</span><span class="w"> </span><span class="nc">TranslationProvider</span><span class="p">(</span><span class="n">ABC</span><span class="p">):</span>
-</span><span id="TranslationProvider-36"><a href="#TranslationProvider-36"><span class="linenos">36</span></a>    <span class="n">default_system_prompt</span> <span class="o">=</span> <span class="n">SYSTEM_PROMPT</span>
-</span><span id="TranslationProvider-37"><a href="#TranslationProvider-37"><span class="linenos">37</span></a>
-</span><span id="TranslationProvider-38"><a href="#TranslationProvider-38"><span class="linenos">38</span></a>    <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
-</span><span id="TranslationProvider-39"><a href="#TranslationProvider-39"><span class="linenos">39</span></a>        <span class="c1"># Set by translate() to the label of whichever key from the pool</span>
-</span><span id="TranslationProvider-40"><a href="#TranslationProvider-40"><span class="linenos">40</span></a>        <span class="c1"># actually served the last request - read by translation_service.py</span>
-</span><span id="TranslationProvider-41"><a href="#TranslationProvider-41"><span class="linenos">41</span></a>        <span class="c1"># right after each call, for TranslationLog.key_label.</span>
-</span><span id="TranslationProvider-42"><a href="#TranslationProvider-42"><span class="linenos">42</span></a>        <span class="bp">self</span><span class="o">.</span><span class="n">current_key_label</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span>
-</span><span id="TranslationProvider-43"><a href="#TranslationProvider-43"><span class="linenos">43</span></a>        <span class="c1"># Model that served the last request: a key may carry its own &quot;model&quot; (Settings: one row per key), so the</span>
-</span><span id="TranslationProvider-44"><a href="#TranslationProvider-44"><span class="linenos">44</span></a>        <span class="c1"># provider-level model is only the default. Logged per TranslationLog row (A/B pairs must use one model).</span>
-</span><span id="TranslationProvider-45"><a href="#TranslationProvider-45"><span class="linenos">45</span></a>        <span class="bp">self</span><span class="o">.</span><span class="n">current_model</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span>
-</span><span id="TranslationProvider-46"><a href="#TranslationProvider-46"><span class="linenos">46</span></a>        <span class="c1"># label -&gt; time.monotonic() until which the key is skipped. A 429 is usually per-MINUTE; the old</span>
-</span><span id="TranslationProvider-47"><a href="#TranslationProvider-47"><span class="linenos">47</span></a>        <span class="c1"># permanent &quot;exhausted&quot; set killed translation until restart after the first burst (single-key users!).</span>
-</span><span id="TranslationProvider-48"><a href="#TranslationProvider-48"><span class="linenos">48</span></a>        <span class="bp">self</span><span class="o">.</span><span class="n">_cooldown_until</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">float</span><span class="p">]</span> <span class="o">=</span> <span class="p">{}</span>
-</span><span id="TranslationProvider-49"><a href="#TranslationProvider-49"><span class="linenos">49</span></a>
-</span><span id="TranslationProvider-50"><a href="#TranslationProvider-50"><span class="linenos">50</span></a>    <span class="k">def</span><span class="w"> </span><span class="nf">_is_cooling</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">label</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">bool</span><span class="p">:</span>
-</span><span id="TranslationProvider-51"><a href="#TranslationProvider-51"><span class="linenos">51</span></a>        <span class="k">return</span> <span class="n">time</span><span class="o">.</span><span class="n">monotonic</span><span class="p">()</span> <span class="o">&lt;</span> <span class="bp">self</span><span class="o">.</span><span class="n">_cooldown_until</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">label</span><span class="p">,</span> <span class="mf">0.0</span><span class="p">)</span>
-</span><span id="TranslationProvider-52"><a href="#TranslationProvider-52"><span class="linenos">52</span></a>
-</span><span id="TranslationProvider-53"><a href="#TranslationProvider-53"><span class="linenos">53</span></a>    <span class="k">def</span><span class="w"> </span><span class="nf">_cool_down</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">label</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">seconds</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">65.0</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-</span><span id="TranslationProvider-54"><a href="#TranslationProvider-54"><span class="linenos">54</span></a>        <span class="bp">self</span><span class="o">.</span><span class="n">_cooldown_until</span><span class="p">[</span><span class="n">label</span><span class="p">]</span> <span class="o">=</span> <span class="n">time</span><span class="o">.</span><span class="n">monotonic</span><span class="p">()</span> <span class="o">+</span> <span class="n">seconds</span>
-</span><span id="TranslationProvider-55"><a href="#TranslationProvider-55"><span class="linenos">55</span></a>
-</span><span id="TranslationProvider-56"><a href="#TranslationProvider-56"><span class="linenos">56</span></a>    <span class="k">def</span><span class="w"> </span><span class="nf">_seconds_until_any_key</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">int</span><span class="p">:</span>
-</span><span id="TranslationProvider-57"><a href="#TranslationProvider-57"><span class="linenos">57</span></a>        <span class="n">waits</span> <span class="o">=</span> <span class="p">[</span><span class="n">u</span> <span class="o">-</span> <span class="n">time</span><span class="o">.</span><span class="n">monotonic</span><span class="p">()</span> <span class="k">for</span> <span class="n">u</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">_cooldown_until</span><span class="o">.</span><span class="n">values</span><span class="p">()</span> <span class="k">if</span> <span class="n">u</span> <span class="o">&gt;</span> <span class="n">time</span><span class="o">.</span><span class="n">monotonic</span><span class="p">()]</span>
-</span><span id="TranslationProvider-58"><a href="#TranslationProvider-58"><span class="linenos">58</span></a>        <span class="k">return</span> <span class="nb">int</span><span class="p">(</span><span class="nb">min</span><span class="p">(</span><span class="n">waits</span><span class="p">))</span> <span class="o">+</span> <span class="mi">1</span> <span class="k">if</span> <span class="n">waits</span> <span class="k">else</span> <span class="mi">0</span>
-</span><span id="TranslationProvider-59"><a href="#TranslationProvider-59"><span class="linenos">59</span></a>
-</span><span id="TranslationProvider-60"><a href="#TranslationProvider-60"><span class="linenos">60</span></a>    <span class="nd">@abstractmethod</span>
-</span><span id="TranslationProvider-61"><a href="#TranslationProvider-61"><span class="linenos">61</span></a>    <span class="k">def</span><span class="w"> </span><span class="nf">request_json</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">system_prompt</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">payload</span><span class="p">,</span> <span class="n">schema</span><span class="p">:</span> <span class="nb">type</span><span class="p">[</span><span class="n">BaseModel</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="n">BaseModel</span><span class="p">:</span>
-</span><span id="TranslationProvider-62"><a href="#TranslationProvider-62"><span class="linenos">62</span></a><span class="w">        </span><span class="sd">&quot;&quot;&quot;</span>
-</span><span id="TranslationProvider-63"><a href="#TranslationProvider-63"><span class="linenos">63</span></a><span class="sd">        One structured call with key rotation / retry. `payload` is JSON-serialised (or sent as-is when a str).</span>
-</span><span id="TranslationProvider-64"><a href="#TranslationProvider-64"><span class="linenos">64</span></a><span class="sd">        Raises when every configured key is unavailable (rate-limited or unset) - the caller reports it.</span>
-</span><span id="TranslationProvider-65"><a href="#TranslationProvider-65"><span class="linenos">65</span></a><span class="sd">        &quot;&quot;&quot;</span>
-</span><span id="TranslationProvider-66"><a href="#TranslationProvider-66"><span class="linenos">66</span></a>        <span class="k">raise</span> <span class="ne">NotImplementedError</span>
-</span><span id="TranslationProvider-67"><a href="#TranslationProvider-67"><span class="linenos">67</span></a>
-</span><span id="TranslationProvider-68"><a href="#TranslationProvider-68"><span class="linenos">68</span></a>    <span class="nd">@abstractmethod</span>
-</span><span id="TranslationProvider-69"><a href="#TranslationProvider-69"><span class="linenos">69</span></a>    <span class="k">def</span><span class="w"> </span><span class="nf">translate</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">texts_payload</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">dict</span><span class="p">],</span> <span class="n">system_prompt</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">]:</span>
-</span><span id="TranslationProvider-70"><a href="#TranslationProvider-70"><span class="linenos">70</span></a><span class="w">        </span><span class="sd">&quot;&quot;&quot;</span>
-</span><span id="TranslationProvider-71"><a href="#TranslationProvider-71"><span class="linenos">71</span></a><span class="sd">        Translate a batch of speech-bubble texts.</span>
-</span><span id="TranslationProvider-72"><a href="#TranslationProvider-72"><span class="linenos">72</span></a>
-</span><span id="TranslationProvider-73"><a href="#TranslationProvider-73"><span class="linenos">73</span></a><span class="sd">        :param texts_payload: List of {&quot;id&quot;, &quot;text&quot;, optional &quot;examples&quot; / &quot;exact&quot; / &quot;glossary&quot; / &quot;context_only&quot;}</span>
-</span><span id="TranslationProvider-74"><a href="#TranslationProvider-74"><span class="linenos">74</span></a><span class="sd">            - see prompts.SYSTEM_PROMPT for what each field means to the model.</span>
-</span><span id="TranslationProvider-75"><a href="#TranslationProvider-75"><span class="linenos">75</span></a><span class="sd">        :param system_prompt: None = the translation prompt; the terminology post-edit pass passes its own.</span>
-</span><span id="TranslationProvider-76"><a href="#TranslationProvider-76"><span class="linenos">76</span></a><span class="sd">        :return: Mapping of {id: translation}. A missing id is treated by the</span>
-</span><span id="TranslationProvider-77"><a href="#TranslationProvider-77"><span class="linenos">77</span></a><span class="sd">            caller as an empty-string translation, so failures should simply</span>
-</span><span id="TranslationProvider-78"><a href="#TranslationProvider-78"><span class="linenos">78</span></a><span class="sd">            omit the id rather than raise - except when every configured key</span>
-</span><span id="TranslationProvider-79"><a href="#TranslationProvider-79"><span class="linenos">79</span></a><span class="sd">            is unavailable (rate-limited or unset), which should raise, so</span>
-</span><span id="TranslationProvider-80"><a href="#TranslationProvider-80"><span class="linenos">80</span></a><span class="sd">            the caller gets a clear error instead of silent empty output.</span>
-</span><span id="TranslationProvider-81"><a href="#TranslationProvider-81"><span class="linenos">81</span></a><span class="sd">        &quot;&quot;&quot;</span>
-</span><span id="TranslationProvider-82"><a href="#TranslationProvider-82"><span class="linenos">82</span></a>        <span class="k">raise</span> <span class="ne">NotImplementedError</span>
+            <div class="pdoc-code codehilite"><pre><span></span><span id="TranslationProvider-63"><a href="#TranslationProvider-63"><span class="linenos"> 63</span></a><span class="k">class</span><span class="w"> </span><span class="nc">TranslationProvider</span><span class="p">(</span><span class="n">ABC</span><span class="p">):</span>
+</span><span id="TranslationProvider-64"><a href="#TranslationProvider-64"><span class="linenos"> 64</span></a>    <span class="n">default_system_prompt</span> <span class="o">=</span> <span class="n">SYSTEM_PROMPT</span>
+</span><span id="TranslationProvider-65"><a href="#TranslationProvider-65"><span class="linenos"> 65</span></a>
+</span><span id="TranslationProvider-66"><a href="#TranslationProvider-66"><span class="linenos"> 66</span></a>    <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+</span><span id="TranslationProvider-67"><a href="#TranslationProvider-67"><span class="linenos"> 67</span></a>        <span class="c1"># Set after every successful call - read by translation_service.py right after each call:</span>
+</span><span id="TranslationProvider-68"><a href="#TranslationProvider-68"><span class="linenos"> 68</span></a>        <span class="c1"># label of the key that answered (TranslationLog.key_label), its model (TranslationLog.model_used) and</span>
+</span><span id="TranslationProvider-69"><a href="#TranslationProvider-69"><span class="linenos"> 69</span></a>        <span class="c1"># &quot;provider/label&quot; (pin for the A/B counterfactual).</span>
+</span><span id="TranslationProvider-70"><a href="#TranslationProvider-70"><span class="linenos"> 70</span></a>        <span class="bp">self</span><span class="o">.</span><span class="n">current_key_label</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span>
+</span><span id="TranslationProvider-71"><a href="#TranslationProvider-71"><span class="linenos"> 71</span></a>        <span class="bp">self</span><span class="o">.</span><span class="n">current_model</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span>
+</span><span id="TranslationProvider-72"><a href="#TranslationProvider-72"><span class="linenos"> 72</span></a>        <span class="bp">self</span><span class="o">.</span><span class="n">current_key_id</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span>
+</span><span id="TranslationProvider-73"><a href="#TranslationProvider-73"><span class="linenos"> 73</span></a>        <span class="c1"># &quot;provider/label&quot; -&gt; time.monotonic() until which the key is skipped. A 429 is usually per-MINUTE; the old</span>
+</span><span id="TranslationProvider-74"><a href="#TranslationProvider-74"><span class="linenos"> 74</span></a>        <span class="c1"># permanent &quot;exhausted&quot; set killed translation until restart after the first burst (single-key users!).</span>
+</span><span id="TranslationProvider-75"><a href="#TranslationProvider-75"><span class="linenos"> 75</span></a>        <span class="bp">self</span><span class="o">.</span><span class="n">_cooldown_until</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">float</span><span class="p">]</span> <span class="o">=</span> <span class="p">{}</span>
+</span><span id="TranslationProvider-76"><a href="#TranslationProvider-76"><span class="linenos"> 76</span></a>
+</span><span id="TranslationProvider-77"><a href="#TranslationProvider-77"><span class="linenos"> 77</span></a>    <span class="k">def</span><span class="w"> </span><span class="nf">_is_cooling</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">key_id</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">bool</span><span class="p">:</span>
+</span><span id="TranslationProvider-78"><a href="#TranslationProvider-78"><span class="linenos"> 78</span></a>        <span class="k">return</span> <span class="n">time</span><span class="o">.</span><span class="n">monotonic</span><span class="p">()</span> <span class="o">&lt;</span> <span class="bp">self</span><span class="o">.</span><span class="n">_cooldown_until</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">key_id</span><span class="p">,</span> <span class="mf">0.0</span><span class="p">)</span>
+</span><span id="TranslationProvider-79"><a href="#TranslationProvider-79"><span class="linenos"> 79</span></a>
+</span><span id="TranslationProvider-80"><a href="#TranslationProvider-80"><span class="linenos"> 80</span></a>    <span class="k">def</span><span class="w"> </span><span class="nf">_cool_down</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">key_id</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">seconds</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">65.0</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+</span><span id="TranslationProvider-81"><a href="#TranslationProvider-81"><span class="linenos"> 81</span></a>        <span class="bp">self</span><span class="o">.</span><span class="n">_cooldown_until</span><span class="p">[</span><span class="n">key_id</span><span class="p">]</span> <span class="o">=</span> <span class="n">time</span><span class="o">.</span><span class="n">monotonic</span><span class="p">()</span> <span class="o">+</span> <span class="n">seconds</span>
+</span><span id="TranslationProvider-82"><a href="#TranslationProvider-82"><span class="linenos"> 82</span></a>
+</span><span id="TranslationProvider-83"><a href="#TranslationProvider-83"><span class="linenos"> 83</span></a>    <span class="k">def</span><span class="w"> </span><span class="nf">_seconds_until_any_key</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">int</span><span class="p">:</span>
+</span><span id="TranslationProvider-84"><a href="#TranslationProvider-84"><span class="linenos"> 84</span></a>        <span class="n">waits</span> <span class="o">=</span> <span class="p">[</span><span class="n">u</span> <span class="o">-</span> <span class="n">time</span><span class="o">.</span><span class="n">monotonic</span><span class="p">()</span> <span class="k">for</span> <span class="n">u</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">_cooldown_until</span><span class="o">.</span><span class="n">values</span><span class="p">()</span> <span class="k">if</span> <span class="n">u</span> <span class="o">&gt;</span> <span class="n">time</span><span class="o">.</span><span class="n">monotonic</span><span class="p">()]</span>
+</span><span id="TranslationProvider-85"><a href="#TranslationProvider-85"><span class="linenos"> 85</span></a>        <span class="k">return</span> <span class="nb">int</span><span class="p">(</span><span class="nb">min</span><span class="p">(</span><span class="n">waits</span><span class="p">))</span> <span class="o">+</span> <span class="mi">1</span> <span class="k">if</span> <span class="n">waits</span> <span class="k">else</span> <span class="mi">0</span>
+</span><span id="TranslationProvider-86"><a href="#TranslationProvider-86"><span class="linenos"> 86</span></a>
+</span><span id="TranslationProvider-87"><a href="#TranslationProvider-87"><span class="linenos"> 87</span></a>    <span class="nd">@abstractmethod</span>
+</span><span id="TranslationProvider-88"><a href="#TranslationProvider-88"><span class="linenos"> 88</span></a>    <span class="k">def</span><span class="w"> </span><span class="nf">request_json</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">system_prompt</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">payload</span><span class="p">,</span> <span class="n">schema</span><span class="p">:</span> <span class="nb">type</span><span class="p">[</span><span class="n">BaseModel</span><span class="p">],</span> <span class="n">pin</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">BaseModel</span><span class="p">:</span>
+</span><span id="TranslationProvider-89"><a href="#TranslationProvider-89"><span class="linenos"> 89</span></a><span class="w">        </span><span class="sd">&quot;&quot;&quot;</span>
+</span><span id="TranslationProvider-90"><a href="#TranslationProvider-90"><span class="linenos"> 90</span></a><span class="sd">        One structured call with key rotation / retry. `payload` is JSON-serialised (or sent as-is when a str).</span>
+</span><span id="TranslationProvider-91"><a href="#TranslationProvider-91"><span class="linenos"> 91</span></a><span class="sd">        Raises when every configured key is unavailable (rate-limited, rejected or unset) - the caller reports it.</span>
+</span><span id="TranslationProvider-92"><a href="#TranslationProvider-92"><span class="linenos"> 92</span></a><span class="sd">        &quot;&quot;&quot;</span>
+</span><span id="TranslationProvider-93"><a href="#TranslationProvider-93"><span class="linenos"> 93</span></a>        <span class="k">raise</span> <span class="ne">NotImplementedError</span>
+</span><span id="TranslationProvider-94"><a href="#TranslationProvider-94"><span class="linenos"> 94</span></a>
+</span><span id="TranslationProvider-95"><a href="#TranslationProvider-95"><span class="linenos"> 95</span></a>    <span class="k">def</span><span class="w"> </span><span class="nf">translate</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">texts_payload</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">dict</span><span class="p">],</span> <span class="n">system_prompt</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+</span><span id="TranslationProvider-96"><a href="#TranslationProvider-96"><span class="linenos"> 96</span></a>                  <span class="n">pin</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">]:</span>
+</span><span id="TranslationProvider-97"><a href="#TranslationProvider-97"><span class="linenos"> 97</span></a><span class="w">        </span><span class="sd">&quot;&quot;&quot;</span>
+</span><span id="TranslationProvider-98"><a href="#TranslationProvider-98"><span class="linenos"> 98</span></a><span class="sd">        Translate a batch of speech-bubble texts.</span>
+</span><span id="TranslationProvider-99"><a href="#TranslationProvider-99"><span class="linenos"> 99</span></a>
+</span><span id="TranslationProvider-100"><a href="#TranslationProvider-100"><span class="linenos">100</span></a><span class="sd">        :param texts_payload: List of {&quot;id&quot;, &quot;text&quot;, optional &quot;examples&quot; / &quot;exact&quot; / &quot;glossary&quot; / &quot;context_only&quot;}</span>
+</span><span id="TranslationProvider-101"><a href="#TranslationProvider-101"><span class="linenos">101</span></a><span class="sd">            - see prompts.SYSTEM_PROMPT for what each field means to the model.</span>
+</span><span id="TranslationProvider-102"><a href="#TranslationProvider-102"><span class="linenos">102</span></a><span class="sd">        :param system_prompt: None = the translation prompt; the terminology post-edit pass passes its own.</span>
+</span><span id="TranslationProvider-103"><a href="#TranslationProvider-103"><span class="linenos">103</span></a><span class="sd">        :param pin: &quot;provider/label&quot; = use only this key (A/B counterfactual).</span>
+</span><span id="TranslationProvider-104"><a href="#TranslationProvider-104"><span class="linenos">104</span></a><span class="sd">        :return: Mapping of {id: translation}. A missing id is treated by the caller as an empty-string translation;</span>
+</span><span id="TranslationProvider-105"><a href="#TranslationProvider-105"><span class="linenos">105</span></a><span class="sd">            when every key is unavailable this raises, so the caller gets a clear error instead of silent empty output.</span>
+</span><span id="TranslationProvider-106"><a href="#TranslationProvider-106"><span class="linenos">106</span></a><span class="sd">        &quot;&quot;&quot;</span>
+</span><span id="TranslationProvider-107"><a href="#TranslationProvider-107"><span class="linenos">107</span></a>        <span class="n">batch</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">request_json</span><span class="p">(</span><span class="n">system_prompt</span> <span class="ow">or</span> <span class="bp">self</span><span class="o">.</span><span class="n">default_system_prompt</span><span class="p">,</span> <span class="n">texts_payload</span><span class="p">,</span> <span class="n">TranslationBatch</span><span class="p">,</span> <span class="n">pin</span><span class="o">=</span><span class="n">pin</span><span class="p">)</span>
+</span><span id="TranslationProvider-108"><a href="#TranslationProvider-108"><span class="linenos">108</span></a>        <span class="k">return</span> <span class="p">{</span><span class="n">item</span><span class="o">.</span><span class="n">id</span><span class="p">:</span> <span class="n">item</span><span class="o">.</span><span class="n">translation</span> <span class="k">for</span> <span class="n">item</span> <span class="ow">in</span> <span class="n">batch</span><span class="o">.</span><span class="n">translations</span><span class="p">}</span>
 </span></pre></div>
 
 
@@ -432,30 +600,41 @@ inheritance.</p>
     
 
                             </div>
+                            <div id="TranslationProvider.current_key_id" class="classattr">
+                                <div class="attr variable">
+            <span class="name">current_key_id</span><span class="annotation">: str | None</span>
+
+        
+    </div>
+    <a class="headerlink" href="#TranslationProvider.current_key_id"></a>
+    
+    
+
+                            </div>
                             <div id="TranslationProvider.request_json" class="classattr">
                                         <input id="TranslationProvider.request_json-view-source" class="view-source-toggle-state" type="checkbox" aria-hidden="true" tabindex="-1">
 <div class="attr function">
                     <div class="decorator decorator-abstractmethod">@abstractmethod</div>
 
         <span class="def">def</span>
-        <span class="name">request_json</span><span class="signature pdoc-code multiline">(<span class="param">	<span class="bp">self</span>,</span><span class="param">	<span class="n">system_prompt</span><span class="p">:</span> <span class="nb">str</span>,</span><span class="param">	<span class="n">payload</span>,</span><span class="param">	<span class="n">schema</span><span class="p">:</span> <span class="nb">type</span><span class="p">[</span><span class="n">pydantic</span><span class="o">.</span><span class="n">main</span><span class="o">.</span><span class="n">BaseModel</span><span class="p">]</span></span><span class="return-annotation">) -> <span class="n">pydantic</span><span class="o">.</span><span class="n">main</span><span class="o">.</span><span class="n">BaseModel</span>:</span></span>
+        <span class="name">request_json</span><span class="signature pdoc-code multiline">(<span class="param">	<span class="bp">self</span>,</span><span class="param">	<span class="n">system_prompt</span><span class="p">:</span> <span class="nb">str</span>,</span><span class="param">	<span class="n">payload</span>,</span><span class="param">	<span class="n">schema</span><span class="p">:</span> <span class="nb">type</span><span class="p">[</span><span class="n">pydantic</span><span class="o">.</span><span class="n">main</span><span class="o">.</span><span class="n">BaseModel</span><span class="p">]</span>,</span><span class="param">	<span class="n">pin</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span></span><span class="return-annotation">) -> <span class="n">pydantic</span><span class="o">.</span><span class="n">main</span><span class="o">.</span><span class="n">BaseModel</span>:</span></span>
 
                 <label class="view-source-button" for="TranslationProvider.request_json-view-source"><span>View Source</span></label>
 
     </div>
     <a class="headerlink" href="#TranslationProvider.request_json"></a>
-            <div class="pdoc-code codehilite"><pre><span></span><span id="TranslationProvider.request_json-60"><a href="#TranslationProvider.request_json-60"><span class="linenos">60</span></a>    <span class="nd">@abstractmethod</span>
-</span><span id="TranslationProvider.request_json-61"><a href="#TranslationProvider.request_json-61"><span class="linenos">61</span></a>    <span class="k">def</span><span class="w"> </span><span class="nf">request_json</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">system_prompt</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">payload</span><span class="p">,</span> <span class="n">schema</span><span class="p">:</span> <span class="nb">type</span><span class="p">[</span><span class="n">BaseModel</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="n">BaseModel</span><span class="p">:</span>
-</span><span id="TranslationProvider.request_json-62"><a href="#TranslationProvider.request_json-62"><span class="linenos">62</span></a><span class="w">        </span><span class="sd">&quot;&quot;&quot;</span>
-</span><span id="TranslationProvider.request_json-63"><a href="#TranslationProvider.request_json-63"><span class="linenos">63</span></a><span class="sd">        One structured call with key rotation / retry. `payload` is JSON-serialised (or sent as-is when a str).</span>
-</span><span id="TranslationProvider.request_json-64"><a href="#TranslationProvider.request_json-64"><span class="linenos">64</span></a><span class="sd">        Raises when every configured key is unavailable (rate-limited or unset) - the caller reports it.</span>
-</span><span id="TranslationProvider.request_json-65"><a href="#TranslationProvider.request_json-65"><span class="linenos">65</span></a><span class="sd">        &quot;&quot;&quot;</span>
-</span><span id="TranslationProvider.request_json-66"><a href="#TranslationProvider.request_json-66"><span class="linenos">66</span></a>        <span class="k">raise</span> <span class="ne">NotImplementedError</span>
+            <div class="pdoc-code codehilite"><pre><span></span><span id="TranslationProvider.request_json-87"><a href="#TranslationProvider.request_json-87"><span class="linenos">87</span></a>    <span class="nd">@abstractmethod</span>
+</span><span id="TranslationProvider.request_json-88"><a href="#TranslationProvider.request_json-88"><span class="linenos">88</span></a>    <span class="k">def</span><span class="w"> </span><span class="nf">request_json</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">system_prompt</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">payload</span><span class="p">,</span> <span class="n">schema</span><span class="p">:</span> <span class="nb">type</span><span class="p">[</span><span class="n">BaseModel</span><span class="p">],</span> <span class="n">pin</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">BaseModel</span><span class="p">:</span>
+</span><span id="TranslationProvider.request_json-89"><a href="#TranslationProvider.request_json-89"><span class="linenos">89</span></a><span class="w">        </span><span class="sd">&quot;&quot;&quot;</span>
+</span><span id="TranslationProvider.request_json-90"><a href="#TranslationProvider.request_json-90"><span class="linenos">90</span></a><span class="sd">        One structured call with key rotation / retry. `payload` is JSON-serialised (or sent as-is when a str).</span>
+</span><span id="TranslationProvider.request_json-91"><a href="#TranslationProvider.request_json-91"><span class="linenos">91</span></a><span class="sd">        Raises when every configured key is unavailable (rate-limited, rejected or unset) - the caller reports it.</span>
+</span><span id="TranslationProvider.request_json-92"><a href="#TranslationProvider.request_json-92"><span class="linenos">92</span></a><span class="sd">        &quot;&quot;&quot;</span>
+</span><span id="TranslationProvider.request_json-93"><a href="#TranslationProvider.request_json-93"><span class="linenos">93</span></a>        <span class="k">raise</span> <span class="ne">NotImplementedError</span>
 </span></pre></div>
 
 
             <div class="docstring"><p>One structured call with key rotation / retry. <code>payload</code> is JSON-serialised (or sent as-is when a str).
-Raises when every configured key is unavailable (rate-limited or unset) - the caller reports it.</p>
+Raises when every configured key is unavailable (rate-limited, rejected or unset) - the caller reports it.</p>
 </div>
 
 
@@ -463,30 +642,28 @@ Raises when every configured key is unavailable (rate-limited or unset) - the ca
                             <div id="TranslationProvider.translate" class="classattr">
                                         <input id="TranslationProvider.translate-view-source" class="view-source-toggle-state" type="checkbox" aria-hidden="true" tabindex="-1">
 <div class="attr function">
-                    <div class="decorator decorator-abstractmethod">@abstractmethod</div>
-
+            
         <span class="def">def</span>
-        <span class="name">translate</span><span class="signature pdoc-code multiline">(<span class="param">	<span class="bp">self</span>,</span><span class="param">	<span class="n">texts_payload</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">dict</span><span class="p">]</span>,</span><span class="param">	<span class="n">system_prompt</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span></span><span class="return-annotation">) -> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">]</span>:</span></span>
+        <span class="name">translate</span><span class="signature pdoc-code multiline">(<span class="param">	<span class="bp">self</span>,</span><span class="param">	<span class="n">texts_payload</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">dict</span><span class="p">]</span>,</span><span class="param">	<span class="n">system_prompt</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span>,</span><span class="param">	<span class="n">pin</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span></span><span class="return-annotation">) -> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">]</span>:</span></span>
 
                 <label class="view-source-button" for="TranslationProvider.translate-view-source"><span>View Source</span></label>
 
     </div>
     <a class="headerlink" href="#TranslationProvider.translate"></a>
-            <div class="pdoc-code codehilite"><pre><span></span><span id="TranslationProvider.translate-68"><a href="#TranslationProvider.translate-68"><span class="linenos">68</span></a>    <span class="nd">@abstractmethod</span>
-</span><span id="TranslationProvider.translate-69"><a href="#TranslationProvider.translate-69"><span class="linenos">69</span></a>    <span class="k">def</span><span class="w"> </span><span class="nf">translate</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">texts_payload</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">dict</span><span class="p">],</span> <span class="n">system_prompt</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">]:</span>
-</span><span id="TranslationProvider.translate-70"><a href="#TranslationProvider.translate-70"><span class="linenos">70</span></a><span class="w">        </span><span class="sd">&quot;&quot;&quot;</span>
-</span><span id="TranslationProvider.translate-71"><a href="#TranslationProvider.translate-71"><span class="linenos">71</span></a><span class="sd">        Translate a batch of speech-bubble texts.</span>
-</span><span id="TranslationProvider.translate-72"><a href="#TranslationProvider.translate-72"><span class="linenos">72</span></a>
-</span><span id="TranslationProvider.translate-73"><a href="#TranslationProvider.translate-73"><span class="linenos">73</span></a><span class="sd">        :param texts_payload: List of {&quot;id&quot;, &quot;text&quot;, optional &quot;examples&quot; / &quot;exact&quot; / &quot;glossary&quot; / &quot;context_only&quot;}</span>
-</span><span id="TranslationProvider.translate-74"><a href="#TranslationProvider.translate-74"><span class="linenos">74</span></a><span class="sd">            - see prompts.SYSTEM_PROMPT for what each field means to the model.</span>
-</span><span id="TranslationProvider.translate-75"><a href="#TranslationProvider.translate-75"><span class="linenos">75</span></a><span class="sd">        :param system_prompt: None = the translation prompt; the terminology post-edit pass passes its own.</span>
-</span><span id="TranslationProvider.translate-76"><a href="#TranslationProvider.translate-76"><span class="linenos">76</span></a><span class="sd">        :return: Mapping of {id: translation}. A missing id is treated by the</span>
-</span><span id="TranslationProvider.translate-77"><a href="#TranslationProvider.translate-77"><span class="linenos">77</span></a><span class="sd">            caller as an empty-string translation, so failures should simply</span>
-</span><span id="TranslationProvider.translate-78"><a href="#TranslationProvider.translate-78"><span class="linenos">78</span></a><span class="sd">            omit the id rather than raise - except when every configured key</span>
-</span><span id="TranslationProvider.translate-79"><a href="#TranslationProvider.translate-79"><span class="linenos">79</span></a><span class="sd">            is unavailable (rate-limited or unset), which should raise, so</span>
-</span><span id="TranslationProvider.translate-80"><a href="#TranslationProvider.translate-80"><span class="linenos">80</span></a><span class="sd">            the caller gets a clear error instead of silent empty output.</span>
-</span><span id="TranslationProvider.translate-81"><a href="#TranslationProvider.translate-81"><span class="linenos">81</span></a><span class="sd">        &quot;&quot;&quot;</span>
-</span><span id="TranslationProvider.translate-82"><a href="#TranslationProvider.translate-82"><span class="linenos">82</span></a>        <span class="k">raise</span> <span class="ne">NotImplementedError</span>
+            <div class="pdoc-code codehilite"><pre><span></span><span id="TranslationProvider.translate-95"><a href="#TranslationProvider.translate-95"><span class="linenos"> 95</span></a>    <span class="k">def</span><span class="w"> </span><span class="nf">translate</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">texts_payload</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">dict</span><span class="p">],</span> <span class="n">system_prompt</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+</span><span id="TranslationProvider.translate-96"><a href="#TranslationProvider.translate-96"><span class="linenos"> 96</span></a>                  <span class="n">pin</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">]:</span>
+</span><span id="TranslationProvider.translate-97"><a href="#TranslationProvider.translate-97"><span class="linenos"> 97</span></a><span class="w">        </span><span class="sd">&quot;&quot;&quot;</span>
+</span><span id="TranslationProvider.translate-98"><a href="#TranslationProvider.translate-98"><span class="linenos"> 98</span></a><span class="sd">        Translate a batch of speech-bubble texts.</span>
+</span><span id="TranslationProvider.translate-99"><a href="#TranslationProvider.translate-99"><span class="linenos"> 99</span></a>
+</span><span id="TranslationProvider.translate-100"><a href="#TranslationProvider.translate-100"><span class="linenos">100</span></a><span class="sd">        :param texts_payload: List of {&quot;id&quot;, &quot;text&quot;, optional &quot;examples&quot; / &quot;exact&quot; / &quot;glossary&quot; / &quot;context_only&quot;}</span>
+</span><span id="TranslationProvider.translate-101"><a href="#TranslationProvider.translate-101"><span class="linenos">101</span></a><span class="sd">            - see prompts.SYSTEM_PROMPT for what each field means to the model.</span>
+</span><span id="TranslationProvider.translate-102"><a href="#TranslationProvider.translate-102"><span class="linenos">102</span></a><span class="sd">        :param system_prompt: None = the translation prompt; the terminology post-edit pass passes its own.</span>
+</span><span id="TranslationProvider.translate-103"><a href="#TranslationProvider.translate-103"><span class="linenos">103</span></a><span class="sd">        :param pin: &quot;provider/label&quot; = use only this key (A/B counterfactual).</span>
+</span><span id="TranslationProvider.translate-104"><a href="#TranslationProvider.translate-104"><span class="linenos">104</span></a><span class="sd">        :return: Mapping of {id: translation}. A missing id is treated by the caller as an empty-string translation;</span>
+</span><span id="TranslationProvider.translate-105"><a href="#TranslationProvider.translate-105"><span class="linenos">105</span></a><span class="sd">            when every key is unavailable this raises, so the caller gets a clear error instead of silent empty output.</span>
+</span><span id="TranslationProvider.translate-106"><a href="#TranslationProvider.translate-106"><span class="linenos">106</span></a><span class="sd">        &quot;&quot;&quot;</span>
+</span><span id="TranslationProvider.translate-107"><a href="#TranslationProvider.translate-107"><span class="linenos">107</span></a>        <span class="n">batch</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">request_json</span><span class="p">(</span><span class="n">system_prompt</span> <span class="ow">or</span> <span class="bp">self</span><span class="o">.</span><span class="n">default_system_prompt</span><span class="p">,</span> <span class="n">texts_payload</span><span class="p">,</span> <span class="n">TranslationBatch</span><span class="p">,</span> <span class="n">pin</span><span class="o">=</span><span class="n">pin</span><span class="p">)</span>
+</span><span id="TranslationProvider.translate-108"><a href="#TranslationProvider.translate-108"><span class="linenos">108</span></a>        <span class="k">return</span> <span class="p">{</span><span class="n">item</span><span class="o">.</span><span class="n">id</span><span class="p">:</span> <span class="n">item</span><span class="o">.</span><span class="n">translation</span> <span class="k">for</span> <span class="n">item</span> <span class="ow">in</span> <span class="n">batch</span><span class="o">.</span><span class="n">translations</span><span class="p">}</span>
 </span></pre></div>
 
 
@@ -500,16 +677,14 @@ Raises when every configured key is unavailable (rate-limited or unset) - the ca
 <li>see prompts.SYSTEM_PROMPT for what each field means to the model.</li>
 </ul></li>
 <li><strong>system_prompt</strong>:  None = the translation prompt; the terminology post-edit pass passes its own.</li>
+<li><strong>pin</strong>:  "provider/label" = use only this key (A/B counterfactual).</li>
 </ul>
 
 <h6 id="returns">Returns</h6>
 
 <blockquote>
-  <p>Mapping of {id: translation}. A missing id is treated by the
-      caller as an empty-string translation, so failures should simply
-      omit the id rather than raise - except when every configured key
-      is unavailable (rate-limited or unset), which should raise, so
-      the caller gets a clear error instead of silent empty output.</p>
+  <p>Mapping of {id: translation}. A missing id is treated by the caller as an empty-string translation;
+      when every key is unavailable this raises, so the caller gets a clear error instead of silent empty output.</p>
 </blockquote>
 </div>
 

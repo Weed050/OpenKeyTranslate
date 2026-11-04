@@ -62,7 +62,11 @@
 }
 .help-content:focus { outline: none; }
 .help-content h3 { font-size: 16px; color: var(--text-primary); margin-bottom: var(--space-sm); }
-.help-content h4 { font-size: 13px; font-weight: 600; margin: var(--space-md) 0 var(--space-xs); color: var(--text-primary); }
+/* sub-section heading: a small caps label with a rule above, so it never reads as a row of the term list below it
+   (the "Glossary or memory?" heading looked like a term with a missing description) */
+.help-content h4 { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; color: var(--accent);
+  margin: var(--space-lg) 0 var(--space-xs); padding-top: var(--space-sm); border-top: 1px solid var(--border); }
+.help-content h4:first-child { margin-top: 0; padding-top: 0; border-top: 0; }
 .help-content p, .help-content li { color: var(--text-secondary); }
 .help-steps { margin: 0 0 var(--space-sm); padding-left: 20px; display: flex; flex-direction: column; gap: 4px; }
 
@@ -139,3 +143,11 @@ kbd {
   .help-list { grid-template-columns: 1fr; }
   .help-list dt { border-bottom: none; padding-bottom: 0; }
 }
+
+/* Help > Page stages & review: the stage table (rows built from js/stages.js; colours = css/tokens.css --stage-*) */
+.help-stage-table { width: 100%; border-collapse: collapse; font-size: 12.5px; margin: 6px 0 4px; }
+.help-stage-table th { text-align: left; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em;
+  color: var(--text-muted); padding: 4px 8px; border-bottom: 1px solid var(--border-strong); }
+.help-stage-table td { padding: 6px 8px; border-bottom: 1px solid var(--border); vertical-align: top; }
+.help-stage-table td:first-child { width: 18px; padding-top: 8px; }
+.help-stage-table td:nth-child(2) { white-space: nowrap; }
