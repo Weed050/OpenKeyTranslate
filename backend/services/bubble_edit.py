@@ -152,9 +152,10 @@ def add_bubble(ocr_data: dict, box, image, ocr_region_fn, protected=()) -> dict:
 
 def _merge_parts(ocr_data: dict, bubble_id: str, other_ids, order=None) -> list[dict]:
     """
-    The bubbles to merge, in the order their texts are joined. Default = the reading-order setting (bubble_order:
-    ttb / rtl / ltr) applied to just these pieces, so two pieces side by side in a right-to-left manga join right piece
-    first. `order` (every id exactly once, from the editor's merge preview) overrides it.
+    The bubbles to merge, in the order their texts are joined. Default = the page's reading order (page JSON
+    "bubble_order", else the setting bubble_order: ttb / rtl / ltr) applied to just these pieces, so two pieces side by
+    side in a right-to-left manga join right piece first. `order` (every id exactly once, from the editor's merge
+    preview) overrides it.
     """
     others = [other_ids] if isinstance(other_ids, str) else list(other_ids or [])
     ids = [bubble_id] + [i for i in dict.fromkeys(others) if i != bubble_id]
@@ -165,7 +166,7 @@ def _merge_parts(ocr_data: dict, bubble_id: str, other_ids, order=None) -> list[
         if sorted(order) != sorted(ids):
             raise BubbleEditError("order must list every merged bubble exactly once", 400)
         return [parts[i] for i in order]
-    return auto_order(list(parts.values()), get_setting("bubble_order", "ttb"))
+    return auto_order(list(parts.values()), ocr_data.get("bubble_order") or get_setting("bubble_order", "ttb"))
 
 
 def _joined(parts: list[dict], key: str) -> str:
@@ -339,8 +340,22 @@ def bubble_lines(ocr_data: dict, bubble_id: str) -> list[dict]:
     return out
 
 
-def _split_plan(ocr_data: dict, bubble_id: str, new_line_ids, image=None, ocr_region_fn=None, protected=()) -> dict:
-    """Pieces of the split (shared by the preview and the real split): kept lines first or in reading order of the page."""
+def _manual_parts(translations, n: int) -> list[str] | None:
+    """The user's own division of the translation (split dialog "I choose the cut"): n strings, or None."""
+    if translations is None:
+        return None
+    if not (isinstance(translations, (list, tuple)) and len(translations) == n and all(isinstance(t, str) for t in translations)):
+        raise BubbleEditError(f"translations must be a list of {n} texts (one per part, in reading order)", 400)
+    return [t.strip() for t in translations]
+
+
+def _split_plan(ocr_data: dict, bubble_id: str, new_line_ids, image=None, ocr_region_fn=None, protected=(),
+                translations=None) -> dict:
+    """
+    Pieces of the split (shared by the preview and the real split): kept lines first or in reading order of the page.
+    `translations` = the user's own cut of the translation, one text per piece in reading order (method "manual");
+    the AI draft (ai_translation) is still divided automatically - it stays the baseline the user's text is compared to.
+    """
     bubble = _find(ocr_data, bubble_id)
     lines = bubble_lines(ocr_data, bubble_id)
     if len(lines) < 2:
@@ -371,34 +386,45 @@ def _split_plan(ocr_data: dict, bubble_id: str, new_line_ids, image=None, ocr_re
         pieces.append({"line_ids": [l["line_id"] for l in g], "bbox": union, "text": text, "reread": reread})
 
     sources = [p["text"] or " ".join(l["text"] for l in g) for p, g in zip(pieces, groups)]
-    translations, method = split_translation(bubble.get("translation", ""), sources)
-    ai_translations, _ = split_translation(bubble.get("ai_translation", ""), sources)
+    manual = _manual_parts(translations, len(pieces))
+    if manual is not None:
+        translations, method = manual, "manual"
+    else:
+        translations, method = split_translation(bubble.get("translation", ""), sources)
+    if manual is not None and (bubble.get("translation") or "").strip() == (bubble.get("ai_translation") or "").strip():
+        # the AI draft itself, only cut where the user chose: the parts must not look "edited" (nor become memory
+        # "corrections" when saved) just because the automatic cut of ai_translation landed elsewhere
+        ai_translations = list(manual)
+    else:
+        ai_translations, _ = split_translation(bubble.get("ai_translation", ""), sources)
     for p, t, a in zip(pieces, translations, ai_translations):
         p["translation"], p["ai_translation"] = t, a
     edited_source = bool(bubble.get("text_raw")) and bubble.get("text_raw") != bubble.get("text")
     return {"pieces": pieces, "method": method, "edited_source": edited_source}
 
 
-def split_preview(ocr_data: dict, bubble_id: str, new_line_ids) -> dict:
+def split_preview(ocr_data: dict, bubble_id: str, new_line_ids, translations=None) -> dict:
     """What split_bubble would produce (texts, divided translation, method) - nothing is changed, no OCR runs."""
-    plan = _split_plan(ocr_data, bubble_id, new_line_ids)
+    plan = _split_plan(ocr_data, bubble_id, new_line_ids, translations=translations)
     return {"method": plan["method"], "edited_source": plan["edited_source"],
             "pieces": [{k: p[k] for k in ("line_ids", "text", "translation", "reread")} for p in plan["pieces"]]}
 
 
-def split_bubble(ocr_data: dict, bubble_id: str, new_line_ids, image=None, ocr_region_fn=None, protected=()) -> dict:
+def split_bubble(ocr_data: dict, bubble_id: str, new_line_ids, image=None, ocr_region_fn=None, protected=(),
+                 translations=None) -> dict:
     """
     Split a bubble the OCR glued together (two speech bubbles, map labels) into two: `new_line_ids` form the new one.
     No OCR for lines whose text is known, and NO translation request: the existing translation is divided between
     the pieces (split_translation); a piece the division could not handle cleanly gets split_check=True (editor tag
     "check translation"). The first piece in reading order keeps the bubble id and list position. Review stamps are
     dropped (new text). Lines keep their boxes, so the clean image does not change.
+    `translations`: the user chose the cut of the translation (one text per part, reading order) - no tag then.
     """
     bubble = _find(ocr_data, bubble_id)
-    plan = _split_plan(ocr_data, bubble_id, new_line_ids, image, ocr_region_fn, protected)
+    plan = _split_plan(ocr_data, bubble_id, new_line_ids, image, ocr_region_fn, protected, translations)
     index = next(i for i, b in enumerate(ocr_data["bubbles"]) if b is bubble)
     new_id = f"bubble_{_next_number([b['bubble_id'] for b in ocr_data['bubbles']], 'bubble_')}"
-    check = plan["method"] != "sentences" and bool((bubble.get("translation") or "").strip())
+    check = plan["method"] not in ("sentences", "manual") and bool((bubble.get("translation") or "").strip())
     made = []
     for k, piece in enumerate(plan["pieces"]):
         b = {key: v for key, v in bubble.items()
@@ -441,18 +467,19 @@ def _moved_piece(ocr_data: dict, split_result: dict, line_ids) -> str:
     return owner[list(line_ids)[0]]
 
 
-def move_lines_preview(ocr_data: dict, bubble_id: str, line_ids, target_id: str) -> dict:
+def move_lines_preview(ocr_data: dict, bubble_id: str, line_ids, target_id: str, translations=None) -> dict:
     """What move_lines would do - on a copy, no OCR: the divided translation and the target's joined text."""
     import copy
     _check_move(ocr_data, bubble_id, target_id)
-    plan = split_preview(ocr_data, bubble_id, line_ids)
+    plan = split_preview(ocr_data, bubble_id, line_ids, translations)
     data = copy.deepcopy(ocr_data)
-    result = split_bubble(data, bubble_id, line_ids)
+    result = split_bubble(data, bubble_id, line_ids, translations=translations)
     joined = merge_preview(data, target_id, [_moved_piece(data, result, line_ids)])
     return {**plan, "target": {"bubble_id": target_id, "text": joined.get("text", ""), "translation": joined.get("translation", "")}}
 
 
-def move_lines(ocr_data: dict, bubble_id: str, line_ids, target_id: str, image=None, ocr_region_fn=None, protected=()) -> dict:
+def move_lines(ocr_data: dict, bubble_id: str, line_ids, target_id: str, image=None, ocr_region_fn=None, protected=(),
+               translations=None) -> dict:
     """
     Move some text lines of a bubble - with their part of the translation - into ANOTHER existing bubble (the OCR put
     a line into the wrong bubble). No translation request: it is split_bubble (the translation divided between the
@@ -460,7 +487,7 @@ def move_lines(ocr_data: dict, bubble_id: str, line_ids, target_id: str, image=N
     Both bubbles lose their review stamps (new text); a division that was not clean tags them "check translation".
     """
     _check_move(ocr_data, bubble_id, target_id)
-    result = split_bubble(ocr_data, bubble_id, line_ids, image, ocr_region_fn, protected)
+    result = split_bubble(ocr_data, bubble_id, line_ids, image, ocr_region_fn, protected, translations)
     moved = _moved_piece(ocr_data, result, line_ids)
     stays = next(b["bubble_id"] for b in result["bubbles"] if b["bubble_id"] != moved)
     split_check = any(b.get("split_check") for b in result["bubbles"])
@@ -500,7 +527,7 @@ LAYOUT_STROKES = ("none", "thin", "thick")
 LAYOUT_COLORS = ("black", "white")
 
 
-def set_layout(ocr_data: dict, bubble_id: str, changes: dict) -> dict:
+def set_layout(ocr_data: dict, bubble_id: str, changes: dict, base: dict | None = None) -> dict:
     """
     Store the user's Lettering choices of a bubble (page JSON bubble["layout"], read by utils/typesetting.plan_bubble):
       box        [x1, y1, x2, y2] text area in image coordinates; null = automatic (bubble interior)
@@ -508,13 +535,18 @@ def set_layout(ocr_data: dict, bubble_id: str, changes: dict) -> dict:
       angle      degrees clockwise, -180..180
       align      center | left | right
       stroke     none | thin | thick (outline in the other colour than the letters, for text over artwork)
-      color      black | white (the letters)
+      color      black | white (the letters); "color_explicit": true keeps the value even when it is the default
+                 (the letters were white automatically on a dark background and the user wants black)
       valign     middle | top | bottom
       font       font family name (services/font_service.py); null = the default font (Settings)
       bold / italic  true / false (imitated when the family has no such file)
       reset      true = forget everything (back to automatic)
-    Only non-default values are kept, so an untouched bubble has no "layout" and renders exactly as before.
+    Only values that differ from the defaults are kept, so an untouched bubble has no "layout" and renders exactly as
+    before. `base` = the project's lettering style (services/project_prefs.py): font / bold / italic / stroke / color
+    equal to it are not stored (the bubble follows the project), a built-in default that differs from it IS stored
+    (font "" = the Settings font, bold false, color black...).
     """
+    base = base or {}
     bubble = _find(ocr_data, bubble_id)
     layout = {} if changes.get("reset") else dict(bubble.get("layout") or {})
     if "box" in changes:
@@ -551,24 +583,25 @@ def set_layout(ocr_data: dict, bubble_id: str, changes: dict) -> dict:
             layout.pop("angle", None)
     if "font" in changes:
         name = changes["font"]
-        if name in (None, ""):
-            layout.pop("font", None)
-        elif isinstance(name, str) and len(name) <= 200:
-            layout["font"] = name.strip()
-        else:
+        if name is not None and not (isinstance(name, str) and len(name) <= 200):
             raise BubbleEditError("font must be a font family name", 400)
+        name = (name or "").strip()
+        if name == base.get("font", ""):
+            layout.pop("font", None)
+        else:
+            layout["font"] = name            # "" = the Settings font although the project has another one
     for key in ("bold", "italic"):
         if key in changes:
-            if changes[key]:
-                layout[key] = True
-            else:
+            if bool(changes[key]) == bool(base.get(key, False)):
                 layout.pop(key, None)
+            else:
+                layout[key] = bool(changes[key])
     for key, allowed, default in (("align", LAYOUT_ALIGNS, "center"), ("stroke", LAYOUT_STROKES, "none"),
                                   ("valign", LAYOUT_VALIGNS, "middle"), ("color", LAYOUT_COLORS, "black")):
         if key in changes:
             if changes[key] not in allowed:
                 raise BubbleEditError(f"{key} must be one of {', '.join(allowed)}", 400)
-            if changes[key] == default:
+            if changes[key] == base.get(key, default) and not (key == "color" and changes.get("color_explicit")):
                 layout.pop(key, None)
             else:
                 layout[key] = changes[key]

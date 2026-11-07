@@ -110,6 +110,8 @@ def get_llm_suggestions(project_id: int, db: Session = Depends(get_db)):
     from services.providers import get_provider
     try:
         return extract_terms_llm(project_id, db, get_provider())
+    except RuntimeError as e:          # the key pool's own summary (no key could translate) - already readable
+        raise HTTPException(status_code=502, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Term extraction failed: {type(e).__name__}: {e}")
 

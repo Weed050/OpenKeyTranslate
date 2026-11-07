@@ -102,13 +102,33 @@ async def health():
         issues.append({"level": "warn", "code": "ocr_gpu_fallback", "message": f"OCR runs on CPU: {RUNTIME.get('reason')}."})
     from services.memory_service import EMBEDDER_STATE
     if EMBEDDER_STATE["state"] == "error":
+        # the state is live: a later successful load (next translation / correction save / Settings test) clears it
         issues.append({"level": "warn", "code": "embedder_failed",
                        "message": f"Correction memory model failed to load ({EMBEDDER_STATE['error']}). Translation still works, "
-                                  f"but memory hints and saving corrections will fail until it loads (needs internet once to download)."})
+                                  f"but without memory hints, and saving corrections fails until it loads - the app "
+                                  f"tries again on the next translation (internet is needed only for the first download)."})
     # things the startup reconcile found but only wrote to the log (missing page files, chapters kept without raw/ ...)
     for i, line in enumerate(LAST_REPORT.get("warnings", [])[:5]):
         issues.append({"level": "warn", "code": f"reconcile_{i}", "message": f"Disk vs DB: {line} (page list -> Rescan folders)"})
     return {"issues": issues}
+
+
+@router.get("/embedder")
+async def embedder():
+    """State of the correction-memory model (idle / loading / ready / error, from disk or internet) - no loading."""
+    from services.memory_service import embedder_status
+    return embedder_status()
+
+
+@router.post("/embedder/test")
+def embedder_test():
+    """
+    Settings > Correction memory > Test (also linked from the health banner): loads the model if it is not loaded -
+    i.e. retries a failed start-up load - and checks that a paraphrase pair scores above an unrelated pair.
+    Plain def: the load blocks for seconds and must not stall the event loop.
+    """
+    from services.memory_service import embedder_self_test
+    return embedder_self_test()
 
 
 @router.get("/storage")

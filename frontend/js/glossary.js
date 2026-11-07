@@ -222,7 +222,11 @@ async function runSuggestionScan(fetchSuggestions, busyText, emptyText) {
     try {
         suggestions = await fetchSuggestions();
     } catch (e) {
-        status.textContent = `Scan failed: ${e.message}`;
+        // a readable sentence (the key pool summarizes provider errors); long raw replies stay folded
+        const msg = e.message || String(e);
+        status.innerHTML = msg.length > 300
+            ? `<span class="import-error">Scan failed.</span> <details style="display:inline"><summary>details</summary><span class="text-muted">${escapeHtml(msg)}</span></details>`
+            : `<span class="import-error">Scan failed: ${escapeHtml(msg)}</span>`;
         return;
     }
     status.textContent = "";

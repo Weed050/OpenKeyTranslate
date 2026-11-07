@@ -30,6 +30,30 @@ from services.memory_service import warm_up_embedder_async
 from core.startup_checks import log_startup_report
 
 
+def _quiet_connection_resets() -> None:
+    """
+    Windows only noise: when the browser drops a connection (tab closed, an image request cancelled by the next page
+    load, "View export" tab closed), asyncio's Proactor loop logs
+        Exception in callback _ProactorBasePipeTransport._call_connection_lost ... ConnectionResetError [WinError 10054]
+    as an ERROR with a traceback, although nothing failed (CPython issue 83413). Only that exact case is dropped;
+    every other loop exception goes to the default handler as before.
+    """
+    import asyncio
+    loop = asyncio.get_running_loop()
+    previous = loop.get_exception_handler()
+
+    def handler(loop_, context):
+        exc = context.get("exception")
+        if isinstance(exc, ConnectionResetError) and "_call_connection_lost" in repr(context.get("handle") or context.get("message", "")):
+            return
+        if previous is not None:
+            previous(loop_, context)
+        else:
+            loop_.default_exception_handler(context)
+
+    loop.set_exception_handler(handler)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """
@@ -56,6 +80,7 @@ async def lifespan(app: FastAPI):
 
     warm_up_embedder_async()   # background thread: correction memory is not needed until the first translation / save
     print("[LIFECYCLE] Embedding model loading in the background; the app is ready.")
+    _quiet_connection_resets()
 
     yield
 

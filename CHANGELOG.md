@@ -2,7 +2,89 @@
 
 All notable changes to OpenKeyTranslate. Versions follow `APP_VERSION` in `backend/core/config.py`.
 
-## [Unreleased]
+## [0.4.0] - 2026-11-07
+
+### Research data - read before comparing with older logs
+- `injection_json.temperature` on every log row (shown and A/B counterfactual alike; a new key, nothing old changes
+  meaning): the sampling temperature of the call. The 446 older rows (2026-10-28 .. 11-05) were filled in afterwards
+  with 0.4 (the setting they ran at, per the user) by `scripts/backfill_log_temperature.py` and carry
+  `temperature_backfilled: "2026-11-07"` - filled in, not logged by the call.
+- History: **Temp.** column (sortable; `0.4*` = filled in afterwards), also in the request details.
+- Page JSON: `manual_ops: [{op, at, bubble?, ...}]` = what the user fixed by hand on the page (merge, split,
+  move_lines, reocr_bubble, add_bubble, delete_bubble, edit_source, skip / unskip, reorder, retranslate_bubble,
+  cleanup_add / undo / clear, layout, layout_reset, layout_bulk, reocr_page), kept through Re-OCR. Lettering calls on
+  the same bubble within 60 s count as one adjustment (`n` = requests), one click that styles many bubbles as one
+  `layout_bulk`. Translation edits are not listed (they are measured as edit distance), nor page review or a whole-page
+  retranslation. Pages processed earlier have no list - a missing list is "not recorded", not zero.
+
+### Added
+- **`scripts/replay_examples.py`** (thesis, part A): translates reviewed pages again at temperature 0 in variants
+  that differ only in the memory examples (A0 none, A0b none again = noise floor, A1 3 random, A2 3 nearest without
+  threshold, A3 3 biggest corrections), each page seeing only corrections made before its first translation; `score`
+  compares with the final translations (chrF++ / TER, paired bootstrap CI, Wilcoxon, split by nearest similarity).
+  Reads the database read-only, writes to `<app root>/research/` (full texts - never commit), resumable, waits out
+  rate limits. Scoring needs `setup/requirements_research.txt` (sacrebleu).
+- **Settings > Correction memory > Test memory model** (`POST /system/embedder/test`, state: `GET /system/embedder`):
+  loads the model if needed (= retries a failed load) and checks that similar lines score above unrelated ones. The
+  "memory model failed to load" banner links to it (opening Settings at `#memory` runs the test) and a passing test
+  removes the banner row.
+
+### Fixed
+- "Correction memory model failed to load (RuntimeError: Cannot send a request, as the client has been closed.)" with a
+  flaky or missing connection, although the model was on disk: it is now loaded from disk first (`local_files_only`,
+  no network at all - offline the load no longer waits ~30 s and then fails); huggingface.co is only asked when it
+  isn't there yet. Cause: a
+  bug in huggingface_hub 1.x - after a connection error it closes its shared HTTP client and retries on the closed one,
+  so the offline fallback to the cache never ran. Offline without the model the message now says so plainly.
+
+## [0.3.1] - 2026-11-05
+
+### Research data - read before comparing with older logs
+- `injection_json.memory_probe` on **every** translated bubble (a new key; nothing old changes meaning): `size` =
+  memory entries of the project at that moment, `threshold` / `lexical_min` / `strong`, `lane`, `candidates`, `best` =
+  the highest cosine also **below** the threshold, `best_overlap`, `hit`. About 170 bytes per bubble, never sent to the
+  model. History > Research view: hit rate by memory size and "if the threshold were 0.50 ... 0.90" (older logs:
+  memory size estimated from the entries' `created_at`).
+- Memory: entries know their bubble (`Correction.page_id` / `bubble_id`, added by the automatic migration). Saving the
+  **same bubble again** updates its own entry while memory has not used it yet (`reuse_count` 0, `created_at` = last
+  save); going back to the AI text removes it. Before, every changed save added a row (one bubble -> WIWERNY and
+  WYWERNY). Old duplicates stay in the database.
+- A bubble can carry `bulk_edits: [{at, find, replace}]` = translation changed by the project-wide Find & replace, not
+  in the editor. `ai_translation` is untouched, so such a bubble counts as "edited".
+
+### Added
+- **Find & replace in translations** of the whole project (editor More menu, pages list): preview with a diff and a
+  checkbox per bubble, whole words or "word + endings", a warning for bubbles not reviewed yet, optionally the same in
+  memory.
+- **Project preferences** (`<project>/project_prefs.json`, `GET/PATCH /projects/{id}/prefs`): the bubble order and the
+  Lettering style are kept for pages processed later (also by the background prefetch).
+- Lettering **"Use in whole project"**: font / B / I / letters / outline for every bubble without its own style, also in
+  the preview, export and new pages; "Project style: ... remove". Replaces "Style carries over" (localStorage).
+- Lettering **font search**: type a part of the name, arrows + Enter; system fonts shown in their own face.
+- **White letters by themselves** on a dark area (`auto_color`); "Black" overrides it.
+- Editor **Original** button (shortcut O) = the raw page instead of the cleaned one; More > "Show original file"
+  (`GET /pages/{id}/original`).
+- **Undo clean (n) ▾**: a list of the clean-ups, hover shows the area, a click undoes only that one
+  (`DELETE /pages/{id}/cleanups?index=n`).
+- **Split**: select lines by dragging a rectangle; the translation can be split automatically, **cut by hand** (click
+  the word that starts the second part) or translated again; bubbles being translated show a pulsing "Translating...".
+- History: the Hints column sorts (memory / glossary first), counts in the filter ("With memory - 8").
+
+### Fixed
+- "Right to left" + "Use this order for the whole project" was lost on pages OCR'd later (the prefetch used the global
+  setting).
+- Switching to Lettering at the last bubble: the typed text is saved first and the open bubble counts as accepted.
+- OCR: a level line turned 180° by the text-line orientation classifier ("I'M SORRY" -> "W,1 SORRY") is read again
+  without it; refine no longer merges blocks more than 3.5 line heights apart; a lone "?" / "!!" in the soft
+  tolerance zone of the threshold is kept.
+- "Find terms with AI" (Memory / Glossary) shows one readable sentence instead of the provider's raw JSON (rate limit /
+  no connection / rejected key per key); the raw text goes to the log.
+- "View export" for a page not exported yet: a message with "Export now" instead of a blank tab.
+- Lettering: the number of the selected box sits above it (it covered the text and the corner handle); the drag hint
+  moved to the panel (the mode bar jumped when switching modes).
+- The Save / arrows bar stays at the bottom of a short detail panel; the other buttons scroll under it.
+- Sort selects (project page, pages list): the arrow sits right after the text (`field-sizing`, Chrome / Edge).
+- Log noise: asyncio `ConnectionResetError [WinError 10054]` on Windows is no longer printed.
 
 ## [0.3.0] - 2026-11-04
 

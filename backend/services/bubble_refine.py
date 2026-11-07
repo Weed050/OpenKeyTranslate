@@ -112,8 +112,18 @@ def _bubble_target(result: dict, bubble: dict) -> dict:
             "boxes": [by_id[i]["box"] for i in bubble.get("line_ids", []) if i in by_id]}
 
 
+MERGE_MAX_GAP_LINES = 3.5      # text blocks further apart than this many line heights are never merged
+
+
 def merge_split_bubbles(image, result: dict) -> int:
-    """Merge bubbles whose texts lie in one and the same outlined white area. Returns how many bubbles disappeared."""
+    """
+    Merge bubbles whose texts lie in one and the same outlined white area. Returns how many bubbles disappeared.
+    Distance limit (2026-11-05): besides the gap relative to the BLOCK size, the vertical gap must stay within
+    MERGE_MAX_GAP_LINES line heights. A piece cut off by a missed line or two is 1-2 lines away; two text blocks in
+    the two lobes of a connected balloon (Chapter_3/page_018: 7 line heights apart) or two labels in one frame
+    (Chapter_4/page_005: 6) are separate bubbles - merged, their texts were typeset into the middle of the balloon.
+    Of the 44 merges stored in the test project it undoes 2 (Chapter_4/page_005 at 6.0, Chapter_3/page_009 at 4.5).
+    """
     bubbles = result["bubbles"]
     n = len(bubbles)
     if n < 2:
@@ -133,7 +143,8 @@ def merge_split_bubbles(image, result: dict) -> int:
             gap_x = max(0.0, max(a[0], b[0]) - min(a[2], b[2]))
             gap_y = max(0.0, max(a[1], b[1]) - min(a[3], b[3]))
             wa, wb, ha, hb = a[2] - a[0], b[2] - b[0], a[3] - a[1], b[3] - b[1]
-            if gap_x > 0.5 * min(wa, wb) or gap_y > 2.5 * max(ha, hb):
+            line_h = max(ha / max(1, bubbles[i].get("line_count") or 1), hb / max(1, bubbles[j].get("line_count") or 1))
+            if gap_x > 0.5 * min(wa, wb) or gap_y > 2.5 * max(ha, hb) or gap_y > MERGE_MAX_GAP_LINES * line_h:
                 continue                                          # too far apart to be pieces of one bubble
             if find(i) == find(j):
                 continue

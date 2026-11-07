@@ -64,11 +64,42 @@ import threading
 _embedder = None
 _embedder_lock = threading.Lock()
 
-# Observable by GET /system/health: "idle" | "loading" | "ready" | "error"
-EMBEDDER_STATE: dict = {"state": "idle", "error": None, "seconds": None}
+# Observable by GET /system/health and /system/embedder: state "idle" | "loading" | "ready" | "error";
+# source = where the model came from: "disk" (local cache, no network) or "internet" (first download / broken cache).
+EMBEDDER_STATE: dict = {"state": "idle", "error": None, "seconds": None, "source": None}
 
 # Ranking bonus for a user edit over a plain approval at (almost) the same similarity.
 _CORRECTED_BONUS = 0.02
+
+
+def _load_model():
+    """
+    Load the sentence-transformers model, local cache FIRST. Returns (model, source).
+
+    Why not a plain SentenceTransformer(name): that asks huggingface.co about every file of the model on each start,
+    even when the whole model is already on disk. With the network down (or just flaky for a moment) it took ~30 s
+    and then FAILED outright with "RuntimeError: Cannot send a request, as the client has been closed." - a bug
+    in huggingface_hub 1.x: after a ConnectError it closes its shared httpx client, then retries on that same closed
+    client, so the usual offline fallback to the cache never happens (reproduced 07.11.2026 with a dead proxy:
+    plain load failed after 31.6 s, local_files_only load worked in 0.6 s). The model never changes, so the
+    network is only needed for the very first download.
+    """
+    from sentence_transformers import SentenceTransformer
+    try:
+        return SentenceTransformer(MEMORY_EMBEDDING_MODEL, local_files_only=True), "disk"
+    except Exception:
+        pass   # first run, other model name in Settings, incomplete cache -> download below
+    try:
+        return SentenceTransformer(MEMORY_EMBEDDING_MODEL), "internet"
+    except RuntimeError as e:
+        if "client has been closed" not in str(e):
+            raise
+        # the huggingface_hub bug above hit the download itself = no connection. Say so instead of the misleading
+        # text, and give the next attempt (next translation / Settings test) a fresh client.
+        from huggingface_hub import close_session
+        close_session()
+        raise ConnectionError(f"can't reach huggingface.co to download '{MEMORY_EMBEDDING_MODEL}' - it isn't on disk "
+                              f"yet (internet / VPN / firewall / proxy?)") from e
 
 
 def _get_embedder():
@@ -78,6 +109,7 @@ def _get_embedder():
     Deferred import/instantiation keeps startup fast for code paths that
     never touch the memory system, and mirrors the singleton pattern already
     used for the translation client in translation_service.py.
+    A failed load is not cached: the next caller (translation, correction save, Settings test) tries again.
     """
     global _embedder
     if _embedder is None:
@@ -87,13 +119,45 @@ def _get_embedder():
                 started = time.monotonic()
                 EMBEDDER_STATE.update(state="loading", error=None)
                 try:
-                    from sentence_transformers import SentenceTransformer
-                    _embedder = SentenceTransformer(MEMORY_EMBEDDING_MODEL)
+                    _embedder, source = _load_model()
                 except Exception as e:
                     EMBEDDER_STATE.update(state="error", error=f"{type(e).__name__}: {e}")
                     raise
-                EMBEDDER_STATE.update(state="ready", seconds=round(time.monotonic() - started, 1))
+                EMBEDDER_STATE.update(state="ready", seconds=round(time.monotonic() - started, 1), source=source)
     return _embedder
+
+
+# Settings > Correction memory > Test: a paraphrase pair must score clearly above an unrelated pair.
+_TEST_SENTENCES = ("Get out of here, right now!", "Leave this place immediately!", "I really like strawberry cake.")
+
+
+def embedder_status() -> dict:
+    """Current state of the embedding model (no loading) - GET /system/embedder."""
+    return {**EMBEDDER_STATE, "model": MEMORY_EMBEDDING_MODEL}
+
+
+def embedder_self_test() -> dict:
+    """
+    Does correction memory really work right now? Loads the model if needed (so a failed start-up load is retried
+    here) and embeds three sentences: a paraphrase pair must be more similar than an unrelated one - a model that
+    loads but returns garbage fails too. POST /system/embedder/test; the health banner links to it.
+    """
+    import time
+    started = time.monotonic()
+    try:
+        _get_embedder()
+    except Exception as e:
+        return {"ok": False, "step": "load", "message": f"{type(e).__name__}: {e}", **embedder_status()}
+    try:
+        a, b, c = (embed_text(t) for t in _TEST_SENTENCES)
+    except Exception as e:
+        return {"ok": False, "step": "embed", "message": f"{type(e).__name__}: {e}", **embedder_status()}
+    similar, unrelated = float(a @ b), float(a @ c)
+    ok = similar > unrelated + 0.1
+    return {"ok": ok, "step": "compare", "similar": round(similar, 3), "unrelated": round(unrelated, 3),
+            "dim": int(a.shape[0]), "test_seconds": round(time.monotonic() - started, 2),
+            "message": "" if ok else "the model loaded, but its similarities make no sense - delete its cache "
+                                     "(Settings > Storage & uninstall) and restart", **embedder_status()}
 
 
 def warm_up_embedder_async() -> threading.Thread:
@@ -106,7 +170,8 @@ def warm_up_embedder_async() -> threading.Thread:
     def _run():
         try:
             _get_embedder()
-            print(f"[MEMORY] embedder ready in {EMBEDDER_STATE['seconds']}s (background warm-up).")
+            print(f"[MEMORY] embedder ready in {EMBEDDER_STATE['seconds']}s from {EMBEDDER_STATE['source']} "
+                  f"(background warm-up).")
         except Exception as e:
             print(f"[MEMORY] WARNING embedder failed to load: {type(e).__name__}: {e}")
     t = threading.Thread(target=_run, name="embedder-warmup", daemon=True)
@@ -239,9 +304,15 @@ def find_top_matches(
         threshold: float | None = None,
         top_k: int | None = None,
         corrections: list[Correction] | None = None,
+        probe: dict | None = None,
 ) -> list[tuple[Correction, float]]:
     """
     Find this project's TM entries relevant to `source_text`.
+
+    `probe` (a dict, filled in place) - what the lookup saw, whether or not anything was injected, for the hit-rate
+    statistics (translation_service logs it as injection_json["memory_probe"]): lane, candidates (entries compared),
+    best (highest cosine of the fuzzy lane, also BELOW the threshold - lets the analysis ask "how often would a lower
+    threshold have fired?" without re-running anything), best_overlap (word overlap of that best entry).
 
     Short text (see is_short_phrase) -> exact-match lane: at most one entry,
     score 1.0. Longer text -> fuzzy lane: up to `top_k` entries whose cosine
@@ -266,13 +337,19 @@ def find_top_matches(
 
     if corrections is None:
         corrections = db.query(Correction).filter(Correction.project_id == project_id).all()
+    probe = probe if probe is not None else {}
+    probe.update(lane="exact" if is_short_phrase(source_text) else "fuzzy", candidates=0, best=None)
     if not corrections:
         return []
 
     if is_short_phrase(source_text):
-        return _find_exact_phrase_match(source_text, corrections)
+        found = _find_exact_phrase_match(source_text, corrections)
+        probe["candidates"] = len(corrections)
+        probe["best"] = 1.0 if found else None
+        return found
 
     candidates = [c for c in _latest_per_source(corrections) if not is_short_phrase(c.source_text)]
+    probe["candidates"] = len(candidates)
     if not candidates:
         return []
 
@@ -282,6 +359,9 @@ def find_top_matches(
 
     # Vectors are pre-normalized at encode time, so the dot product IS the cosine similarity.
     similarities = stored_vectors @ query_vector
+    best_idx = int(np.argmax(similarities))
+    probe["best"] = round(float(similarities[best_idx]), 4)
+    probe["best_overlap"] = round(lexical_overlap(query, memory_text(candidates[best_idx].source_text)), 1)
 
     scored = []
     for idx, sim in enumerate(similarities):
@@ -326,6 +406,8 @@ def save_correction(
         ai_translation: str | None,
         final_translation: str,
         approve: bool = False,
+        page_id: int | None = None,
+        bubble_id: str | None = None,
 ) -> Correction | None:
     """
     Persist a confirmed translation and its embedding as a TM entry - subject to a few
@@ -344,31 +426,36 @@ def save_correction(
     - Duplicate gate: skip re-saving what the latest stored entry for the same source already says
       (an approval of a line that already has that translation adds nothing).
 
-    Every bubble is still stored as a new row when it passes (entries are never overwritten in place); retrieval
-    uses the latest entry per source line.
+    Every bubble is stored as a new row when it passes; retrieval uses the latest entry per source line.
+    The same bubble saved AGAIN (page_id + bubble_id of the latest entry for this source) while the memory has not
+    used that entry yet (reuse_count 0) changes that row instead of adding a second one - a typo fixed seconds later
+    is one correction, not two. If the new text is not storable any more (back to the AI text, too short), that unused
+    row is removed: the memory follows what the bubble says now.
 
-    :return: The created Correction, or None if a gate skipped the save.
+    :return: The created / updated Correction, or None if a gate skipped the save.
         Callers should treat None as "acknowledged, not stored" - not an error.
     """
     final_clean = final_translation.strip()
     ai_clean = (ai_translation or "").strip()
 
     kind = "corrected"
+    storable = True
     if final_clean.lower() == ai_clean.lower():
-        if not (approve and get_setting("memory_store_approved", False)):
-            return None
-        kind = "approved"
+        if approve and get_setting("memory_store_approved", False):
+            kind = "approved"
+        else:
+            storable = False
 
     short_lane = is_short_phrase(source_text)
     phrase_key = normalize_phrase(memory_text(source_text))
 
     if not final_clean:
-        return None   # a cleared textbox must never become a stored (empty) hint
-    if short_lane:
+        storable = False   # a cleared textbox must never become a stored (empty) hint
+    elif short_lane:
         if not phrase_key:
             return None
     elif len(final_clean.split()) < get_setting("memory_min_words", 3):
-        return None
+        storable = False
 
     # Duplicate gate: the most recent stored entry for this source (normalized - "WAIT!" == "WAIT...",
     # "SQUAD- RON" == "SQUADRON") already has this exact final_translation (case-insensitive - the provider
@@ -383,6 +470,28 @@ def save_correction(
     if last is not None and last.final_translation.strip().lower() == final_clean.lower():
         return None
 
+    own = (last if last is not None and page_id is not None and bubble_id and last.page_id == page_id
+           and last.bubble_id == bubble_id and not (last.reuse_count or 0) else None)
+    if not storable:
+        if own is not None:
+            db.delete(own)
+            db.commit()
+        return None
+
+    if own is not None:
+        if own.source_text != source_text:
+            own.embedding = encode_embedding(embed_text(memory_text(source_text)))
+        own.source_text = source_text
+        own.ai_translation = ai_translation
+        own.final_translation = final_clean
+        own.kind = kind
+        own.created_at = datetime.now(timezone.utc)
+        own.edited_at = None              # a fresh editor save, not a Memory-page edit any more
+        own.final_before_edit = None
+        db.commit()
+        db.refresh(own)
+        return own
+
     correction = Correction(
         project_id=project_id,
         source_text=source_text,
@@ -390,6 +499,8 @@ def save_correction(
         final_translation=final_clean,
         kind=kind,
         embedding=encode_embedding(embed_text(memory_text(source_text))),
+        page_id=page_id,
+        bubble_id=bubble_id,
     )
     db.add(correction)
     db.commit()
@@ -446,6 +557,29 @@ def _same_case(original: str, replacement: str) -> str:
     return replacement
 
 
+def replacer(find: str, replace: str, mode: str = "word"):
+    """
+    (compiled pattern, substitute function) of a find & replace - shared by the memory (replace_in_memory) and the
+    bubbles' translations (services/translation_replace.py), so both find exactly the same words:
+      "word"   whole words / phrases only, case-insensitive ("ŻELAZNY SMOK", not "ŻELAZNYM SMOKIEM");
+      "prefix" words STARTING with `find`, each keeping its own ending (WIWERN -> WYWERN, WIWERNY -> WYWERNY).
+    The replacement takes the letter case of what it replaces.
+    """
+    word = re.escape(find.strip())
+    if mode == "prefix":
+        pattern = re.compile(rf"(?<!\w){word}(\w*)", re.IGNORECASE)
+
+        def substitute(m):
+            rest = m.group(1)
+            return _same_case(m.group(0)[:len(m.group(0)) - len(rest)], replace) + rest
+    else:
+        pattern = re.compile(rf"(?<!\w){word}(?!\w)", re.IGNORECASE)
+
+        def substitute(m):
+            return _same_case(m.group(0), replace)
+    return pattern, substitute
+
+
 def replace_in_memory(db: Session, project_id: int, find: str, replace: str, mode: str = "word",
                       ids: list[int] | None = None, apply: bool = False) -> list[dict]:
     """
@@ -463,18 +597,7 @@ def replace_in_memory(db: Session, project_id: int, find: str, replace: str, mod
     find = (find or "").strip()
     if len(find) < 2:
         return []
-    word = re.escape(find)
-    if mode == "prefix":
-        pattern = re.compile(rf"(?<!\w){word}(\w*)", re.IGNORECASE)
-
-        def substitute(m):
-            rest = m.group(1)
-            return _same_case(m.group(0)[:len(m.group(0)) - len(rest)], replace) + rest
-    else:
-        pattern = re.compile(rf"(?<!\w){word}(?!\w)", re.IGNORECASE)
-
-        def substitute(m):
-            return _same_case(m.group(0), replace)
+    pattern, substitute = replacer(find, replace, mode)
 
     wanted = set(ids) if ids is not None else None
     changes = []

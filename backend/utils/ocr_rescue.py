@@ -21,6 +21,11 @@ fine are skipped, and at most MAX_RESCUES normal lines are re-read per call (tim
      Chapter_1/page_035 (box at -41 degrees) and missed "FOREST" further along the same line. extend_tilted() cuts a
      strip along the line, 3x as long, turns it level and reads it again ("THE GREAT FOREST", 0.99). The new reading is
      kept only when it contains the old text and is longer; pieces of the same line read separately are dropped.
+
+  4. A LEVEL line read UPSIDE DOWN: PaddleOCR's per-line orientation classifier (use_textline_orientation, needed for
+     sideways columns) sometimes calls a short level word 180 degrees turned - "I'M" on Chapter_3/page_021 came out as
+     "W,1" (I'M upside down), the only flipped box of the page, with the same score either way. unflip_upside_down()
+     reads such a box again with the classifier off and keeps that reading unless it is clearly worse.
 """
 
 import re
@@ -44,6 +49,61 @@ def _bbox(poly):
     xs = [float(p[0]) for p in poly]
     ys = [float(p[1]) for p in poly]
     return min(xs), min(ys), max(xs), max(ys)
+
+
+UNFLIP_MARGIN = 0.05      # the upright reading may score this much lower than the flipped one and still win
+
+
+def _angles(res) -> list:
+    try:
+        angles = res["textline_orientation_angles"]
+    except (KeyError, TypeError, IndexError):
+        return []
+    return [] if angles is None else list(angles)
+
+
+def unflip_upside_down(image: np.ndarray, result, items: list[dict], ocr_engine) -> int:
+    """
+    Case 4 of the module docstring. `items` = parse_fn(result) (the box objects are shared with the raw result, so a
+    reading is found by identity). A box counts as flipped when the classifier said 180 degrees (angle 1) and the box is
+    level (wider than tall) - a tall box is a sideways column, where the classifier is right to decide. The item's text
+    and score are replaced in place; the flipped reading is kept as "text_flipped". Returns how many were fixed.
+    """
+    by_poly = {id(it["box"]): it for it in items}
+    ih, iw = image.shape[:2]
+    fixed = 0
+    for res in result or []:
+        angles = _angles(res)
+        if not angles:
+            continue
+        for text, score, poly, angle in zip(res["rec_texts"], res["rec_scores"], res["dt_polys"], angles):
+            if int(angle) != 1:
+                continue
+            item = by_poly.get(id(poly))
+            x1, y1, x2, y2 = _bbox(poly)
+            if item is None or x2 - x1 < y2 - y1:
+                continue
+            crop = image[max(0, int(y1) - 6):min(ih, int(y2) + 6), max(0, int(x1) - 6):min(iw, int(x2) + 6)]
+            if crop.size == 0:
+                continue
+            crop = cv2.copyMakeBorder(crop, 8, 8, 8, 8, cv2.BORDER_REPLICATE)
+            try:
+                again = ocr_engine.predict(crop, use_textline_orientation=False, use_doc_orientation_classify=False)
+            except Exception as e:                  # an older PaddleOCR without the per-call switch: keep the reading
+                print(f"[UNFLIP] re-read failed: {type(e).__name__}: {e}")
+                return fixed
+            readings = sorted(((str(t).strip(), float(s), _bbox(p)) for r in again or []
+                               for t, s, p in zip(r["rec_texts"], r["rec_scores"], r["dt_polys"]) if str(t).strip()),
+                              key=lambda r: r[2][0])
+            if not readings:
+                continue
+            new_text = " ".join(r[0] for r in readings)
+            new_score = min(r[1] for r in readings)
+            if new_text != str(text) and new_score >= float(score) - UNFLIP_MARGIN:
+                print(f"[UNFLIP] {text!r} ({float(score):.2f}) read upside down -> {new_text!r} ({new_score:.2f})")
+                item["text_flipped"], item["text"], item["score"] = str(text), new_text, new_score
+                fixed += 1
+    return fixed
 
 
 def _overlap_share(a, b) -> float:

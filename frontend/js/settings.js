@@ -1164,6 +1164,63 @@ async function loadOcrRuntime() {
         + ((r.advice || []).length ? `<ul style="margin:6px 0 0 18px; padding:0;">${r.advice.map((a) => `<li>${escapeHtml(a)}</li>`).join("")}</ul>` : "");
 }
 
+/*
+ * Settings > Correction memory: is the local embedding model really working? The health banner's "Check if it works
+ * now" link opens Settings at #memory, which runs the test at once. The test loads the model if needed, so a load
+ * that failed at start (e.g. no network for a moment) is retried; a pass removes the banner's now outdated row.
+ */
+const EMBEDDER_STATES = { idle: "not loaded yet (loads at the first translation)", loading: "loading…", ready: "ready", error: "failed to load" };
+
+function describeEmbedder(s) {
+    const where = s.source === "disk" ? "from disk" : s.source === "internet" ? "downloaded" : "";
+    const time = s.seconds != null ? ` in ${s.seconds} s` : "";
+    return `Memory model <b>${escapeHtml(s.model)}</b>: ${EMBEDDER_STATES[s.state] || escapeHtml(s.state)}`
+        + (s.state === "ready" && where ? ` (${where}${time})` : "");
+}
+
+async function loadEmbedderState() {
+    const el = document.getElementById("embedderState");
+    try {
+        el.innerHTML = describeEmbedder(await api.system.embedder());
+    } catch (e) {
+        el.textContent = `Memory model: couldn't ask the backend (${e.message})`;
+    }
+}
+
+async function testEmbedder() {
+    const btn = document.getElementById("embedderTestBtn");
+    const box = document.getElementById("embedderTestResult");
+    btn.disabled = true;
+    showKeyResult(box, { busy: "Testing the memory model (the first load can take up to half a minute)…" });
+    try {
+        const r = await api.system.embedderTest();
+        box.classList.remove("busy");
+        box.classList.add(r.ok ? "ok" : "err");
+        if (r.ok) {
+            box.innerHTML = `<b>✓ Works</b> - memory hints and saving corrections are available.`
+                + `<div class="key-hint">Similar lines ${r.similar} vs unrelated ${r.unrelated} (cosine), ${r.dim}-dim vectors, test ${r.test_seconds} s.</div>`;
+            document.querySelector('#healthBanner [data-code="embedder_failed"]')?.remove();
+            const banner = document.getElementById("healthBanner");
+            if (banner && !banner.children.length) banner.remove();
+        } else {
+            const step = { load: "Model doesn't load", embed: "Model loaded, but can't embed text", compare: "Model gives wrong results" }[r.step] || "Failed";
+            box.innerHTML = `<b>✗ ${step}</b> - ${escapeHtml(r.message)}`
+                + `<div class="key-hint">${r.step === "load"
+                    ? "Without the model on disk it has to be downloaded once (huggingface.co) - check the internet / VPN / firewall and press Test again."
+                    : "Delete the model cache in Storage &amp; uninstall and restart the backend."}</div>`;
+        }
+    } catch (e) {
+        showKeyResult(box, { ok: false, kind: "error", message: e.message });
+    } finally {
+        btn.disabled = false;
+        loadEmbedderState();
+    }
+}
+
+document.getElementById("embedderTestBtn")?.addEventListener("click", testEmbedder);
+loadEmbedderState();
+if (location.hash === "#memory") testEmbedder();
+
 // section -> save function (autosave calls them with {auto: true}; the Save buttons without arguments)
 const SAVERS = {
     translation: saveTranslation, memory: saveMemorySettings, ocr: saveOcrOptions, engine: saveOcrEngine,

@@ -603,8 +603,31 @@ def plan_page(image_clean: np.ndarray, image_original: np.ndarray, bubbles: List
         plan = plan_bubble(image_original, b, img_w, img_h, font_path, to_original_coords, auto_area=autos.get(i),
                            auto_shape=shapes.get(i))
         if plan is not None:
+            if "color" not in (b.get("layout") or {}) and _dark_background(image_clean, plan["box"]):
+                plan["color"], plan["auto_color"] = "white", True
             plans.append(plan)
     return plans
+
+
+DARK_BACKGROUND_MAX = 80        # median grey (0-255) of the cleaned text area below this: white letters by default
+
+
+def _dark_background(image_clean: np.ndarray, box) -> bool:
+    """
+    The cleaned text area is dark (white text on a black caption box / night panel, Chapter_3/page_022): black letters
+    would be invisible, so a bubble without its own letter colour gets white ones. The median of the inner 80 % of the
+    area - a few dark lines of artwork inside a white bubble do not flip it.
+    """
+    try:
+        x1, y1, x2, y2 = (int(v) for v in box)
+        dx, dy = (x2 - x1) // 10, (y2 - y1) // 10
+        crop = image_clean[max(0, y1 + dy):max(0, y2 - dy), max(0, x1 + dx):max(0, x2 - dx)]
+        if crop.size == 0:
+            return False
+        grey = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY) if crop.ndim == 3 else crop
+        return float(np.median(grey)) < DARK_BACKGROUND_MAX
+    except Exception:
+        return False
 
 
 def draw_translated_text_on_clean_image(

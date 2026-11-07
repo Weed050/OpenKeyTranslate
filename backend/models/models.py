@@ -144,9 +144,12 @@ class Correction(Base):
     "Known limitations" for the open question of whether this should ever be
     relaxed (e.g. across volumes of the same series).
 
-    Rows are never overwritten in place: every confirmed bubble becomes a new
+    Rows are not overwritten across bubbles: every confirmed bubble becomes a new
     row, so the memory grows across the project rather than collapsing
-    similar-but-distinct lines into a single entry.
+    similar-but-distinct lines into a single entry. Since 2026-11-05 one exception: the SAME bubble saved again
+    (a typo fixed 20 s later) updates its own row while the memory has not used it yet (page_id / bubble_id below,
+    services/memory_service.save_correction) - before, each save added a row, so one bubble left two entries
+    ("WIWERNY" and "WYWERNY") and glossary suggestions counted the same fix twice.
     """
 
     __tablename__ = "corrections"
@@ -178,6 +181,11 @@ class Correction(Base):
     # can tell an in-editor correction from a later memory clean-up. NULL = never edited.
     edited_at = Column(DateTime(timezone=True), nullable=True)
     final_before_edit = Column(Text, nullable=True)
+
+    # The bubble this entry was saved from (editor). NULL = rows from before 2026-11-05, imports, or saves without a
+    # page. Not a foreign key on purpose: a deleted page / bubble must not take its memory with it.
+    page_id = Column(Integer, nullable=True)
+    bubble_id = Column(String, nullable=True)
 
     # Relationships
     project = relationship("Project", back_populates="corrections")

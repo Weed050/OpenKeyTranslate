@@ -35,3 +35,19 @@
 .export-options input[type="number"]{ padding: 3px 6px; }
 .split-target{ display: flex; align-items: center; gap: 8px; font-size: 13px; }
 .split-target select{ max-width: 340px; }
+
+/* find & replace in translations (js/replace-dialog.js) */
+.replace-dialog{ width: min(900px, 94vw); }
+.replace-form{ display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.replace-form input[type="text"]{ flex: 1 1 200px; width: auto; }
+.replace-form select{ width: auto; }
+.replace-body{ min-height: 40px; }
+.rp-head{ display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin-bottom: 6px; }
+.rp-list{ overflow: auto; max-height: 48vh; border: 1px solid var(--border); border-radius: var(--radius-sm); }
+.rp-row{ display: grid; grid-template-columns: 20px 190px 1fr; gap: 4px 8px; align-items: start; padding: 6px 8px;
+  border-top: 1px solid var(--border); font-size: 12.5px; margin: 0; color: var(--text-primary); cursor: pointer; }
+.rp-row:first-child{ border-top: none; }
+.rp-row:hover{ background: var(--bg-hover); }
+.rp-row input{ width: 15px; height: 15px; margin: 2px 0 0; accent-color: var(--accent); }
+.rp-where{ color: var(--text-secondary); font-variant-numeric: tabular-nums; }
+.rp-text{ overflow-wrap: anywhere; }

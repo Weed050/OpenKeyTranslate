@@ -32,6 +32,12 @@ Key Architectural Features:
        runs pay for that second call. Both sides are compared on the MODEL output (before post-editing / case
        normalization: TranslationLog.injection_json["model_output"]); output_text is what was shown.
     7. Full provenance per bubble in TranslationLog.injection_json (see _injection_record) and memory_lane.
+       Since 2026-11-05 also "memory_probe" on EVERY bubble (hit or not): size of the project memory at that moment,
+       the threshold settings, entries compared and the best similarity even below the threshold - the data for
+       "how does the hit rate grow with the memory, and which threshold would fire how often".
+       Since 2026-11-07 also "temperature" (shown and counterfactual rows alike): the sampling temperature of the
+       call. Older logs were filled in with 0.4 afterwards (scripts/backfill_log_temperature.py, marked
+       "temperature_backfilled").
     8. Optional DB Context: project_id/page_id/db are optional. Without them translation still runs, just without
        memory, glossary or logging (e.g. test_main.py's test_ocr_from_path()).
 """
@@ -153,6 +159,7 @@ def translate_bubbles(
     # 1. Memory + glossary lookups up front, before touching the LLM.
     #    bubble_id -> [(Correction, cosine), ...] best first.
     matches: dict[str, list[tuple]] = {}
+    probes: dict[str, dict] = {}
     glossary_by_bubble: dict[str, list[dict]] = {}
     memory_failed = False
     if memory_enabled:
@@ -160,8 +167,10 @@ def translate_bubbles(
         tm_entries = db.query(Correction).filter(Correction.project_id == project_id).all()
         for b in bubbles:
             text = b["text"].strip()
+            probe = {}
             try:
-                top = find_top_matches(text, project_id, db, top_k=MEMORY_TOP_K, corrections=tm_entries)
+                top = find_top_matches(text, project_id, db, top_k=MEMORY_TOP_K, corrections=tm_entries, probe=probe)
+                probes[b["bubble_id"]] = probe
             except Exception as e:
                 # embedder failed to load (offline first run, broken cache...): translate WITHOUT memory hints instead
                 # of failing the whole page. Reported once per page, health banner shows the cause.
@@ -194,6 +203,7 @@ def translate_bubbles(
     shown_key_label = provider.current_key_label
     shown_key_id = provider.current_key_id                         # "provider/label" - the A/B pair is pinned to it
     shown_model = provider.current_model or ACTIVE_MODEL_NAME     # a key can have its own model (Settings)
+    temperature = getattr(provider, "temperature", None)          # same pool = same temperature for the A/B pair
 
     # 3. Terminology check + constrained post-edit (one extra call, only for bubbles that missed a glossary term).
     terms_info: dict[str, dict] = {}
@@ -285,9 +295,15 @@ def translate_bubbles(
             "context_bubbles": len(context_items),
             "model_output": raw,
             "case_normalized": cased != translation,
+            "temperature": temperature,
         }
         if bid in terms_info:
             injection["terms"] = terms_info[bid]
+        if bid in probes:
+            # hit-rate statistics (History > Research view): logged for every bubble, never sent to the model
+            injection["memory_probe"] = {**probes[bid], "size": len(tm_entries), "threshold": MEMORY_SIMILARITY_THRESHOLD,
+                                         "lexical_min": get_setting("memory_lexical_min", 25),
+                                         "strong": get_setting("memory_strong_similarity", 0.90), "hit": bool(found)}
         if found:
             injection["ab"] = "counterfactual" if bid in zero_shot_raw else ("not_sampled" if not ab_sampled else "failed")
             # log only (never sent to the model): which memory entries these were, in the order of "examples" / the
@@ -318,7 +334,8 @@ def translate_bubbles(
                     injection_json=json.dumps({"lane": None, "counterfactual_of": lane,
                                                "glossary": glossary_by_bubble.get(bid, []),
                                                "batch_size": len(bubbles), "context_bubbles": len(context_items),
-                                               "model_output": zs_raw}, ensure_ascii=False),
+                                               "model_output": zs_raw, "temperature": temperature},
+                                              ensure_ascii=False),
                 ))
         else:
             log_rows.append(TranslationLog(

@@ -21,6 +21,8 @@ const FIX_LINKS = {
     empty_key_slot: { href: "settings.html#translation", label: "Open Settings > Translation & API keys" },
     no_model: { href: "settings.html#translation", label: "Open Settings > Translation & API keys" },
     unknown_provider: { href: "settings.html#translation", label: "Open Settings > Translation & API keys" },
+    // opening Settings at #memory runs the test right away (js/settings.js)
+    embedder_failed: { href: "settings.html#memory", label: "Check if it works now" },
 };
 
 async function renderHealthBanner() {
@@ -41,6 +43,7 @@ async function renderHealthBanner() {
     issues.forEach((i) => {
         const row = document.createElement("div");
         row.className = `health-row ${i.level}`;
+        row.dataset.code = i.code;   // a passing check can remove its own row (Settings > Correction memory > Test)
         const text = document.createElement("span");
         text.textContent = i.message;
         const fix = FIX_LINKS[i.code];

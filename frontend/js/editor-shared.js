@@ -19,6 +19,8 @@ export const state = {
     mergePicks: [],           // bubble ids Shift+clicked to be merged into the selected bubble
     detectRotation: false,    // this page's "whole page is rotated" OCR choice (Re-OCR dialog)
     cleanups: [],             // this page's manual "Clean area" rectangles ({box}), newest last
+    translating: new Set(),   // bubble ids with a translation request running ("Translating..." in the list + panel)
+    showOriginal: false,      // the page image shows the raw original ("Original" button)
     zoomFactor: 1,
     baseScale: 1,
     naturalW: 0,

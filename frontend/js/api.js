@@ -39,6 +39,12 @@ export const api = {
     projects: {
         list: () => request("/projects/"),
         progress: (projectId) => request(`/projects/${projectId}/progress`),   // {total, processed, reviewed}
+        // project-wide choices: {bubble_order, lettering_style} (services/project_prefs.py)
+        prefs: (projectId) => request(`/projects/${projectId}/prefs`),
+        setPrefs: (projectId, payload) => request(`/projects/${projectId}/prefs`, { method: "PATCH", body: JSON.stringify(payload) }),
+        // find & replace in the bubbles' translations: {find, replace, mode: "word" | "prefix", keys?, apply}
+        replaceTranslations: (projectId, payload) =>
+            request(`/projects/${projectId}/replace-translations`, { method: "POST", body: JSON.stringify(payload) }),
         openExported: (projectId) => request(`/projects/${projectId}/open-exported`, { method: "POST" }),
         selectFolder: () => request("/projects/select-folder"),
         import: (path, projectName) =>
@@ -77,6 +83,8 @@ export const api = {
             request(`/pages/by-project/${projectId}${includeExcluded ? "?include_excluded=true" : ""}`),
         get: (pageId) => request(`/pages/${pageId}`),
         imageUrl: (pageId) => `${API_BASE}/pages/${pageId}/image`,
+        // the raw page (text not erased) - the editor's "Original" view
+        originalUrl: (pageId) => `${API_BASE}/pages/${pageId}/original`,
         // the page with the translation typeset into the bubbles (rendered on every request)
         renderUrl: (pageId, download = false) => `${API_BASE}/pages/${pageId}/render${download ? "?download=true" : ""}`,
         process: (pageId) => request(`/pages/${pageId}/process`, { method: "POST" }),
@@ -89,7 +97,9 @@ export const api = {
         reinpaint: (pageId) => request(`/pages/${pageId}/reinpaint`, { method: "POST" }),
         // manual "Clean area" rectangles (stored in the page JSON, kept by Rebuild image / Re-OCR)
         addCleanup: (pageId, box) => request(`/pages/${pageId}/cleanups`, { method: "POST", body: JSON.stringify({ box }) }),
-        removeCleanups: (pageId, all = false) => request(`/pages/${pageId}/cleanups?all=${all}`, { method: "DELETE" }),
+        // all = every cleaned area; index = that one (0 = the oldest); neither = the last one
+        removeCleanups: (pageId, all = false, index = null) =>
+            request(`/pages/${pageId}/cleanups?all=${all}${index === null ? "" : `&index=${index}`}`, { method: "DELETE" }),
         patchBubble: (pageId, bubbleId, payload) =>
             request(`/pages/${pageId}/bubbles/${bubbleId}`, { method: "PATCH", body: JSON.stringify(payload) }),
         // box (optional) = [x1, y1, x2, y2] the user drew: that exact area is read instead of the detected bubble
@@ -108,10 +118,11 @@ export const api = {
             request(`/pages/${pageId}/bubbles/${bubbleId}/layout`, { method: "PATCH", body: JSON.stringify(changes) }),
         exportPage: (pageId, options) => request(`/pages/${pageId}/export`, { method: "POST", body: JSON.stringify(options) }),
         // target: an existing bubble id = MOVE the picked lines there (with their part of the translation)
-        splitPreview: (pageId, bubbleId, newLines, target = null) =>
-            request(`/pages/${pageId}/bubbles/${bubbleId}/split`, { method: "POST", body: JSON.stringify({ new_lines: newLines, preview: true, ...(target ? { target } : {}) }) }),
-        splitBubble: (pageId, bubbleId, newLines, target = null) =>
-            request(`/pages/${pageId}/bubbles/${bubbleId}/split`, { method: "POST", body: JSON.stringify({ new_lines: newLines, ...(target ? { target } : {}) }) }),
+        // translations: [first part, second part] in reading order = the user's own cut of the translation
+        splitPreview: (pageId, bubbleId, newLines, target = null, translations = null) =>
+            request(`/pages/${pageId}/bubbles/${bubbleId}/split`, { method: "POST", body: JSON.stringify({ new_lines: newLines, preview: true, ...(target ? { target } : {}), ...(translations ? { translations } : {}) }) }),
+        splitBubble: (pageId, bubbleId, newLines, target = null, translations = null) =>
+            request(`/pages/${pageId}/bubbles/${bubbleId}/split`, { method: "POST", body: JSON.stringify({ new_lines: newLines, ...(target ? { target } : {}), ...(translations ? { translations } : {}) }) }),
         mergePreview: (pageId, bubbleId, otherIds, order = null) =>
             request(`/pages/${pageId}/bubbles/${bubbleId}/merge`, { method: "POST", body: JSON.stringify({ with: otherIds, order, preview: true }) }),
         retranslateBubble: (pageId, bubbleId) =>
@@ -132,6 +143,9 @@ export const api = {
     system: {
         health: () => request("/system/health"),
         ocrRuntime: () => request("/system/ocr-runtime"),
+        // correction-memory model: state (no loading) / real test (loads it if needed, checks similarities)
+        embedder: () => request("/system/embedder"),
+        embedderTest: () => request("/system/embedder/test", { method: "POST" }),
         // Settings > Storage & uninstall: places + sizes; delete only caches / logs / spare copies (by item id)
         storage: () => request("/system/storage"),
         storageDelete: (id) => request("/system/storage/delete", { method: "POST", body: JSON.stringify({ id }) }),

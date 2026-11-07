@@ -80,6 +80,8 @@ def carry_over(old_bubbles: list[dict], new_bubbles: list[dict]) -> set[str]:
                             nb["confirmed_via"] = ob["confirmed_via"]   # "page" = accepted with the whole page
                 if ob.get("layout"):
                     nb["layout"] = ob["layout"]             # Lettering placement of the same text stays
+                if ob.get("bulk_edits") and nb.get("translation") == ob.get("translation"):
+                    nb["bulk_edits"] = ob["bulk_edits"]     # find & replace history of this text (translation_replace)
                 carried.add(nb["bubble_id"])
                 pool.pop(i)
                 break

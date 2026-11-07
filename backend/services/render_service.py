@@ -30,15 +30,25 @@ EXPORT_CONTENT = ("translated", "clean", "both")
 EXPORT_FORMATS = ("png", "jpg")
 
 
-def _drawable(ocr_data: dict) -> list[dict]:
-    """Bubbles to draw; text_rect = slant of tilted original text (map labels), from the words' boxes in the JSON."""
+def _drawable(ocr_data: dict, style: dict | None = None) -> list[dict]:
+    """
+    Bubbles to draw; text_rect = slant of tilted original text (map labels), from the words' boxes in the JSON.
+    style = the project's lettering style (services/project_prefs.py): under every bubble's own layout keys.
+    """
     from services.bubble_edit import bubble_text_rect
+    from services.project_prefs import with_style
     return [
         {"bubble_id": b["bubble_id"], "text": b["text"], "translation": b["translation"], "box_coords": b["box"],
-         "line_count": b.get("line_count", 1), "layout": b.get("layout"), "text_rect": bubble_text_rect(ocr_data, b)}
+         "line_count": b.get("line_count", 1), "layout": with_style(b.get("layout"), style or {}),
+         "text_rect": bubble_text_rect(ocr_data, b)}
         for b in ocr_data.get("bubbles", [])
         if not b.get("skip") and (b.get("translation") or "").strip()
     ]
+
+
+def _style(paths: dict) -> dict:
+    from services.project_prefs import lettering_style
+    return lettering_style(paths.get("project_dir"))
 
 
 def _images(paths: dict):
@@ -54,7 +64,7 @@ def render_page(paths: dict, ocr_data: dict | None = None):
     if ocr_data is None:
         ocr_data = load_page_json(paths["json"])
     clean, original = _images(paths)
-    bubbles = _drawable(ocr_data)
+    bubbles = _drawable(ocr_data, _style(paths))
     if not bubbles:
         return clean
     return draw_translated_text_on_clean_image(clean, original, bubbles, lambda box: box)
@@ -63,7 +73,8 @@ def render_page(paths: dict, ocr_data: dict | None = None):
 def page_layout(paths: dict, ocr_data: dict | None = None) -> list[dict]:
     """
     Where each drawn bubble's text sits right now (Lettering mode draws these areas): [{bubble_id, box, manual_box,
-    manual_size, font_size, angle, align, stroke, overflow, lines}] in image coordinates.
+    manual_size, font_size, angle, align, stroke, color, auto_color, overflow, lines}] in image coordinates; font /
+    bold / italic / stroke / color already include the project's lettering style.
     """
     if ocr_data is None:
         ocr_data = load_page_json(paths["json"])
@@ -71,8 +82,9 @@ def page_layout(paths: dict, ocr_data: dict | None = None) -> list[dict]:
     return [{"bubble_id": p["bubble_id"], "box": list(p["box"]), "manual_box": p["manual_box"], "manual_size": p["manual_size"],
              "font_size": p["size"], "angle": p["angle"], "manual_angle": p["manual_angle"], "align": p["align"], "stroke": p["stroke"],
              "valign": p["valign"], "font": p["font_name"], "bold": p["bold"], "italic": p["italic"], "color": p["color"],
+             "auto_color": p.get("auto_color", False),        # white letters chosen because the area is dark
              "overflow": p["overflow"], "lines": len(p["lines"])}
-            for p in plan_page(clean, original, _drawable(ocr_data))]
+            for p in plan_page(clean, original, _drawable(ocr_data, _style(paths)))]
 
 
 def encode_image(image, fmt: str = "png", quality: int = 92) -> bytes:

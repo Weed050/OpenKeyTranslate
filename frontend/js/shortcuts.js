@@ -37,6 +37,7 @@ export const ACTIONS = [
     { id: "nextToReview", label: "Next page to review", scope: "editor", keys: "Ctrl+Shift+ArrowRight" },
     { id: "toggleMode", label: "Switch Translate / Lettering", scope: "editor", keys: "Alt+L", whileTyping: true },
     { id: "cleanArea", label: "Clean area (draw)", scope: "editor", keys: "C" },
+    { id: "toggleOriginal", label: "Show the original page / back", scope: "editor", keys: "O" },
     { id: "exportPage", label: "Export this page", scope: "editor", keys: "Alt+E", whileTyping: true },
     { id: "save", label: "Save the translation", scope: "translate", keys: "Ctrl+Enter", whileTyping: true },
     { id: "addBubble", label: "Add bubble (draw)", scope: "translate", keys: "A" },

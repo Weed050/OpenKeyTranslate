@@ -14,12 +14,13 @@ import { params, pageId, state, el, escapeHtml, showToast, openOrAlert, groupByC
 import { showPagePicker } from "./pagepicker.js";
 import { memoryEntryUrl, offerMemoryCleanup } from "./memory-links.js";
 import { initMerge, isMergePick, toggleMergePick, clearMergePicks, renderMergeBar, openMergeDialog } from "./editor-merge.js";
-import { initSplit, startSplit, cancelSplit, isSplitting, renderSplitOverlay } from "./editor-split.js";
+import { initSplit, startSplit, cancelSplit, isSplitting, renderSplitOverlay, splitDragStart } from "./editor-split.js";
 import { initLettering, isLettering, setMode, toggleMode, enterCurrentMode, checkReviewedOnLoad, renderLetteringOverlay,
          renderLetteringPanel, letteringAction, exportPage } from "./editor-lettering.js";
 import { actionFor, currentBindings, formatCombo } from "./shortcuts.js";
 import { initReview, renderReviewControls, reviewBeforeNextPage, offerUndoFromPreviousPage, reviewMode } from "./editor-review.js";
 import { initOcrDebug, renderOcrDebug, invalidateOcrDebug } from "./editor-ocrdebug.js";
+import { openReplaceDialog } from "./replace-dialog.js";
  
 const enterAt = params.get("enterAt"); // "first" | "last" | null - set when arriving via cross-page nav
 const resumeBubbleIndex = params.get("bubble"); // set by the dashboard's "Resume where I left off" link
@@ -154,6 +155,7 @@ async function init() {
         rerender: () => { renderBubbleList(); applyZoom(); renderBubbleDetail(); },
         refreshImage: refreshPageImage,
         saveIfChanged: saveIfChanged,
+        acceptOpen: saveCurrentBubble,      // the open, unchanged bubble: confirmed as when moving on (mode switch)
         status: savedStatus,
         navigate: navigateBubble,
         shortcutLabel: (id) => { const c = currentBindings()[id]; return c ? formatCombo(c) : ""; },
@@ -184,9 +186,10 @@ async function init() {
     document.getElementById("reocrBtn").addEventListener("click", runReocr);
     document.getElementById("reinpaintBtn").addEventListener("click", runReinpaint);
     document.getElementById("previewBtn").addEventListener("click", togglePreview);
+    document.getElementById("originalBtn").addEventListener("click", toggleOriginal);
     document.getElementById("addBubbleBtn").addEventListener("click", () => setDrawMode(state.drawMode === "add" ? false : "add"));
     document.getElementById("cleanAreaBtn").addEventListener("click", () => setDrawMode(state.drawMode === "clean" ? false : "clean"));
-    document.getElementById("undoCleanBtn").addEventListener("click", (e) => undoCleanup(e.shiftKey));
+    document.getElementById("undoCleanBtn").addEventListener("click", (e) => (e.shiftKey ? undoCleanup(true) : openCleanupMenu(e.currentTarget)));
     document.getElementById("orderSelect").addEventListener("change", applyAutoOrder);
     el.imageCanvas.addEventListener("mousedown", onDrawStart);
     document.getElementById("prevPageBtn").addEventListener("click", () => goToAdjacentPage(-1));
@@ -245,6 +248,7 @@ async function loadPage() {
     state.projectId = String(data.project_id);
     state.jsonPath = data.json_path;
     state.pageFolder = data.page_folder;
+    state.rawPath = data.raw_path;
     state.hasLines = !!data.has_lines;
     state.selectedIndex = null;
     state.unsavedId = null;
@@ -395,6 +399,8 @@ function renderPageTools() {
         <button class="copy-btn" id="copyJsonPathBtn" title="Copy the translation JSON's file path">Copy path</button>
         <button class="copy-btn" id="openFolderBtn" title="Open this page's folder in the file explorer">Open folder</button>
         <button class="copy-btn" id="openJsonBtn" title="Reveal the translation JSON in the file explorer">Open JSON</button>
+        <button class="copy-btn" id="replaceBtn" title="Find &amp; replace in the translations of every page of the project (e.g. a term you changed your mind about) - preview first">Find &amp; replace...</button>
+        <button class="copy-btn" id="openRawBtn" title="Reveal the ORIGINAL page file (raw folder) in the file explorer - the Original button shows it here">Show original file</button>
         <button class="copy-btn danger" id="excludePageBtn" title="Remove this page from the list without deleting the file (for stray/junk scans)">Delete page</button>
     `;
     const more = document.getElementById("toolbarMore");
@@ -411,6 +417,21 @@ function renderPageTools() {
     });
     document.getElementById("openFolderBtn").addEventListener("click", () => openOrAlert(state.pageFolder));
     document.getElementById("openJsonBtn").addEventListener("click", () => openOrAlert(state.jsonPath));
+    document.getElementById("openRawBtn").addEventListener("click", () => openOrAlert(state.rawPath));
+    document.getElementById("replaceBtn").addEventListener("click", async () => {
+        if (!(await saveIfChanged())) return;            // the open bubble's typed text first: the replace reads the files
+        const selected = state.selectedIndex === null ? null : state.bubbles[state.selectedIndex].bubble_id;
+        const typed = window.getSelection?.().toString().trim().slice(0, 80) || "";
+        openReplaceDialog(state.projectId, {
+            initialFind: typed,
+            onDone: async (keys) => {
+                if (keys.some((k) => k.startsWith(`${pageId}:`))) {      // this page changed: show the new text
+                    await reloadBubbles(selected);
+                    if (state.preview) refreshPageImage();
+                }
+            },
+        });
+    });
     document.getElementById("excludePageBtn").addEventListener("click", excludeCurrentPage);
 }
  
@@ -536,9 +557,14 @@ async function runReinpaint() {
     }
 }
 
-/** Clean page, or - with "Preview text" on - the page with the translation typeset in (rendered by the server). */
+/**
+ * Clean page, or - with "Preview text" on - the page with the translation typeset in (rendered by the server), or -
+ * with "Original" on - the raw page as it was imported (what the OCR and the cleaning started from). Same size, so
+ * the bubble outlines / Lettering boxes stay where they are.
+ */
 function pageImageSrc(bust = false) {
-    const base = state.preview ? api.pages.renderUrl(pageId) : api.pages.imageUrl(pageId);
+    const base = state.showOriginal ? api.pages.originalUrl(pageId)
+        : state.preview ? api.pages.renderUrl(pageId) : api.pages.imageUrl(pageId);
     return bust ? `${base}${base.includes("?") ? "&" : "?"}t=${Date.now()}` : base;
 }
 
@@ -546,7 +572,18 @@ function refreshPageImage() {
     el.pageImage.src = pageImageSrc(true);
 }
 
+/** "Original": the raw page instead of the clean / typeset one - a quick look at what the text looked like (a line
+ *  the OCR missed, a cleaning leftover) without opening the file. Works in both modes; the other buttons stay. */
+function toggleOriginal() {
+    state.showOriginal = !state.showOriginal;
+    document.getElementById("originalBtn").classList.toggle("primary", state.showOriginal);
+    el.imageCanvas.classList.toggle("showing-original", state.showOriginal);
+    refreshPageImage();
+    showToast(state.showOriginal ? "Original page (as imported) - Original again goes back" : "Back to the cleaned page", 2200);
+}
+
 function togglePreview() {
+    if (state.showOriginal) toggleOriginal();      // Preview text = the typeset page, not the original
     if (isLettering()) {
         showToast("Lettering always shows the text on the page - switch to Translate for the clean page", 3000);
         return;
@@ -803,7 +840,9 @@ function renderBubbleList() {
         const row = document.createElement("div");
         row.className = "bubble-row" + (index === state.selectedIndex ? " selected" : "") + (isSkipped ? " skipped" : "")
             + (isMergePick(bubble.bubble_id) ? " merge-pick" : "");
-        const preview = isSkipped
+        const translating = state.translating.has(bubble.bubble_id);
+        const preview = translating ? '<span class="translating">Translating...</span>'
+            : isSkipped
             ? `skipped (${escapeHtml(bubble.skip_reason || "")}): ${escapeHtml(bubble.text || "")}`
             : isEmpty ? '<span style="color: var(--danger);">(no AI translation)</span>' : escapeHtml(bubble.translation || bubble.text || "(empty)");
         row.innerHTML = `
@@ -875,6 +914,7 @@ function renderBubbleDetail() {
     const isEmpty = !isSkipped && !bubble.translation && !bubble.ai_translation;
     const textFixed = bubble.text_raw && bubble.text_raw !== bubble.text;
     const canSplit = state.hasLines && (bubble.line_count || 0) >= 2;
+    const translating = state.translating.has(bubble.bubble_id);   // a request runs: no stale text to edit meanwhile
     const skipWhy = { number: "only digits (page number?)", symbols: "only symbols / punctuation", manual: "skipped by you", empty: "empty text" }[bubble.skip_reason] || bubble.skip_reason || "";
  
     el.bubbleDetail.classList.remove("hidden");
@@ -906,8 +946,9 @@ function renderBubbleDetail() {
 
         <div>
             <label>Translated text${isSkipped ? ` <span class="bubble-tag warn" title="Not translated; the original pixels stay on the page">skipped - ${escapeHtml(skipWhy)}</span>` : ""}</label>
-            <textarea id="translationInput" rows="4" lang="pl" spellcheck="${isSpellcheckEnabled()}" ${isSkipped ? "disabled" : ""}
-                placeholder="${isSkipped ? "Skipped - press Translate this below to translate it" : isEmpty ? "The AI returned no translation for this bubble (see the backend log) - type your own (saved as written from scratch) or press Retranslate" : ""}">${escapeHtml(bubble.translation || "")}</textarea>
+            <textarea id="translationInput" rows="4" lang="pl" spellcheck="${isSpellcheckEnabled()}" ${isSkipped || translating ? "disabled" : ""}
+                class="${translating ? "translating" : ""}"
+                placeholder="${translating ? "Translating... (the text appears here)" : isSkipped ? "Skipped - press Translate this below to translate it" : isEmpty ? "The AI returned no translation for this bubble (see the backend log) - type your own (saved as written from scratch) or press Retranslate" : ""}">${translating ? "" : escapeHtml(bubble.translation || "")}</textarea>
         </div>
         <div id="memoryUsedPanel" class="memory-used"></div>
 
@@ -915,7 +956,7 @@ function renderBubbleDetail() {
         <div class="detail-tools">
             <button id="resetBtn" ${isSkipped ? "disabled" : ""} title="Revert to the AI's original translation (does not save)">Reset to AI</button>
             <button id="undoBtn" ${isSkipped ? "disabled" : ""} title="Revert to the value shown when this bubble was opened">Undo</button>
-            <button id="retranslateBubbleBtn" ${isSkipped ? "disabled" : ""} title="Translate only this bubble again (neighbours are sent as context; memory + glossary apply)">Retranslate</button>
+            <button id="retranslateBubbleBtn" ${isSkipped || translating ? "disabled" : ""} title="Translate only this bubble again (neighbours are sent as context; memory + glossary apply)">${translating ? "Translating..." : "Retranslate"}</button>
             <button id="reocrBubbleBtn" title="Read this bubble again as ONE crop of its whole interior - finds lines the page pass missed. The previous text stays available under 'Use raw OCR'.">Re-OCR bubble</button>
             <button id="reocrAreaBtn" title="Draw the area yourself - for a bubble whose detected box misses a line (e.g. text below the box). That exact area is read.">Set area &amp; re-OCR</button>
             <button id="moveUpBtn" ${isFirst ? "disabled" : ""} title="Move this bubble one place earlier in the reading order">Move up</button>
@@ -1222,7 +1263,7 @@ function renderCleanupButton() {
     const btn = document.getElementById("undoCleanBtn");
     const n = (state.cleanups || []).length;
     btn.classList.toggle("hidden", !n);
-    btn.textContent = n > 1 ? `Undo clean (${n})` : "Undo clean";
+    btn.textContent = n > 1 ? `Undo clean (${n}) ▾` : "Undo clean";
 }
 
 async function cleanArea(box) {
@@ -1238,20 +1279,63 @@ async function cleanArea(box) {
     }
 }
 
-async function undoCleanup(all) {
+/** index: that cleaned area (0 = oldest); null = the last one; all = every one. */
+async function undoCleanup(all, index = null) {
     if (all && !confirm(`Remove all ${state.cleanups.length} cleaned areas of this page?`)) return;
     try {
-        const result = await api.pages.removeCleanups(pageId, all);
+        const result = await api.pages.removeCleanups(pageId, all, all ? null : index);
         state.cleanups = result.cleanups;
         renderCleanupButton();
         refreshPageImage();
-        showToast(all ? "Cleaned areas removed" : "Last cleaned area removed");
+        showToast(all ? "Cleaned areas removed" : index === null ? "Last cleaned area removed" : `Cleaned area ${index + 1} removed`);
     } catch (err) {
         showToast(`Undo clean failed: ${err.message}`, 6000);
     }
 }
 
+/**
+ * "Undo clean": one cleaned area = undo it at once; several = a list (newest first) - pointing at an entry outlines
+ * that area on the page, a click removes just that one; "All" removes every one. (Before: only the last one.)
+ */
+function openCleanupMenu(anchor) {
+    const n = (state.cleanups || []).length;
+    if (n <= 1) { undoCleanup(false); return; }
+    document.getElementById("cleanupMenu")?.remove();
+    const menu = document.createElement("div");
+    menu.id = "cleanupMenu";
+    menu.className = "cleanup-menu";
+    const size = (b) => `${Math.round(Math.abs(b[2] - b[0]))} x ${Math.round(Math.abs(b[3] - b[1]))} px`;
+    menu.innerHTML = `<div class="cleanup-menu-head">Cleaned areas - point at one to see it, click to undo it</div>`
+        + state.cleanups.map((c, i) => ({ c, i })).reverse().map(({ c, i }) =>
+            `<button type="button" data-i="${i}">#${i + 1}${i === n - 1 ? " (last)" : ""} <span class="text-muted">${size(c.box)}</span></button>`).join("")
+        + `<button type="button" data-all="1" class="danger">Undo all ${n}</button>`;
+    document.body.appendChild(menu);
+    const r = anchor.getBoundingClientRect();
+    Object.assign(menu.style, { left: `${r.left}px`, top: `${r.bottom + 4}px` });
+    const mark = (box) => {
+        el.imageCanvas.querySelectorAll(".cleanup-mark").forEach((m) => m.remove());
+        if (!box) return;
+        const s = state.baseScale * state.zoomFactor;
+        const m = document.createElement("div");
+        m.className = "cleanup-mark";
+        Object.assign(m.style, { left: `${Math.min(box[0], box[2]) * s}px`, top: `${Math.min(box[1], box[3]) * s}px`,
+                                 width: `${Math.abs(box[2] - box[0]) * s}px`, height: `${Math.abs(box[3] - box[1]) * s}px` });
+        el.imageCanvas.appendChild(m);
+    };
+    const close = () => { menu.remove(); mark(null); document.removeEventListener("mousedown", outside, true); };
+    const outside = (e) => { if (!menu.contains(e.target)) close(); };
+    menu.querySelectorAll("button[data-i]").forEach((b) => {
+        const box = state.cleanups[parseInt(b.dataset.i, 10)].box;
+        b.addEventListener("mouseenter", () => mark(box));
+        b.addEventListener("mouseleave", () => mark(null));
+        b.addEventListener("click", () => { close(); undoCleanup(false, parseInt(b.dataset.i, 10)); });
+    });
+    menu.querySelector("button[data-all]").addEventListener("click", () => { close(); undoCleanup(true); });
+    document.addEventListener("mousedown", outside, true);
+}
+
 function onDrawStart(event) {
+    if (isSplitting() && !state.drawMode) { splitDragStart(event); return; }    // a box around several lines
     if (!state.drawMode || event.button !== 0) return;
     const mode = state.drawMode;
     const targetId = state.drawTarget;
@@ -1312,9 +1396,12 @@ function onDrawStart(event) {
 /** Translate the given bubbles again, one request each (the parts of a split bubble, when the user asks for it). */
 async function retranslateBubbleIds(ids) {
     let failed = 0;
+    ids.forEach((id) => state.translating.add(id));
+    renderBubbleList();
+    renderBubbleDetail();
     for (const id of ids) {
         const bubble = state.bubbles.find((b) => b.bubble_id === id);
-        if (!bubble) continue;
+        if (!bubble) { state.translating.delete(id); continue; }
         try {
             const result = await api.pages.retranslateBubble(pageId, id);
             bubble.translation = result.translation;
@@ -1324,6 +1411,9 @@ async function retranslateBubbleIds(ids) {
             failed += 1;
             console.error(`[EDITOR] retranslate ${id} failed:`, e);
         }
+        state.translating.delete(id);     // each part shows its text as soon as it is in
+        renderBubbleList();
+        if (state.bubbles[state.selectedIndex]?.bubble_id === id) renderBubbleDetail();
     }
     renderBubbleList();
     renderBubbleDetail();
@@ -1334,18 +1424,22 @@ async function retranslateCurrentBubble(silent = false) {
     const bubble = state.bubbles[state.selectedIndex];
     const edited = (bubble.translation || "") !== (bubble.ai_translation || "");
     if (!silent && edited && !confirm("You edited this translation. Retranslate and overwrite it?")) return;
-    const btn = document.getElementById("retranslateBubbleBtn");
-    if (btn) { btn.disabled = true; btn.textContent = "..."; }
+    state.translating.add(bubble.bubble_id);
+    renderBubbleList();
+    renderBubbleDetail();
     try {
         const result = await api.pages.retranslateBubble(pageId, bubble.bubble_id);
         bubble.translation = result.translation;
         bubble.ai_translation = result.ai_translation;
+        state.translating.delete(bubble.bubble_id);
         renderBubbleList();
         renderBubbleDetail();
         showToast("Bubble retranslated");
     } catch (e) {
-        alert(`Retranslate failed: ${e.message}`);
+        state.translating.delete(bubble.bubble_id);   // the old text comes back
+        renderBubbleList();
         renderBubbleDetail();
+        alert(`Retranslate failed: ${e.message}`);
     }
 }
  
@@ -1689,6 +1783,7 @@ function onGlobalKeydown(event) {
         nextPage: () => goToAdjacentPage(1),
         nextToReview: () => goToNextToReview(),
         toggleMode: () => toggleMode(),
+        toggleOriginal: () => toggleOriginal(),
         cleanArea: () => setDrawMode(state.drawMode === "clean" ? false : "clean"),
         exportPage: () => exportPage(),
         save: () => saveCurrentBubble(),

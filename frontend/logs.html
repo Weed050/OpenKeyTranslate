@@ -59,6 +59,7 @@
         .cell-meta:empty { display: none; }
         .cell-none { color: var(--text-muted); }
         .logs-time { white-space: nowrap; font-variant-numeric: tabular-nums; color: var(--text-muted) !important; }
+        .logs-temp { white-space: nowrap; font-variant-numeric: tabular-nums; }
         .logs-date { font-size: 11px; }
         /* Where: chapter on top, page + bubble number under it, "Open" as a small link on the right */
         .logs-where { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 1px 8px; align-items: baseline; }
@@ -101,6 +102,16 @@
         .logs-more { display: flex; align-items: center; gap: 10px; margin-top: 10px; }
         .logs-more select { width: auto; }
         .logs-more .text-muted { font-size: 12px; }
+        /* research summary: memory hit rate by memory size + "what if the threshold were..." */
+        .hit-rate { flex-basis: 100%; display: flex; gap: 24px; flex-wrap: wrap; align-items: flex-start;
+                    border-top: 1px solid var(--border); padding-top: 10px; }
+        .hit-table { border-collapse: collapse; font-size: 12px; font-variant-numeric: tabular-nums; }
+        .hit-table caption { text-align: left; font-weight: 600; padding-bottom: 4px; color: var(--text-primary); }
+        .hit-table th, .hit-table td { padding: 3px 10px 3px 0; text-align: right; border-bottom: 1px solid var(--border); }
+        .hit-table th:first-child, .hit-table td:first-child { text-align: left; }
+        .hit-table th { color: var(--text-muted); font-weight: 600; }
+        .hit-table th.now { color: var(--accent); }
+        .hit-note { margin: 0; font-size: 12px; max-width: 420px; }
     </style>
 </head>
 <body>

@@ -37,6 +37,7 @@ _DIGIT_ALTS = {
 # Prevents single-letter OCR noise (like a random 'C' or 'X' from background art)
 # from being validated as actual text.
 _SINGLE_CHAR_WHITELIST = {"I"} #"A"
+_BUBBLE_ENDING = re.compile(r"^[?!？！‽]{1,4}$")      # ? ! ?! !! (also full-width) - see _is_plausible_text
 
 
 def _normalize_ocr_text(text: str) -> str:
@@ -92,6 +93,12 @@ def _is_plausible_text(text: str, lang: str = "en", min_zipf: float = 2.0) -> bo
     by calculating the ratio of recognized dictionary words using Zipf frequency.
     """
     clean = text.strip()
+
+    # "?", "!", "?!", "!!" alone on the last line of a bubble: no dictionary word, yet real text - the reading of a
+    # lone "!!" (0.80, Chapter_3/page_012) was dropped here and the bubble lost its ending. A mark that is NOT part of
+    # a bubble becomes a symbols-only bubble, which is skipped (utils/ocr_textfix.skip_reason), so this costs nothing.
+    if _BUBBLE_ENDING.match(clean):
+        return True
 
     # Handle standalone single-character noise
     if len(clean) == 1:

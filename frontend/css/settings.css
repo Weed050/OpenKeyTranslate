@@ -124,7 +124,8 @@
 /* the result of Test / Models / Test the pool: a clear box under the key, coloured by outcome */
 .key-result { margin: 8px 0 0 44px; padding: 7px 10px; border-radius: var(--radius-sm); border-left: 3px solid var(--border-strong);
               background: var(--bg-panel-2); font-size: 12.5px; line-height: 1.45; overflow-wrap: anywhere; }
-#poolTestResult { margin-left: 0; }
+#poolTestResult, #embedderTestResult { margin-left: 0; }
+#embedderTestResult { margin-bottom: 10px; }
 .key-result.ok { border-left-color: var(--success); background: var(--success-soft); }
 .key-result.ok b { color: var(--success); }
 .key-result.err { border-left-color: var(--danger); background: var(--danger-soft); }

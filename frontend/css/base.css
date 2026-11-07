@@ -60,6 +60,19 @@ button.icon-btn {
   background: transparent;
   border-color: var(--border);
 }
+
+/* a button that reads as a link (secondary actions in bars and notes) */
+button.link-btn {
+  padding: 0 2px;
+  border: none;
+  background: none;
+  color: var(--text-secondary);
+  font-size: inherit;
+  text-decoration: underline;
+  text-decoration-color: var(--border-strong);
+  text-underline-offset: 2px;
+}
+button.link-btn:hover { background: none; color: var(--text-primary); text-decoration-color: currentColor; }
  
 input[type="text"], textarea, select {
   width: 100%;

@@ -238,7 +238,20 @@
   line-height: 1.2;
   text-align: center;
 }
-.detail-bottom{ margin-top: auto; }      /* Save + arrows always at the bottom of the panel (also with no bubble open) */
+/* Save + arrows always at the bottom of the panel (also with no bubble open) - and STUCK there when the panel is made
+   low: the tool buttons scroll under it instead of pushing Save and the arrows out of sight */
+.detail-bottom{
+  margin-top: auto;
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
+  margin-left: calc(-1 * var(--space-md));
+  margin-right: calc(-1 * var(--space-md));
+  padding: 8px var(--space-md) 0;
+  background: var(--bg-panel);
+  /* the solid copy below covers the panel's bottom padding, so no scrolled text shows under the bar */
+  box-shadow: 0 var(--space-md) 0 var(--bg-panel), 0 -6px 8px -8px var(--shadow);
+}
 .detail-empty{ margin: 0; font-size: 13px; }
 .detail-tools button:disabled{ opacity: .45; }
 .detail-nav-actions{ display: flex; gap: 6px; }
@@ -478,6 +491,33 @@
 }
 .split-line.picked .split-line-num { background: var(--warn); }
 .split-bar { border-color: var(--accent); }
+.draw-rect.split-drag { border-style: dashed; }
+
+/* split dialog: how the translation is divided; the manual cut = words, a click puts the cut before a word */
+.split-how { border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 6px 10px 8px; margin: 0;
+  display: flex; flex-direction: column; gap: 2px; }
+.split-how legend { font-size: 12px; color: var(--text-muted); padding: 0 4px; }
+.split-cut { margin: 2px 0 6px 22px; padding: 8px 10px; line-height: 1.9; font-size: 13px; background: var(--bg-panel-2);
+  border-radius: var(--radius-sm); user-select: none; }
+.split-cut .cut-word { cursor: pointer; padding: 1px 2px; border-radius: 3px; }
+.split-cut .cut-word.first { color: var(--text-primary); }
+.split-cut .cut-word.second { color: var(--text-primary); background: var(--accent-soft); }
+.split-cut .cut-word:hover { outline: 1px solid var(--accent); }
+.split-cut .cut-mark { color: var(--warn); font-weight: 700; padding: 0 2px; }
+
+/* a translation request is running for this bubble (Retranslate / split "Translate both parts again") */
+@keyframes okt-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
+.bubble-row .translating { color: var(--text-muted); font-style: italic; animation: okt-pulse 1.2s ease-in-out infinite; }
+#translationInput.translating { animation: okt-pulse 1.2s ease-in-out infinite; background: var(--bg-panel-2); }
+
+/* "Undo clean (n)" list + the area outlined on the page while pointing at an entry */
+.cleanup-menu { position: fixed; z-index: 60; display: flex; flex-direction: column; min-width: 220px; padding: 6px;
+  background: var(--bg-panel); border: 1px solid var(--border-strong); border-radius: var(--radius); box-shadow: 0 10px 28px var(--shadow); }
+.cleanup-menu-head { font-size: 11px; color: var(--text-muted); padding: 2px 6px 6px; max-width: 240px; }
+.cleanup-menu button { text-align: left; border: none; background: none; padding: 5px 8px; font-size: 12px; border-radius: var(--radius-sm); }
+.cleanup-menu button:hover { background: var(--accent-soft); }
+.cleanup-menu button.danger { margin-top: 4px; border-top: 1px solid var(--border); border-radius: 0; }
+.cleanup-mark { position: absolute; z-index: 5; pointer-events: none; outline: 2px solid var(--warn); background: color-mix(in srgb, var(--warn) 18%, transparent); }
 
 /* ---------- Translate / Lettering switch under the image (js/editor-lettering.js renderModeBar) ---------- */
 .mode-bar {
@@ -530,7 +570,9 @@
   border-radius: 3px 0 3px 0;
   pointer-events: none;
 }
-.letter-area.selected .letter-index { background: var(--accent); color: var(--accent-text); }
+/* the selected box: the number sits ABOVE the box, right of the corner handle - inside it covered the first letters
+   and the handle (resizing from that corner was guesswork) */
+.letter-area.selected .letter-index { top: -18px; left: 10px; border-radius: 3px; background: var(--accent); color: var(--accent-text); }
 .letter-area .lh {
   position: absolute;
   width: 10px;
@@ -587,9 +629,25 @@ body.lettering-mode .bubble-outline { display: none; }
 /* arrows on an unprocessed page (process prompt) */
 .process-nav{ display: flex; gap: 8px; justify-content: center; margin-top: 14px; }
 
-/* Lettering panel: font select + B / I toggles */
+/* Lettering panel: font picker (button + search popover, js/editor-lettering.js openFontPicker) + B / I toggles */
 .lettering-font{ display: flex; gap: 4px; align-items: center; flex: 1; min-width: 0; }
 .lettering-font select{ flex: 1; min-width: 0; max-width: 190px; height: 30px; padding: 2px 6px; font-size: 12px; line-height: normal; }
+.lettering-font .font-picker-btn{ flex: 1; min-width: 0; max-width: 220px; width: auto; height: 30px; padding: 2px 8px; font-size: 13px;
+  display: flex; align-items: center; gap: 6px; justify-content: space-between; text-align: left;
+  background: var(--bg-input); border-color: var(--border-strong); overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.font-picker-btn .chev{ font-family: system-ui, sans-serif; font-size: 10px; color: var(--text-muted); flex-shrink: 0; }
+.font-picker-pop{ position: fixed; z-index: 60; display: flex; flex-direction: column; background: var(--bg-panel);
+  border: 1px solid var(--border-strong); border-radius: var(--radius); box-shadow: 0 10px 28px var(--shadow); overflow: hidden; }
+.font-picker-search{ margin: 8px; width: auto; }
+.font-picker-list{ overflow-y: auto; padding: 0 4px 6px; }
+.font-picker-list .font-group{ padding: 8px 8px 3px; font-size: 11px; font-weight: 600; color: var(--text-muted);
+  font-family: system-ui, sans-serif; position: sticky; top: 0; background: var(--bg-panel); }
+.font-picker-list .font-opt{ padding: 5px 10px; font-size: 14px; border-radius: var(--radius-sm); cursor: pointer;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.font-picker-list .font-opt .text-muted{ font-family: system-ui, sans-serif; font-size: 11px; }
+.font-picker-list .font-opt.current{ font-weight: 600; }
+.font-picker-list .font-opt.active, .font-picker-list .font-opt:hover{ background: var(--accent-soft); color: var(--text-primary); }
+.font-picker-list .font-empty{ padding: 10px; font-size: 12px; }
 .lettering-font button{ width: 30px; padding: 4px 0; }
 .lettering-font button.selected{ background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
 .lettering-panel{ flex: 1; }          /* fills the panel: Fit / Reset + arrows sit at its bottom like in Translate mode */

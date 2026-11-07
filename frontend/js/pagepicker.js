@@ -9,6 +9,7 @@
 import { api } from "./api.js";
 import { state, el, showToast, escapeHtml, groupByChapter, compareChapterNames } from "./editor-shared.js";
 import { openImportDialog } from "./import-dialog.js";
+import { openReplaceDialog } from "./replace-dialog.js";
 import { PAGE_BADGES, activeGroups, countGroups, doneScore, groupLabel, reviewedCount, shownStage, stageBarHtml,
          stageChipsHtml, stageGroup, stageTip, trackExported, setTrackExported } from "./stages.js";
 
@@ -235,6 +236,7 @@ function bindToolbar(byChapter) {
     document.getElementById("addChaptersBtn").onclick = () => openImportDialog(showPagePicker);
     document.getElementById("openExportedBtn").onclick = () => api.projects.openExported(state.projectId).catch((e) => alert(e.message));
     document.getElementById("rescanBtn").onclick = rescanFolders;
+    document.getElementById("replaceTranslationsBtn").onclick = () => openReplaceDialog(state.projectId);
     document.getElementById("exportPagesBtn").onclick = exportTranslatedPages;
     document.getElementById("chapterViewBtn").onclick = () =>
         applyView(el.pagePickerBody.classList.contains("as-list") ? "grid" : "list");

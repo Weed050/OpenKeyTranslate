@@ -43,6 +43,34 @@ def scrub(message: str, entry: dict) -> str:
     return message.replace(key, key[:4] + "..." + key[-3:]) if len(key) >= 8 else message
 
 
+_KIND = {RateLimited: "limit / quota reached", KeyRejected: "rejected", Unreachable: "server unreachable",
+         Transient: "server error"}
+
+
+def summarize(failures: list[tuple[str, Exception]]) -> str:
+    """
+    One readable line for the user when no key could translate. The raw provider replies (Gemini's 429 is a JSON blob
+    of ~400 characters per key, repeated for every key) went straight into the editor / Memory page; they now go to the
+    backend log only, the message says what happened per key and what to do.
+    """
+    if not failures:
+        return "No key could translate."
+    kinds = {type(e) for _, e in failures}
+    labels = ", ".join(label for label, _ in failures)
+    if kinds == {RateLimited}:
+        return (f"Every translation key is at its rate limit or quota ({labels}). A per-minute limit clears in about a "
+                f"minute; a daily quota (free Gemini keys) only tomorrow - or add / switch on another key in "
+                f"Settings > Translation & API keys.")
+    if kinds == {Unreachable}:
+        return f"No translation server could be reached ({labels}) - check the internet connection (or the local server)."
+    parts = []
+    for label, e in failures:
+        kind = _KIND.get(type(e), "failed")
+        detail = str(e).split("{", 1)[0].strip().rstrip(".:")     # no raw JSON body
+        parts.append(f"{label}: {kind}" + (f" ({detail[:120]})" if kind in ("rejected", "failed") and detail else ""))
+    return "No key could translate - " + "; ".join(parts) + "."
+
+
 class KeyPool(TranslationProvider):
     def __init__(self, entries: list[dict], clients: dict, host_of, temperature: float, max_tokens: int):
         """
@@ -59,6 +87,11 @@ class KeyPool(TranslationProvider):
         self._temperature = temperature
         self._max_tokens = max_tokens
 
+    @property
+    def temperature(self) -> float:
+        """Sampling temperature of every call of this pool - logged per bubble (TranslationLog.injection_json)."""
+        return self._temperature
+
     def request_json(self, system_prompt: str, payload, schema: type[BaseModel], pin: str | None = None) -> BaseModel:
         user_message = payload if isinstance(payload, str) else json.dumps(payload, ensure_ascii=False)
 
@@ -74,7 +107,7 @@ class KeyPool(TranslationProvider):
                 raise RuntimeError(f"No translation key available - every key is rate-limited or was rejected "
                                    f"(retry in ~{self._seconds_until_any_key()}s), or none is set.")
 
-        errors: list[str] = []
+        errors: list[tuple[str, Exception]] = []
         dead_hosts: set[str] = set()
         for entry in candidates:
             host = self._host_of(entry)
@@ -85,14 +118,14 @@ class KeyPool(TranslationProvider):
                 try:
                     result = client.call(entry, system_prompt, user_message, schema, self._temperature, self._max_tokens)
                 except RateLimited as e:
-                    print(f"[KEYS] '{entry['id']}' rate-limited - next key")
+                    print(f"[KEYS] '{entry['id']}' rate-limited - next key ({scrub(str(e), entry)[:300]})")
                     self._cool_down(entry["id"], RATE_LIMIT_COOLDOWN)
-                    errors.append(f"{entry['label']}: {scrub(str(e), entry)}")
+                    errors.append((entry["label"], type(e)(scrub(str(e), entry))))
                     break
                 except KeyRejected as e:
                     print(f"[KEYS] '{entry['id']}' rejected: {scrub(str(e), entry)} - next key")
                     self._cool_down(entry["id"], REJECTED_COOLDOWN)
-                    errors.append(f"{entry['label']}: {scrub(str(e), entry)}")
+                    errors.append((entry["label"], type(e)(scrub(str(e), entry))))
                     break
                 except (Unreachable, Transient) as e:
                     if attempt < RETRIES:
@@ -102,11 +135,12 @@ class KeyPool(TranslationProvider):
                         continue
                     if isinstance(e, Unreachable) and host:
                         dead_hosts.add(host)
-                    errors.append(f"{entry['label']}: {scrub(str(e), entry)}")
+                    print(f"[KEYS] '{entry['id']}' {type(e).__name__}: {scrub(str(e), entry)[:300]}")
+                    errors.append((entry["label"], type(e)(scrub(str(e), entry))))
                     break
                 self.current_key_label = entry["label"]
                 self.current_model = entry["model"]
                 self.current_key_id = entry["id"]
                 return result
 
-        raise RuntimeError("No key could translate - " + " | ".join(errors) if errors else "No key could translate.")
+        raise RuntimeError(summarize(errors))

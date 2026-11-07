@@ -55,7 +55,7 @@
                         <button id="retranslateBtn" class="icon-btn" title="Re-run translation only. Bubbles you edited are kept (Shift+click overwrites them too)">Retranslate</button>
                         <button id="reocrBtn" class="icon-btn" title="Run OCR + inpainting again on this page. Translations of bubbles whose text did not change are kept">Re-OCR</button>
                         <button id="cleanAreaBtn" class="icon-btn" title="Draw a rectangle over a leftover trace (pale ghost of a letter, a smudge): it is painted with the plain colour around it, or filled from the surroundings on artwork. Kept by Rebuild image and Re-OCR (Esc cancels)">Clean area</button>
-                        <button id="undoCleanBtn" class="icon-btn hidden" title="Remove the last cleaned area of this page (Shift+click: remove all of them)">Undo clean</button>
+                        <button id="undoCleanBtn" class="icon-btn hidden" title="Undo a cleaned area of this page: with several, pick which one from the list (Shift+click: remove all of them)">Undo clean</button>
                         <button id="reinpaintBtn" class="icon-btn" title="Rebuild the clean image from the original (after deleting / skipping bubbles) - no OCR, no translation">Rebuild image</button>
                         <button id="addBubbleBtn" class="icon-btn" title="Draw a rectangle over text the OCR missed - it is read and added as a new bubble (Esc cancels)">Add bubble</button>
                         <select id="orderSelect" class="toolbar-select" title="Reading order of the bubbles of this page - picking one sorts the page at once (Undo in the message). There is no panel detection - fix single bubbles with Move up / down.">
@@ -67,6 +67,7 @@
                             <option value="project">Use this order for the whole project…</option>
                         </select>
                         <button id="previewBtn" class="icon-btn" title="Show the page with the translation typeset into the bubbles (the clean page is shown otherwise). Download from the page list: Export translated pages.">Preview text</button>
+                        <button id="originalBtn" class="icon-btn" title="Show the ORIGINAL page as imported (text not erased) - to see what the OCR or the cleaning missed. Click again to go back (shortcut: O).">Original</button>
                         <button id="ocrDebugBtn" class="icon-btn hidden" title="OCR debug view: every raw OCR reading with its confidence, second-chance readings, readings under the threshold, what later steps removed and the slice cuts. (This button: Settings &gt; Editor.)">OCR debug</button>
                         <span class="toolbar-sep"></span>
                         <button id="zoomOutBtn" class="icon-btn" title="Zoom out (Ctrl + scroll down)">&minus;</button>
@@ -168,6 +169,7 @@
                             <button id="addChaptersBtn" class="primary">Import new chapters...</button>
                             <button id="exportPagesBtn" title="Write pages as image files - with the translation, clean or both; PNG or JPG; into the project's exported folder or another one, optionally as one ZIP (selected chapters, or all when none is ticked)">Export pages...</button>
                             <button id="openExportedBtn" title="Open the project's exported folder (project folder > exported) in the file explorer">Exported files</button>
+                            <button id="replaceTranslationsBtn" title="Find &amp; replace in the translations of every page of the project (e.g. a term you changed your mind about) - preview first">Find &amp; replace...</button>
                             <button id="rescanBtn" title="Compare the project folders on disk with the database right now (new / missing page files, wrong statuses)">Rescan folders</button>
                             <button id="deleteSelectedChaptersBtn" class="danger" disabled>Delete selected</button>
                             <label class="checkbox-label">

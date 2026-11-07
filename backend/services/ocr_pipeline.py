@@ -77,7 +77,7 @@ from utils.marker import (
     correct_boxes_by_angle, remove_marker, pad_crop_right
 )
 from utils.text_utils import parse_ocr_results, passes_text_threshold, is_any_marker
-from utils.ocr_rescue import rescue_rejected, extend_tilted
+from utils.ocr_rescue import rescue_rejected, extend_tilted, unflip_upside_down
 
 # Suppress PaddleOCR info and warnings; log errors only
 logging.getLogger("ppocr").setLevel(logging.ERROR)
@@ -269,6 +269,7 @@ def _ocr_slice(crop_original: np.ndarray, slice_id: int, y: int, marker_records:
             return _ocr_slice_with_marker(crop_original, slice_id, y, marker_records)
         angle, turned = info
     items = parse_ocr_results(result, slice_id, TEXT_THRESHOLD)
+    unflip_upside_down(turned, result, items, ocr)          # a level word the line classifier turned 180 deg ("W,1" = I'M)
     items += rescue_rejected(turned, result, ocr, parse_ocr_results, TEXT_THRESHOLD, slice_id, items)   # boxes in `turned`
     items = extend_tilted(turned, items, ocr, parse_ocr_results, TEXT_THRESHOLD, slice_id)               # diagonal lines read whole
     lost = rejected_readings(result, slice_id) if rejected is not None else []
@@ -463,6 +464,7 @@ def ocr_region(image: np.ndarray, region) -> list[dict]:
     result = ocr.predict(crop)
     angle, turned = (orientation_of(result) or (0, crop)) if ocr.detect_rotation() else (0, crop)
     items = parse_ocr_results(result, -1, TEXT_THRESHOLD)
+    unflip_upside_down(turned, result, items, ocr)
     items += rescue_rejected(turned, result, ocr, parse_ocr_results, TEXT_THRESHOLD, -1, items)
     items = extend_tilted(turned, items, ocr, parse_ocr_results, TEXT_THRESHOLD, -1)
     turn_boxes_back(items, angle, turned.shape)          # orientation step on: boxes back into the crop
