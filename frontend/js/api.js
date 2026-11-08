@@ -95,8 +95,11 @@ export const api = {
             method: "POST", body: detectRotation === null ? undefined : JSON.stringify({ detect_rotation: detectRotation }),
         }),
         reinpaint: (pageId) => request(`/pages/${pageId}/reinpaint`, { method: "POST" }),
-        // manual "Clean area" rectangles (stored in the page JSON, kept by Rebuild image / Re-OCR)
-        addCleanup: (pageId, box) => request(`/pages/${pageId}/cleanups`, { method: "POST", body: JSON.stringify({ box }) }),
+        // manual clean-tool rectangles (stored in the page JSON, kept by Rebuild image / Re-OCR);
+        // mode: "clean" (marks inside) | "fill" (background colour) | "redraw" (AI model, when installed);
+        // shape: "rect" | "ellipse" (only the ellipse inside the box)
+        addCleanup: (pageId, box, mode = "clean", shape = "rect") =>
+            request(`/pages/${pageId}/cleanups`, { method: "POST", body: JSON.stringify({ box, mode, shape }) }),
         // all = every cleaned area; index = that one (0 = the oldest); neither = the last one
         removeCleanups: (pageId, all = false, index = null) =>
             request(`/pages/${pageId}/cleanups?all=${all}${index === null ? "" : `&index=${index}`}`, { method: "DELETE" }),
@@ -105,6 +108,8 @@ export const api = {
         // box (optional) = [x1, y1, x2, y2] the user drew: that exact area is read instead of the detected bubble
         reocrBubble: (pageId, bubbleId, box = null) =>
             request(`/pages/${pageId}/bubbles/${bubbleId}/reocr`, { method: "POST", body: box ? JSON.stringify({ box }) : undefined }),
+        // right after a re-read only: text, box and lines of the bubble come back (409 after any other page edit)
+        undoReocrBubble: (pageId, bubbleId) => request(`/pages/${pageId}/bubbles/${bubbleId}/reocr/undo`, { method: "POST" }),
         reorderBubbles: (pageId, payload) =>
             request(`/pages/${pageId}/bubbles/reorder`, { method: "POST", body: JSON.stringify(payload) }),
         addBubble: (pageId, box) => request(`/pages/${pageId}/bubbles`, { method: "POST", body: JSON.stringify({ box }) }),
@@ -149,6 +154,11 @@ export const api = {
         // Settings > Storage & uninstall: places + sizes; delete only caches / logs / spare copies (by item id)
         storage: () => request("/system/storage"),
         storageDelete: (id) => request("/system/storage/delete", { method: "POST", body: JSON.stringify({ id }) }),
+        // optional AI redraw model (Settings > Add-ons): state / start the one-time download / stop it
+        lama: () => request("/system/lama"),
+        lamaInstall: () => request("/system/lama/install", { method: "POST" }),
+        lamaCancel: () => request("/system/lama/cancel", { method: "POST" }),
+        changelog: () => request("/system/changelog"),
         openPath: (path) => request("/system/open-path", { method: "POST", body: JSON.stringify({ path }) }),
         tailLog: (lines = 200, errorsOnly = false) =>
             request(`/system/tail-log?lines=${lines}&errors_only=${errorsOnly}`),

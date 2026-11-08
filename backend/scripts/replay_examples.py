@@ -3,7 +3,7 @@
 
 """
 Offline replay for the thesis experiment, part A: which examples from the user's corrections help the model?
-
+cm
 Why a separate script: the app's live A/B only fires when memory has a hit (1.8% of bubbles in the logs), so it can
 not answer "would examples given MORE often still help?". This script translates already REVIEWED pages again in
 several variants that differ ONLY in the examples sent with each bubble, and compares every output with the user's

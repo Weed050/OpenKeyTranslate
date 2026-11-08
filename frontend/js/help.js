@@ -11,12 +11,90 @@
  * Entry points: "Help" in the sidebar footer, the "?" key (when not typing), and window.oktHelp.open(topicId) - the
  * editor's bubble list header has a "?" that opens the "markers" topic. Without a topic it opens the one that fits
  * the current page / view.
+ *
+ * The topics are grouped by the part of the app (GROUPS = folding groups in the list on the left; the group of the
+ * open topic unfolds). Inside a topic everything is shown (a per-line "more" was tried and dropped - too fiddly).
+ * Examples are SYNTHETIC drawings (inline SVG made here) - never pages of a real comic.
  */
 (function () {
     const mark = (kind) => `<span class="status-mark ${kind}"></span>`;
     const tag = (text, warn) => `<span class="help-tag${warn ? " warn" : ""}">${text}</span>`;
     const key = (k) => `<kbd>${k}</kbd>`;
     const items = (rows) => `<dl class="help-list">${rows.map(([term, text]) => `<dt>${term}</dt><dd>${text}</dd>`).join("")}</dl>`;
+
+    /* ---------- synthetic before / after pictures (a white "page" with black ink - the same in both themes) ---------- */
+    const INK = "#1d1d1f";
+    const svg = (body, w = 120, h = 90) =>
+        `<svg class="help-ex-svg" viewBox="0 0 ${w} ${h}" aria-hidden="true"><rect width="${w}" height="${h}" fill="#fff"/>${body}</svg>`;
+    const txt = (x, y, s, size = 8.5) =>
+        `<text x="${x}" y="${y}" font-size="${size}" font-family="Arial, sans-serif" font-weight="700" fill="${INK}" text-anchor="middle">${s}</text>`;
+    const oval = (cx = 60, cy = 45, rx = 46, ry = 32, fill = "#fff") =>
+        `<ellipse cx="${cx}" cy="${cy}" rx="${rx}" ry="${ry}" fill="${fill}" stroke="${INK}" stroke-width="2"/>`;
+    const tone = `<defs><pattern id="hx-tone" width="4" height="4" patternUnits="userSpaceOnUse"><circle cx="2" cy="2" r="0.9" fill="#777"/></pattern></defs>
+        <rect width="120" height="90" fill="url(#hx-tone)"/>`;
+    const dashed = (x, y, w, h, colour = "#2f7de1") =>
+        `<rect x="${x}" y="${y}" width="${w}" height="${h}" fill="none" stroke="${colour}" stroke-width="1.4" stroke-dasharray="3 2"/>`;
+    /** panels: [{label, svg}] side by side; arrow = "before -> after" (else a plain comparison) */
+    const example = (caption, panels, arrow = false) => `
+        <figure class="help-example">
+            <div class="help-ex-row">${panels.map((p) => `<div class="help-ex-panel">${p.svg}<span>${p.label}</span></div>`)
+                .join(arrow ? '<span class="help-ex-arrow">&rarr;</span>' : "")}</div>
+            <figcaption>${caption}</figcaption>
+        </figure>`;
+
+    const EXAMPLES = {
+        // Settings > OCR: "Also erase text the OCR missed inside white bubbles"
+        missedText: example("The OCR read two of three lines (blue box). <b>Off</b>: only what it read is erased, the third line stays on the page. <b>On</b>: dark marks left inside the white bubble are erased too - never its outline.", [
+            { label: "Page + OCR box", svg: svg(oval() + txt(60, 36, "WAIT FOR") + txt(60, 48, "ME, I'M") + txt(60, 60, "COMING!") + dashed(28, 28, 64, 23)) },
+            { label: "Off", svg: svg(oval() + txt(60, 60, "COMING!")) },
+            { label: "On", svg: svg(oval()) },
+        ]),
+        // Settings > OCR: cleaning method Letters / Rectangle
+        cleaningMethod: example("A bubble on a screentone, the text close to its outline. <b>Letters</b> erases only the letters. <b>Rectangle</b> fills the text box - it cuts into the outline and leaves a white patch on the tone.", [
+            { label: "Page", svg: svg(tone + oval(60, 45, 40, 30) + txt(60, 40, "HEY, LISTEN", 9) + txt(60, 53, "TO ME!!", 9)) },
+            { label: "Letters", svg: svg(tone + oval(60, 45, 40, 30)) },
+            { label: "Rectangle", svg: svg(tone + oval(60, 45, 40, 30) + `<rect x="22" y="31" width="76" height="27" fill="#fff"/>`) },
+        ]),
+        // Settings > OCR: bubble order
+        bubbleOrder: example("The same page, numbered for a Japanese manga (right to left: the right bubble first) and for a western comic (left to right). The number = the order the AI reads the bubbles in.", [
+            { label: "Right to left", svg: svg(oval(30, 26, 22, 14) + oval(90, 22, 22, 14) + oval(60, 66, 30, 15)
+                + txt(90, 25, "1", 10) + txt(30, 29, "2", 10) + txt(60, 69, "3", 10)) },
+            { label: "Left to right", svg: svg(oval(30, 26, 22, 14) + oval(90, 22, 22, 14) + oval(60, 66, 30, 15)
+                + txt(30, 29, "1", 10) + txt(90, 25, "2", 10) + txt(60, 69, "3", 10)) },
+        ]),
+        // Editor toolbar: clean tools on a box border
+        cleanTools: example("A caption box with leftover specks; the dashed area crosses its border. <b>Clean area</b> removes only the specks - the border stays. <b>Fill with background</b> paints the whole area in the colour around it, so the piece of border inside goes too. <b>Ellipse</b> (Shape) touches only the oval inside the area - its corners are safe.", [
+            { label: "Page + area", svg: svg(`<rect x="14" y="22" width="92" height="50" fill="#fff" stroke="${INK}" stroke-width="2"/>`
+                + `<circle cx="40" cy="30" r="1.6" fill="${INK}"/><circle cx="52" cy="28" r="1.3" fill="${INK}"/><rect x="62" y="27" width="5" height="2" fill="${INK}"/>`
+                + dashed(32, 14, 44, 22, "#e0752f")) },
+            { label: "Clean area", svg: svg(`<rect x="14" y="22" width="92" height="50" fill="#fff" stroke="${INK}" stroke-width="2"/>`) },
+            { label: "Fill with background", svg: svg(`<rect x="14" y="22" width="92" height="50" fill="#fff" stroke="${INK}" stroke-width="2"/><rect x="32" y="14" width="44" height="22" fill="#fff"/>`) },
+        ]),
+        // Lettering / Settings > Text & fonts: follow the bubble's shape
+        bubbleShape: example("The same translation in an oval bubble. <b>Off</b>: the text fits a rectangle inside the oval. <b>On</b>: every line is as wide as the bubble at its height - short lines at the top and bottom, a long one in the middle, so the letters can be bigger.", [
+            { label: "Off", svg: svg(oval(60, 45, 50, 36) + txt(60, 35, "NIE SĄDZIŁEM,", 7) + txt(60, 44, "ŻE JESZCZE", 7) + txt(60, 53, "WRÓCISZ!", 7)) },
+            { label: "On", svg: svg(oval(60, 45, 50, 36) + txt(60, 33, "NIE", 9.5) + txt(60, 46, "SĄDZIŁEM, ŻE", 9.5) + txt(60, 59, "WRÓCISZ!", 9.5)) },
+        ]),
+        // Settings > correction memory: the similarity threshold as a scale
+        threshold: `<figure class="help-example">${svg(`
+            <line x1="10" y1="40" x2="230" y2="40" stroke="#999" stroke-width="2"/>
+            ${[0, 0.25, 0.5, 0.75, 1].map((v) => `<line x1="${10 + v * 220}" y1="36" x2="${10 + v * 220}" y2="44" stroke="#999"/>${txt(10 + v * 220, 56, v, 7)}`).join("")}
+            <rect x="${10 + 0.67 * 220}" y="22" width="${0.33 * 220}" height="36" fill="#2f9e5a" opacity=".12"/>
+            <line x1="${10 + 0.67 * 220}" y1="18" x2="${10 + 0.67 * 220}" y2="62" stroke="#2f9e5a" stroke-width="2" stroke-dasharray="3 2"/>
+            ${txt(10 + 0.67 * 220, 14, "threshold 0.67", 7)}
+            <circle cx="${10 + 0.43 * 220}" cy="40" r="4" fill="#999"/>${txt(10 + 0.43 * 220, 74, "0.43: WHERE IS THE ESCAPE POD?", 6.5)}
+            <circle cx="${10 + 0.77 * 220}" cy="40" r="4" fill="#2f9e5a"/>${txt(10 + 0.77 * 220, 84, "0.77: I WON'T LET YOU GET AWAY!", 6.5)}
+            `, 240, 92)}<figcaption>Stored line: <i>I WON'T LET YOU ESCAPE!</i> A new line right of the threshold gets that correction as an example; one left of it does not. Lower threshold = the green area grows: more examples, also less fitting ones.</figcaption></figure>`,
+    };
+
+    /* Topic groups = the parts of the app, in the list on the left (a group folds; the group of the open topic is open) */
+    const GROUPS = [
+        { title: "Start", topics: ["start", "keys"] },
+        { title: "Projects & pages", topics: ["pages", "stages"] },
+        { title: "Editor", topics: ["markers", "bubble", "toolbar", "lettering", "saving"] },
+        { title: "Memory & glossary", topics: ["memory", "glossary"] },
+        { title: "Settings & history", topics: ["settings", "settings-memory", "ab", "settings-ocr"] },
+    ];
 
     const TOPICS = [
         {
@@ -95,12 +173,12 @@
             id: "bubble", title: "Editor: bubble panel",
             html: items([
                 ["Delete", "Removes the bubble from the page (OCR false positives). The clean image is rebuilt without it."],
-                ["Edit (original text)", "Fix an OCR mistake in the English source. Use raw OCR undoes the automatic cleanup."],
+                ["Edit (original text)", "Fix an OCR mistake in the English source. Use raw OCR undoes the automatic cleanup. Afterwards a dialog shows the text before and now and asks: <b>Keep the translation</b> (the default, on the right) or <b>Translate again</b> (a yellow note in the panel then reminds you that the text changed; <b>It fits</b> hides it). \"Do this every time\" in the dialog, or Settings &gt; Editor, stops the question. A memory correction of this bubble that was not used yet moves to the fixed English line, so the memory does not keep the misread one."],
                 ["Retranslate", "Translates only this bubble again; its neighbours are sent as context, memory and glossary apply. Asks first if you edited it."],
-                ["Re-OCR bubble", "Reads the whole bubble interior again as one crop - finds lines the page pass missed."],
-                ["Set area &amp; re-OCR", "Draw the area yourself when the detected box misses a line; exactly that area is read."],
+                ["Re-OCR bubble", "Reads the whole bubble interior again as one crop - finds lines the page pass missed. Same text = a message at the top (the translation is kept). A different text = a dialog with <b>Before</b> / <b>Now</b> (changed words marked) and three answers: <b>Keep the translation</b> (the default), <b>Translate again</b>, or <b>Put the old text back</b> (undoes the re-read: text, box and lines)."],
+                ["Set area &amp; re-OCR", "Draw the area yourself when the detected box misses a line; exactly that area is read. The same dialog as Re-OCR bubble afterwards."],
                 ["Move up / Move down", "Changes the bubble's place in the reading order."],
-                ["Merge with &uarr; / &darr;", `Joins the bubble with its neighbour in the list. Any bubbles: ${key("Shift")}+click them on the page or in the list, then <b>Merge...</b> (preview with the order first).`],
+                ["Merge with &uarr; / &darr;", `Joins the bubble with its neighbour in the list. Any bubbles: ${key("Shift")}+click them on the page or in the list, then <b>Merge...</b> (preview with the order first). The merged bubble is not translated again unless you tick it in the dialog (ticked by default: Settings &gt; Editor).`],
                 ["Split...", "The OCR glued two bubbles (or map labels) together: click the lines of the new bubble on the page - or drag a box around several of them (small text at a low zoom). The dialog asks what happens to the translation: <b>Divide automatically</b> (by sentences; one sentence: at a comma or conjunction, BUT &rarr; ALE - a part that could not be divided cleanly is tagged <b>check translation</b>), <b>I choose where to cut</b> (click the word the second part starts with - no request, no tag) or <b>Translate both parts again</b> (one request each; the parts show <i>Translating...</i> meanwhile). <b>Move the picked lines to</b> an existing bubble instead: for a line the OCR put into the wrong bubble - it goes there with its part of the translation."],
                 ["Skip", "Do not translate this bubble and put the original pixels back (page numbers, junk)."],
                 ["Spellcheck", "Polish spellcheck in the text box, on / off."],
@@ -121,13 +199,14 @@
                 ["Original", "Shows the ORIGINAL page as imported (text not erased) instead - to see what a missed line or a cleaning leftover looked like. Again (or its shortcut) goes back; the outlines stay in place."],
                 ["OCR debug", "Only when switched on in Settings &gt; Editor. Draws what the OCR saw over the page: kept readings (green = confidence 0.95+, amber = lower), second-chance readings (purple), readings under the threshold (red, not used), readings / lines / bubbles removed by a later step (orange: duplicates, noise, ignore patterns, lines cut by a slice edge) and the slice cuts of a tall page (blue). Hover a box outline for its text and score; the panel switches layers and lists everything not used - click an entry to jump to it. Pages read before this version show only the kept readings until a Re-OCR."],
                 ["Add bubble", `Draw a rectangle over text the OCR missed; it is read and added as a new bubble. ${key("Esc")} cancels.`],
-                ["Order", "Reading order of the page (top to bottom, right to left, left to right): picking one renumbers the bubbles at once, Undo in the message. The last two entries use it for the whole chapter / project - \"whole project\" is also remembered for pages processed later (prefetched pages, new chapters). Fix single bubbles with Move up / down. Re-OCR keeps the page's order."],
-                ["Rebuild image", "Rebuilds the clean image from the original (after deleting / skipping bubbles) - no OCR, no translation."],
-                ["Clean area / Undo clean", `Draw a rectangle over a leftover trace (pale letter ghost, smudge): painted with the plain colour around it, or filled from the surroundings on artwork. Kept by Rebuild image and Re-OCR. Undo clean removes it; with several, a list opens - point at an entry to see its area on the page, click to undo just that one (${key("Shift")}+click: all).`],
+                ["Order", "At the end of the toolbar (the first thing to move to a second row in a narrow window). Reading order of the page (top to bottom, right to left, left to right): picking one renumbers the bubbles at once, Undo in the message. The last two entries use it for the whole chapter / project - \"whole project\" is also remembered for pages processed later (prefetched pages, new chapters). Fix single bubbles with Move up / down. Re-OCR keeps the page's order."],
+                ["Rebuild image", "Makes the clean page again from the original image: erases the text of every bubble that is not skipped (from the text lines saved by the OCR) and applies your cleaned areas. For when the clean page does not match the bubbles any more - after deleting or skipping bubbles, or after an update of the cleaning. No OCR, no translation, nothing else changes. Pages from before line data was saved need one Re-OCR first."],
+                ["Clean area / Undo clean", `Draw a rectangle over a leftover trace. The button keeps the last tool you picked; the arrow next to it lists them: <b>Clean area</b> removes the marks inside (letter remains, ghosts) - box borders and drawing crossing its edge stay; <b>Fill with background</b> paints the whole rectangle with the colour around it; <b>Redraw (AI)</b> (only after installing the optional model in Settings &gt; Add-ons) redraws the drawing under text on artwork - a few seconds, never used by itself. <b>Shape</b> at the bottom of that list: <b>Rectangle</b> or <b>Ellipse</b> - with Ellipse only the oval inside the dragged box is touched and its colour is taken right outside the oval, so in an oval or spiky bubble the corners do not paint over the outline (the button then shows &#9711;). Kept by Rebuild image and Re-OCR. Undo clean removes it; with several, a list opens - point at an entry to see its area on the page, click to undo just that one (${key("Shift")}+click: all).`],
                 ["&minus; / +", `Zoom (also ${key("Ctrl")}+scroll).`],
                 ["More &#9662;", "Fit width / Fit height, Reset layout, and the page tools: copy the JSON path, open the folder, delete (exclude) the page."],
                 ["Reset layout", "Puts the panel sizes back to default."],
-            ]),
+                ["Messages", "Short messages appear at the top, under this toolbar. They stay while the mouse is over them; &times; closes one."],
+            ]) + `<h4>Example: the clean tools</h4>${EXAMPLES.cleanTools}`,
         },
         {
             id: "lettering", title: "Editor: Lettering mode",
@@ -144,7 +223,7 @@
                 ["Next page", "In Lettering, a page with bubbles not reviewed yet (no edited / accepted marker) opens in Translate - reviewing comes first. In Translate nothing switches by itself."],
                 ["Export page", "Writes this page into the project folder, sub-folder exported - with the options of the last export on the pages list. \"Show file\" in the message selects it in Explorer; \"View export\" opens the last exported image (or says the page has not been exported yet)."],
                 ["Accept page, Layout checked, Next page: ...", "The page review controls in the same bar (both modes) - see <b>Page stages &amp; review</b>."],
-            ]),
+            ]) + `<h4>Example: follow the bubble's shape</h4>${EXAMPLES.bubbleShape}`,
         },
         {
             id: "keys", title: "Keyboard & mouse",
@@ -266,13 +345,119 @@
                 ["Appearance", "Color scheme (System / Light / Dark), separate theme colors for the light and the dark look, and how strongly they tint the surfaces. Stored in this browser only."],
                 ["Translation &amp; API keys", "One list of keys, used from the top: when a key hits its limit or fails, the next one switched on takes over - Groq, Gemini and OpenAI-compatible keys can be mixed. Per key: on / off, order (&#9650; &#9660;), provider, model (empty = the provider default; <b>Models</b> asks the server which ones the key can use) and the key itself, never shown again in full. <b>Test</b> translates one line through that key only and shows the result in a box under it (works / limit reached / rejected / no connection). <b>Test the pool</b> = exactly as a page would be translated."],
                 ["OpenAI-compatible (beta)", "Any server with the OpenAI chat API: OpenRouter, Mistral, DeepSeek, OpenAI, or a local Ollama / LM Studio (no key needed). Give the server address (presets in the field, it ends with /v1) and a model name. Not tested with every server - report problems on GitHub. Changing the address of a saved key asks for the key again: a key is never sent to a new address silently."],
-                ["A/B experiment and keys", "Both versions of a bubble (with and without memory) always go through the same key and model. If that key is busy at that moment, the pair is skipped instead of comparing two models."],
-                ["OCR engine", "CPU or GPU, the text detection model (mobile = about 3x faster on a CPU), CPU threads, oneDNN - after a restart of the backend. If the OCR crashes: python scripts/ocr_selftest.py (its last report is shown there)."],
-                ["Storage &amp; uninstall", "Every folder the app uses with its size: your work (projects, database, settings - only shown, never deleted from the app), model caches, logs, old copies of the settings file, data set aside by an import, the program. <b>Check sizes</b> counts them; caches and logs can be deleted there (models are downloaded again on the next start). <i>Uninstalling</i> lists the folders to delete by hand after closing the app."],
-                ["History", "What the AI translated: when, where (chapter, page, bubble - Open jumps there), the hints it got (memory examples, glossary) and what the bubble says now (edited / accepted / accepted with page / not reviewed). <i>Temp.</i> = the temperature of the call (0.4* = filled in afterwards for logs from before 07.11.2026, when it wasn't logged yet). The column names stay on top while you scroll. A memory example shows EN and your PL; for a corrected one the change from the AI text is marked (struck out = the AI text you replaced). Filters: changed by you, not reviewed, chapter, search. <i>Research view</i> adds the A/B columns of the memory experiment. Read only."],
-                ["History: sorting", "Click Time, Where, Source, In the bubble now, Hints or Temp.; again = reverse. By time the rows are grouped by day, by Where by chapter (then page, then bubble) - click a group row to fold it, <b>Fold all</b> for all. Rows at a time (50 / 100 / 250 / all) only says how many are drawn at once: the filters, sorting and the summary always use the whole history."],
+                ["A/B experiment and keys", "Both versions of a bubble (with and without memory) always go through the same key and model. If that key is busy at that moment, the pair is skipped instead of comparing two models. What the experiment is: <b>A/B experiment</b>."],
+                ["OCR engine", "CPU or GPU, the text detection model (mobile = about 3x faster on a CPU), CPU threads, oneDNN - after a restart of the backend. If the OCR crashes: python scripts/ocr_selftest.py (its last report is shown there). Explained: <b>Settings: OCR</b>."],
+                ["Add-ons", "Optional downloads that are not needed for translating: <b>Redraw (AI)</b> (big-LaMa, 196 MB). Install shows a progress bar and can be cancelled; Remove deletes it again."],
+                ["Backup &amp; moving", "One zip with the projects, database, settings and your fonts; ticked: API keys, models, logs and this browser's preferences (shortcuts, appearance, editor switches). Import puts everything in place on the other computer. <i>Moving between a PC and a laptop - what to check</i> (unfold it there): work on one computer at a time (import replaces, nothing is merged), the same app version, GPU setting, Windows fonts."],
+                ["Storage &amp; uninstall", "Every folder the app uses with its size: your work (projects, database, settings - only shown, never deleted from the app), model caches, add-ons, logs, old copies of the settings file, data set aside by an import, the program. <b>Check sizes</b> counts them; <b>Folders and sizes</b> folds the whole list, a group title folds one group. Caches and logs can be deleted there (models are downloaded again on the next start). <i>Uninstalling</i> lists the folders to delete by hand after closing the app."],
+                ["Keyboard shortcuts", "Kept in this browser. The full Backup takes them when its box for browser preferences is ticked (the default); <b>Export…</b> / <b>Import…</b> here move only the shortcuts, e.g. to another browser (a key that collides there stays at its default)."],
+                ["Application log", "Settings &gt; About &gt; <b>View recent</b> (then <b>Hide log</b>): the last lines of today's log, newest at the top. Each line has its level: INFO (normal work, also the libraries' notes and the page requests), WARNING (a library warns, nothing failed) and ERROR (something failed) - <i>Errors only</i> shows just those."],
+                ["What's new", "Settings &gt; About, next to the version: the changes of every version, the newest one unfolded (click a version to unfold it)."],
+                ["Sidebar", "The logo / name and <b>Projects</b> above the list go to the start page. With many projects the list scrolls on its own and gets a <i>Find a project</i> field."],
+                ["History", "What the AI translated: when, where (chapter, page, bubble - Open jumps there), the hints it got (memory examples, glossary) and what the bubble says now (edited / accepted / accepted with page / not reviewed). The column names stay on top while you scroll. A memory example shows EN and your PL; for a corrected one the change from the AI text is marked (struck out = the AI text you replaced). Filters: changed by you, not reviewed, chapter, search. <i>Research view</i> adds the A/B columns of the memory experiment, <i>Model</i> (+ key) and <i>Temperature</i> of the call (\"filled in\" = logs from before 07.11.2026, value entered afterwards), and the summary: how often the memory helped at each memory size. <b>Columns</b> shows or hides columns - the normal and the research view keep their own set. Read only."],
+                ["History: sorting", "Click Time, Where, Source, In the bubble now, Hints, Model or Temperature; again = reverse. By time the rows are grouped by day, by Where by chapter (then page, then bubble) - click a group row to fold it, <b>Fold all</b> for all. Rows at a time (50 / 100 / 250 / all) only says how many are drawn at once: the filters, sorting and the summary always use the whole history."],
                 ["Memory page", "Click a column name (Translation, Type, Used, Saved; on the Glossary tab English, Polish, Used, Source, Added) to sort, again to reverse. Long lists show 200 entries, then Show more."],
             ]),
+        },
+        {
+            id: "settings-memory", title: "Settings: correction memory",
+            html: `
+                <p>The memory stores pairs <i>English line &rarr; your Polish</i> from the bubbles you corrected. When a new line is
+                similar enough, up to N such pairs are sent to the AI with it as examples ("translate like this"). Only the
+                text goes to the provider.</p>
+                ${EXAMPLES.threshold}
+                ${items([
+                    ["Similarity threshold", `How alike a stored line must be (0-1). Example: stored <i>"I WON'T LET YOU ESCAPE!"</i>;
+                        new <i>"I WON'T LET YOU GET AWAY!"</i> scores 0.77 and is used at 0.67; <i>"WHERE IS THE ESCAPE POD?"</i>
+                        scores 0.43 and is not (measured with the app's model). Lower = more examples, also less fitting ones.`],
+                    ["Max memory hints per bubble", "How many of the most similar pairs go with one bubble (1-3). More = a longer request and more chance of a misleading example."],
+                    ["Minimum words in the translation", `A correction shorter than this is not stored (for lines longer than the short-phrase limit).
+                        "TAK." or "CO?!" says little as an example of a whole sentence.`],
+                    ["Short phrase limit", `Lines of this many words or fewer (<i>"WHAT?!"</i>, <i>"HMPH"</i>, sound effects) are matched only by
+                        the same text, not by similarity - similarity of two words is noise.`],
+                    ["Content-word overlap", `A similar line must also share this share of real words (not "the", "a", "is"),
+                        unless it is 0.90 similar or more. Stops "same topic, different line" matches: <i>"MY LEG HURTS!"</i> and
+                        <i>"YOUR ARM IS BLEEDING!"</i> are both about wounds but share no word, so at 25 one is never an example for the other.`],
+                    ["Allow approving unchanged translations", `Normally only translations you <b>changed</b> are stored. With this on, the editor
+                        shows <b>Approve to memory</b>: it stores an AI translation you think is perfect, unchanged. Off by default - the AI
+                        would then learn from its own text, and the study measures the effect of YOUR corrections.`],
+                    ["A/B experiment", "See <b>A/B experiment</b> - a research switch, off by default."],
+                    ["Glossary post-edit", "After translating, every glossary term is checked; a bubble that misses one gets one short extra request that only puts the term in."],
+                    ["Suggest glossary terms", "After you save a correction, a word you fixed the same way at least twice is offered for the glossary."],
+                    ["Keep ALL-CAPS", "An ALL-CAPS English line gets an ALL-CAPS Polish translation (manga lettering)."],
+                ])}`,
+        },
+        {
+            id: "ab", title: "A/B experiment",
+            html: `
+                <p>An <b>A/B experiment</b> compares two versions of the same thing that differ in one detail only. Here: does the
+                correction memory make the translation better?</p>
+                ${items([
+                    ["Test version (B)", "The bubble is translated WITH the memory examples - this is the translation you see and edit."],
+                    ["Control version (A)", `The same bubble, the same request, the same key and model - only WITHOUT the memory examples.
+                        It is translated in the background, never shown in the bubble, only logged.`],
+                    ["What is compared", `Your final text against both: if it is closer to the version with memory, the memory helped.
+                        History &gt; Research view shows both side by side and the summary.`],
+                    ["Only bubbles with a match", "A bubble without a similar memory entry has nothing to compare - it is translated once, as usual."],
+                    ["Cost", "One more request for each matched bubble (free keys reach their limit sooner). <b>Sample rate</b> 0.3 = only about every third page does it."],
+                    ["Off", `Nothing changes in the translation itself - only the control requests stop. The sample rate stays as you set it
+                        and is used again when you switch the experiment back on. Off by default for new installations.`],
+                ])}
+                <p class="text-muted">It is for the study of this program (does the memory help?) - a normal user can leave it off.</p>`,
+        },
+        {
+            id: "settings-ocr", title: "Settings: OCR",
+            html: `
+                <p><b>OCR</b> (optical character recognition) turns the page image into text. OpenKeyTranslate uses PaddleOCR on
+                this computer in two steps: <b>detection</b> finds the rectangles where text lines are, <b>recognition</b> reads
+                the letters inside them. Then the app groups the lines into bubbles, cleans the text and erases it from the image.</p>
+                <h4>OCR engine</h4>
+                ${items([
+                    ["Device", "Automatic = the graphics card (NVIDIA, CUDA build of Paddle) when there is one, else the processor. The GPU is several times faster."],
+                    ["Text detection model", `<b>Server</b>: finds small, faint and slanted lines more reliably, needs more memory and is about
+                        3x slower on a processor. <b>Mobile</b>: faster and lighter, misses more small text. Automatic = server on a GPU,
+                        mobile on a CPU. On a laptop you can still pick Server for accuracy - a page then takes longer.`],
+                    ["CPU threads", "How many processor cores the OCR may use (0 = all it wants). 2-4 keeps a laptop usable and cooler."],
+                    ["oneDNN", "Intel acceleration on the processor; only with Paddle 3.0 (3.3 fails with it)."],
+                    ["Self-test", `If the backend crashes during OCR, <code>python scripts/ocr_selftest.py</code> (in the backend folder) tests every
+                        step in a separate process and says which one fails and what to change. A packaged version will have it as a menu entry.`],
+                ])}
+                <h4>Bubble handling (examples)</h4>
+                ${items([
+                    ["Clean OCR text", `Joins words cut at the end of a line: <i>"SQUAD- RON"</i> &rarr; <i>"SQUADRON"</i>, fixes L/U mix-ups:
+                        <i>"LNIT"</i> &rarr; <i>"UNIT"</i>. Stutters like <i>"TH-THEN"</i> stay. The raw reading is kept ("Use raw OCR").`],
+                    ["Only numbers / only symbols", `<i>"23"</i> (page number), <i>"9:55"</i>, <i>"?!"</i>, <i>"..."</i> are not sent to the AI and
+                        their pixels stay - they read the same in Polish.`],
+                    ["Erase text the OCR missed", `A white bubble where the OCR read 3 of 4 lines: the dark letters left inside the
+                        bubble's white area are erased too (never its outline, never outside the bubble).`],
+                    ["Fix cut-up bubbles", `One speech bubble read as two pieces is merged; a bubble with only half of its lines found is read
+                        again as a whole.`],
+                    ["Cleaning method", "<b>Letters</b> erases the letter shapes and paints white bubbles with their own colour; <b>Rectangle</b> fills the whole text box (older, smears more)."],
+                    ["Bubble order", "Which bubble comes first for you and for the AI: right to left for Japanese manga, left to right for western comics."],
+                    ["Look for bubbles the OCR did not find", `Experimental: after the normal pass, white closed areas with letter-sized marks no
+                        reading covers are read on their own - e.g. a tiny <i>"Huh?"</i> bubble. It can also pick up a sound effect drawn
+                        in a white area; delete such a bubble in the editor.`],
+                    ["Detect whole-page rotation", "Only for scans lying sideways or upside down. On normal pages it wrongly turned some strips and garbled them, so it is off; one page can use it from Re-OCR."],
+                ])}
+                <h4>Examples: erasing and order</h4>
+                ${EXAMPLES.missedText}
+                ${EXAMPLES.cleaningMethod}
+                ${EXAMPLES.bubbleOrder}
+                <h4>Ignored text</h4>
+                <p>Lines of text that are on many pages but are not part of the story - a site address, a watermark, credits - can be
+                dropped before translation. Each line of the box is a <b>regular expression</b>: a pattern that describes text.
+                You can also type plain words; they match wherever they appear. Upper / lower case does not matter.</p>
+                ${items([
+                    ["<code>mangasite</code>", "drops every bubble containing \"mangasite\" (MANGASITE.COM, read at Mangasite...)."],
+                    ["<code>\\b[\\w-]+\\.(?:com|net|org|gg|io)\\b</code>", "a word, a dot and com / net / org / gg / io = any web address."],
+                    ["<code>^\\W*\\d+\\W*$</code>", "the WHOLE bubble is a number (^ = start, $ = end, \\d+ = digits, \\W* = anything but letters)."],
+                    ["<code>translated by</code>", "credits of a scanlation group."],
+                ])}
+                <p>Use the <b>Ready patterns</b> buttons (<b>+</b> adds one, a second click on <b>&check;</b> takes it out again)
+                and the <b>Try it</b> field: it says at once whether a bubble with that text would be dropped, and because of which line. For one project
+                only: a pattern with the project's own watermark is harmless in other projects - it just never matches there.
+                Characters with a meaning in patterns: <code>. ? * + ( ) [ ] { } ^ $ | \\</code> - put <code>\\</code> before one to
+                mean the character itself (<code>\\?</code>).</p>`,
         },
     ];
 
@@ -298,7 +483,7 @@
                     <button type="button" class="icon-btn help-close" aria-label="Close help" title="Close (Esc)">&times;</button>
                 </div>
                 <div class="help-body">
-                    <nav class="help-nav">${TOPICS.map((t) => `<button type="button" data-topic="${t.id}">${t.title}</button>`).join("")}</nav>
+                    <nav class="help-nav">${navHtml()}</nav>
                     <div class="help-content" tabindex="-1"></div>
                 </div>
             </div>`;
@@ -312,11 +497,28 @@
         document.body.appendChild(dialog);
     }
 
+    function navHtml() {
+        const byId = new Map(TOPICS.map((t) => [t.id, t]));
+        const listed = new Set(GROUPS.flatMap((g) => g.topics));
+        const groups = [...GROUPS];
+        const rest = TOPICS.filter((t) => !listed.has(t.id)).map((t) => t.id);   // a topic added without a group
+        if (rest.length) groups.push({ title: "More", topics: rest });
+        return groups.map((g) => `<details class="help-group" data-group="${g.title}">
+            <summary>${g.title}</summary>
+            ${g.topics.filter((id) => byId.has(id)).map((id) => `<button type="button" data-topic="${id}">${byId.get(id).title}</button>`).join("")}
+        </details>`).join("");
+    }
+
     function show(topicId) {
         const topic = TOPICS.find((t) => t.id === topicId) || TOPICS[0];
         dialog.querySelectorAll("[data-topic]").forEach((b) => b.classList.toggle("active", b.dataset.topic === topic.id));
+        // the group of the open topic unfolds; the others keep what the user did with them
+        dialog.querySelectorAll(".help-group").forEach((g) => {
+            if (g.querySelector(`[data-topic="${topic.id}"]`)) g.open = true;
+        });
         const content = dialog.querySelector(".help-content");
-        content.innerHTML = `<h3>${topic.title}</h3>${topic.html}`;
+        const group = GROUPS.find((g) => g.topics.includes(topic.id));
+        content.innerHTML = `<div class="help-topic-head">${group ? `<span class="help-crumb">${group.title}</span>` : ""}<h3>${topic.title}</h3></div>${topic.html}`;
         content.scrollTop = 0;
         const list = content.querySelector(".help-shortcuts");
         if (list) shortcutsReady.then((m) => { if (m) list.innerHTML = shortcutItems(m); });

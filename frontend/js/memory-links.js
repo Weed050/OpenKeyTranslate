@@ -9,6 +9,7 @@
 
 import { api } from "./api.js";
 
+import { askOk } from "./dialogs.js";
 export function memoryEntryUrl(projectId, correctionId) {
     return `memory.html?project=${encodeURIComponent(projectId)}&correction=${encodeURIComponent(correctionId)}`;
 }
@@ -40,8 +41,8 @@ export async function offerMemoryCleanup(projectId, oldTerm, newTerm) {
     }
     if (!preview.count) return;
     const plural = preview.count === 1 ? "entry still uses" : "entries still use";
-    if (!confirm(`${preview.count} memory ${plural} "${find}..." - the glossary now says "${newTerm}".\n\n`
-        + `Open find & replace "${find}..." -> "${replace}..." to fix them (you see a preview first)?`)) return;
+    if (!(await askOk(`${preview.count} memory ${plural} "${find}..." - the glossary now says "${newTerm}".\n\n`
+        + `Open find & replace "${find}..." -> "${replace}..." to fix them (you see a preview first)?`))) return;
 
     const box = document.getElementById("memoryReplaceBox");
     if (box) {          // already on the Memory page (glossary tab): fill the form here instead of a new tab

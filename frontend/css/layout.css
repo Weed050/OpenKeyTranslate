@@ -28,14 +28,23 @@
   padding: 0 var(--space-sm) var(--space-md);
 }
 .brand-icon { width: 22px; height: 22px; flex-shrink: 0; border-radius: 5px; }   /* img/okt-logo.svg */
- 
-.sidebar-section { margin-bottom: var(--space-md); }
+a.sidebar-brand:hover { text-decoration: none; color: var(--accent); }               /* logo + name = the start page */
+
+/* With many projects the lists scroll on their own (min-height: 0 lets them shrink) - the footer
+   (Projects, Settings, Theme, Help) stays in view instead of being pushed below the window. */
+.sidebar { overflow-y: hidden; }
+.sidebar-section { margin-bottom: var(--space-md); min-height: 0; flex: 0 1 auto; display: flex; flex-direction: column; }
+.sidebar-section > div:last-child { min-height: 0; overflow-y: auto; }
 .sidebar-label {
   font-size: 11px;
   color: var(--text-muted);
   padding: 0 var(--space-sm);
   margin-bottom: var(--space-xs);
+  flex-shrink: 0;
 }
+a.sidebar-label-link { display: block; text-transform: none; }
+.sidebar-filter { flex-shrink: 0; margin: 0 var(--space-xs) var(--space-xs); padding: 4px 8px; font-size: 12px; min-width: 0; }
+a.sidebar-label-link:hover { color: var(--accent); text-decoration: none; }
  
 .sidebar-project, .sidebar-link {
   display: flex;
@@ -61,6 +70,7 @@
  
 .sidebar-footer {
   margin-top: auto;
+  flex-shrink: 0;
   padding-top: var(--space-md);
   border-top: 1px solid var(--border);
   display: flex;
@@ -170,10 +180,18 @@
   right: 10px;
   z-index: 60;
   width: min(440px, calc(100vw - 20px));
+  max-height: calc(100vh - 20px);
+  overflow-y: auto;                 /* many notices: the banner scrolls instead of running off the screen */
   display: flex;
   flex-direction: column;
   gap: 6px;
 }
+/* a long path without spaces used to push the x out of the banner, so such a row could not be closed */
+.health-row > span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.health-row > button { flex-shrink: 0; }
+.health-all { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 4px 10px;
+  font-size: 12px; color: var(--text-secondary); background: var(--bg-panel-2); border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm); }
 .health-row {
   display: flex;
   align-items: flex-start;

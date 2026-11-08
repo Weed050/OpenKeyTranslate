@@ -2,6 +2,135 @@
 
 All notable changes to OpenKeyTranslate. Versions follow `APP_VERSION` in `backend/core/config.py`.
 
+## [0.4.1] - 2026-11-08
+
+### Added
+- **Clean tools group** in the editor: the Clean area button keeps the last tool you picked, the arrow next to it
+  lists them - **Clean area**, **Fill with background** (the whole rectangle in the most common colour around it) and
+  **Redraw (AI)**. The tool is stored with the area (page JSON `cleanups[].mode`, absent = Clean area), so Rebuild
+  image repeats it; Undo clean shows which tool made each area.
+- **Redraw (AI)** - optional: **Settings > Add-ons** > Install downloads big-LaMa once (196 MB, MD5 checked, runs
+  locally on the CPU, a few seconds per area) into `<app root>/models/lama`, with a progress bar and **Cancel**;
+  **Remove** (or Storage & uninstall) deletes it again. It is used ONLY on a rectangle drawn with it: tested on real
+  pages, it redraws artwork and gradients under text far better than the flat fill / TELEA, but invents texture and
+  text ghosts in white boxes and on paper.
+- **Ellipse** shape for the clean tools (Shape at the bottom of the clean tools list; the button shows ◯): only the
+  oval inside the dragged box is touched, and Fill takes its colour right outside the oval. In an oval or spiky bubble
+  the corners of a rectangle reached the outline or the art behind it - Fill then painted the whole area in that
+  colour. Page JSON `cleanups[].shape: "ellipse"` (absent = rectangle).
+- **Our own question dialog** (`js/dialogs.js`) instead of the browser's OK / Cancel where three answers are needed:
+  after **Re-OCR bubble / Set area & re-OCR** with a different text it shows **Before / Now** (changed words marked) and
+  offers **Translate again**, **Keep the translation** or **Put the old text back** (undoes the re-read: text, box and
+  text lines - `POST /pages/{id}/bubbles/{bid}/reocr/undo`, only right after it). The same text = a short message.
+  After **editing the original text** by hand: Translate again / Keep the translation, with "do this every time"
+  (Settings > Editor: ask / translate / keep). A kept translation gets a note in the panel ("the original text changed
+  after this translation" + Translate again / It fits) - for the session. Before: "Retranslate this bubble now?" with
+  OK / Cancel, where Cancel looked like it cancelled the re-read.
+- Settings: **"?"** next to Correction memory, OCR engine, OCR: bubble handling and Ignored text opens new Help topics
+  with examples (**Settings: correction memory**, **A/B experiment**, **Settings: OCR**); short explanations under the
+  less obvious switches (Approve to memory, A/B, server vs mobile detection, look for missed bubbles).
+- OCR: ignored text - **ready patterns** to add with one click (site addresses, www links, Discord / Patreon, scanlation
+  credits, number-only bubbles) and a **Try it** field that says whether a sample text would be dropped and by which line.
+- Keyboard shortcuts **Export… / Import…** (a small JSON file - only the shortcuts, e.g. for another browser); an
+  imported key that collides stays at its default. The full Backup takes them too (see below).
+- Settings > About: **What's new** shows this changelog; the settings file path only after **Show path**, plus Show in Explorer.
+- Pages keep their scroll position over a reload and Back / Forward (Settings, History, Memory, Projects; also with a
+  `#section` left in the address by a section link; the place is kept as "this element, this far from the top" and put
+  back while the page fills in - on Settings a pixel position drifted down card by card as the cards above loaded) - they scroll
+  inside the main panel and fill their lists after a fetch, so the browser's own restoring never worked.
+- **Every OK / Cancel and message box is the app's own window now** (`dialogs.askOk` / `dialogs.notify` instead of the
+  browser's `confirm()` / `alert()`, 86 places): themed, the OK button says what it does ("Delete", "Replace the current
+  data", "Sort"...), deleting is red, Esc / a click outside = Cancel. Changing the workspace folder asks with three
+  answers (Move the data / Only switch / close) - with OK / Cancel, "Cancel" used to mean "switch without moving".
+- **Help**: the topics are grouped by the part of the app (Start, Projects & pages, Editor, Memory & glossary, Settings &
+  history), the groups fold (the group of the open topic unfolds). **Synthetic before / after pictures** (drawn by the
+  app, no real comic pages, centred in the topic): erasing text the OCR missed,
+  Letters vs Rectangle cleaning, bubble order, the clean tools on a box border, following the bubble's shape, the
+  memory similarity threshold.
+- Backup: **Include keyboard shortcuts and this browser's preferences** (on by default) - the page sends its
+  `localStorage` "okt-*" entries with the export (`browser/prefs.json` in the zip, manifest `has_browser_prefs`) and the
+  import writes them into the browser it runs in. A folded **"Moving between a PC and a laptop - what to check"** note
+  (one computer at a time - import replaces, the same app version, GPU setting, Windows fonts, keys, models).
+- Sidebar: the logo / name and a **Projects** label above the list go to the start page; with many projects the list
+  scrolls on its own (the footer with Settings and Help stays in view) and from 9 projects on gets a **Find a project** field.
+
+### Changed
+- Editor messages: at the top under the toolbar instead of small at the bottom, larger, stay as long as it takes to read
+  them (longer text = longer), not while the mouse is over them, with **×**. "Re-OCR: the same text" was gone before it
+  could be read.
+- After a re-read / an edit of the original text with a translation, **Keep the translation** is the default answer
+  (right, highlighted) and **Translate again** is next to it - as merging does not translate again by default.
+- Settings: the ready ignore patterns are switches (a second click takes the line out again); the tester says "a bubble
+  with this text would be dropped - because of the line ..." instead of "Dropped - matches: ...". **What's new**: "you
+  have version X", one fold per version (only the newest open), space between the points. **View recent** log turns
+  into **Hide log**. Storage & uninstall: the whole list folds too (**Folders and sizes**). The "On this page" list no
+  longer shows the "?" of the help buttons. A/B switch laid out like the other switches (its sample rate indented under
+  it) - the frame put the input off the column and the bold "without" got extra gaps; a note under a row no longer
+  touches the row's line. Your fonts: from 7 fonts on only 5 are shown, the rest behind **Show all N fonts**.
+- Application log: lines are logged with their real level. Everything the libraries wrote to stderr was "ERROR" (uvicorn
+  requests, Paddle's green "Creating model", Python warnings, progress bars) - errors.log and "Errors only" were full of
+  them. Now: uvicorn's own level, warnings = WARNING, colour codes read and removed; unknown stderr text stays ERROR.
+  **View recent** shows the newest entry at the top (a multi-line entry keeps its own order).
+- Notices in the top right corner (health banner): a long path without spaces pushed the **×** out of the box, so such a
+  notice could not be closed; the text now wraps, many notices scroll, and from 3 notices on **Dismiss all**.
+- Setup: `req_gtx_1050ti_OKT.txt` no longer lists the CUDA 12 / 13 `nvidia-*` packages - nothing used them (Paddle 3.0
+  loads the CUDA 11 ones, torch is the CPU build); about 3 GB less in the environment.
+- **A/B experiment off by default** for new installations (it costs a second request per matched bubble). Existing
+  settings files keep their value. While it is off the sample rate is greyed out but kept.
+- Backup: **your fonts** are always in the zip now (before they were missing - Lettering styles that name them fell back
+  to the default font on the new computer); "Include downloaded models" also takes installed add-ons (big-LaMa).
+- Storage & uninstall: groups fold (remembered), each with its total; "not there" says what it means (not installed /
+  not downloaded yet / none); the LaMa entry says LaMa.
+
+### Research data
+- `manual_ops` `cleanup_add` events carry `mode` ("fill" / "redraw") when another tool than Clean area was used, and
+  `shape: "ellipse"` for an ellipse (new detail keys; the op keeps its meaning).
+- New `manual_ops` op **`reocr_undo`**: the user undid a bubble re-read right after it ("Put the old text back"). The
+  `reocr_bubble` event before it stays in the list.
+- Memory: when a bubble's ORIGINAL text changes (typed, re-read, re-read undone), its memory rows saved with the old text
+  and not used yet (`reuse_count` 0) get the new source + embedding (`memory_service.follow_source_edit`; matched by page +
+  bubble + old text, because a page Re-OCR renumbers bubbles). Before, the pair "misread English -> Polish" stayed and
+  the next save of the bubble added a second row. Used rows never change. `created_at` is not touched.
+
+### Fixed
+- Tests / docs build (`OKT_DOCS_BUILD`): `load_settings()` returned defaults, but `save_settings()` still wrote the
+  user's REAL settings.json - a backup-import test replaced it with test defaults (workspace in Temp, no keys, A/B
+  off). In this mode the settings file is now a throwaway one in the temp folder, and writing the real one is refused.
+- Dark (and light) theme: a pressed toolbar button (Original, Preview text, OCR debug, Clean area / Fill while drawing,
+  Add bubble) looked empty - the accent text colour stayed but the transparent toolbar background won over the accent
+  background. Pressed = accent background again.
+- Redraw (AI) download: progress moved only per 1 MB (on a slow line it looked stuck at 0 MB), a connection that hung
+  waited 60 s per read; now 64 KB steps, "Connecting…" while nothing arrived, an error after 30 s without data, Cancel.
+  Sizes are binary MB everywhere (the button said 196 MB, the page text 205 MB for the same file).
+- Storage & uninstall: deleting something could make the total GROW - the program folder (.venv, ~59,000 files) was
+  counted only for 6 s, so its size depended on how warm the disk cache was. Counting with `os.scandir` takes 0.4 s
+  and is exact; a total that is still cut off says "≥".
+- Text erasing: dark letters with a light outline on a coloured or dark ground (titles, captions, sound effects over
+  artwork) left white blobs where the text was - only the dark letters were erased and the outline was spread into
+  them. The light rim is now erased too when the ground around it is not light (`inpainting._light_rim`); text in white
+  bubbles and on paper is unchanged (checked on 106 pages of a B/W manga: one page changed, same result). Pages
+  already processed: **Rebuild image** after a backend restart.
+- Projects and pages lists: the "Sort" label sat higher than the chosen entry, and the select arrow touched the
+  direction button.
+- Clean area over a box border or artwork: the whole rectangle used to be filled from its surroundings, which erased
+  the border and smeared it into a dark blot. Now only the marks inside the rectangle are removed (darker or lighter
+  than its background); straight lines and drawing that cross its edge stay. A rectangle with a plain border all
+  round is painted whole as before (checked on all 14 saved areas: only the two smeared ones changed).
+- Merge (also **Merge with ↑ / ↓**): "Translate the merged bubble again" is off by default; Settings > Editor can
+  make it ticked by default. Ticking it in the dialog counts for that one merge.
+- Editor toolbar: the reading-order select moved to the end, so it is the first to wrap to a 2nd row - an
+  **Undo clean** button showing up no longer pushes Preview text and Original down.
+
+### Changed (History, keys)
+- History: **Columns** menu - show / hide any column; the normal and the research view keep separate sets.
+  New **Model** column (model + API key; the key badge moved there from the memory-injected cell). Model and
+  **Temperature** (renamed from "Temp.") are shown in the research view by default, hidden in the normal one.
+  Temperatures entered afterwards read "0.4 / filled in" instead of "0.4*".
+- History research summary: plainer titles and explanations ("Does the memory help more often as it grows?",
+  "What if the similarity threshold were different?").
+- Settings > keys: the Model field shows the effective default model in full (grey italic) instead of a cut-off
+  "default: gemini-2.5-flas".
+
 ## [0.4.0] - 2026-11-07
 
 ### Research data - read before comparing with older logs

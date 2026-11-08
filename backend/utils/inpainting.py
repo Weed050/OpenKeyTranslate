@@ -50,6 +50,11 @@ PAPER_MAX_SPECKS = 0.012        # ... and at most this share of it in tiny dark 
 SPECK_MAX_AREA = 12             # a dark piece this small (px) is a screentone dot, not line art
 ART_GAP_PX = 3                  # paper fill stops this far from non-text ink; TELEA blends the last pixels
 CLEANUP_PLAIN_STD = 12          # a manual cleanup area whose border varies less than this is painted flat
+CLEANUP_MARK_DELTA = 30         # "Clean area": a pixel this much lighter / darker than the area's background is a mark
+RIM_LIGHT_GRAY = 200            # stroked lettering (see _light_rim): a rim pixel is at least this light ...
+RIM_RING_SHARE = 0.8            # ... a ring around the letters belongs to the rim when this share of it is light ...
+RIM_GROUND_MAX = 0.35           # ... and the ground just beyond the rim is at most this share light
+RIM_MAX_SHARE = 0.25            # widest rim accepted, as a share of the line height
 
 
 def min_glyph_area(bw: float, bh: float) -> int:
@@ -188,8 +193,39 @@ def _level_glyph_mask(image: np.ndarray, box, with_ink: bool = False, centre_ins
             ink |= np.isin(labels, added)
             small = [lab for lab in small if lab not in added]
     erase = ink | _letter_holes(ink, 1.5 * bh * bh) if GLYPH_FILL_HOLES else ink
+    rim = _light_rim(gray, ink, bh)
+    if rim is not None:
+        erase = erase | rim
     mask = cv2.dilate(erase.astype(np.uint8) * 255, np.ones((3, 3), np.uint8), iterations=2)   # anti-aliasing halo
     return ((x0, y0), mask, ink) if with_ink else ((x0, y0), mask)
+
+
+def _light_rim(gray: np.ndarray, ink: np.ndarray, bh: float):
+    """
+    The light rim of STROKED lettering on a darker ground: dark letters with a white outline (titles, captions, sound
+    effects over artwork or colour pages). Only the dark letters are ink, so the rim stayed and TELEA spread it into the
+    erased letters - white blobs where the text was ("Night of the Intern" on a yellow floor, Give My Regards to Black
+    Jack, Chapter_1/page_004). Rim = the rings around the letters that are light all round, followed by a ground that
+    is not. Text in a white bubble or on paper is light far beyond RIM_MAX_SHARE of a line height and never gets one.
+    :return: bool ROI of the rim (+ 2 px of its edge towards the ground), or None.
+    """
+    reach = max(3, int(RIM_MAX_SHARE * bh))
+    dist = cv2.distanceTransform((~ink).astype(np.uint8), cv2.DIST_L2, 3)      # distance to the nearest letter pixel
+    light = gray >= RIM_LIGHT_GRAY
+    width = 1                                        # ring 1 = the letters' own grey anti-aliasing, not judged
+    for d in range(2, reach + 1):
+        ring = (dist > d - 1) & (dist <= d)
+        if ring.sum() < 10 or light[ring].mean() < RIM_RING_SHARE:
+            break
+        width = d
+    else:
+        return None                                  # light all the way out: a bubble / paper, not a rim
+    if width < 2:
+        return None
+    ground = (dist > width + 1) & (dist <= width + 4)
+    if ground.sum() < 10 or light[ground].mean() > RIM_GROUND_MAX:
+        return None
+    return (dist <= width + 2) & ~ink
 
 
 def _letter_holes(ink: np.ndarray, max_area: float) -> np.ndarray:
@@ -314,11 +350,55 @@ def _speck_share(gray: np.ndarray, area: np.ndarray) -> float:
     return float(np.isin(labels, tiny).sum()) / max(1, int(area.sum())) if tiny else 0.0
 
 
+CLEANUP_MODES = ("clean", "fill", "redraw")
+CLEANUP_SHAPES = ("rect", "ellipse")
+
+
+class Redraw:
+    """A cleanup area for the AI redraw (services/lama_service.py), done by inpaint() after everything else."""
+
+    def __init__(self, box, shape: np.ndarray | None = None):
+        self.box = box
+        self.shape = shape      # bool mask of the box (an ellipse) or None = the whole rectangle
+
+
+def _shape_mask(h: int, w: int, shape: str | None) -> np.ndarray:
+    """Bool mask of an h x w box: all True for a rectangle, the inscribed ellipse for "ellipse"."""
+    if shape != "ellipse":
+        return np.ones((h, w), bool)
+    m = np.zeros((h, w), np.uint8)
+    cv2.ellipse(m, (((w - 1) / 2.0, (h - 1) / 2.0), (float(w), float(h)), 0.0), 255, -1)    # RotatedRect form
+    return m > 0
+
+
+def _shape_border(image: np.ndarray, x1: int, y1: int, inside: np.ndarray, r: int = 3):
+    """(BGR pixels of the r px ring just outside the shape `inside` at x1, y1, is that ring one plain colour)."""
+    ih, iw = image.shape[:2]
+    h, w = inside.shape
+    ox1, oy1, ox2, oy2 = max(0, x1 - r), max(0, y1 - r), min(iw, x1 + w + r), min(ih, y1 + h + r)
+    big = np.zeros((oy2 - oy1, ox2 - ox1), np.uint8)
+    big[y1 - oy1:y1 - oy1 + h, x1 - ox1:x1 - ox1 + w] = inside
+    ring = (cv2.dilate(big, np.ones((2 * r + 1, 2 * r + 1), np.uint8)) > 0) & (big == 0)
+    patch = image[oy1:oy2, ox1:ox2]
+    border = patch[ring]
+    plain = bool(border.size) and float(_gray(patch)[ring].std()) <= CLEANUP_PLAIN_STD
+    return border, plain
+
+
 def _add_cleanups(image: np.ndarray, mask: np.ndarray, flats: list, cleanups) -> None:
     """
-    Areas the user marked with "Clean area" in the editor (page JSON "cleanups": [{"box": [x1, y1, x2, y2]}]): leftover
-    traces the automatic pass did not catch. A rectangle whose border is one plain colour (inside a bubble, on paper)
-    is painted with that colour; otherwise it is filled from its surroundings (TELEA).
+    Areas the user marked with the editor's clean tools (page JSON "cleanups": [{"box": [x1, y1, x2, y2], "mode"?,
+    "shape"?}]): leftover traces the automatic pass did not catch. Modes:
+      * "clean" (default, also entries without a mode): a rectangle whose border is one plain colour is painted with it
+        whole (as before - nothing crosses its edge). Otherwise only the MARKS inside it go (_clean_marks); lines and
+        artwork crossing its edge stay. Before 2026-11-08 such a rectangle was TELEA-filled whole: one touching a box
+        border erased the border and smeared it with the artwork into a dark blot.
+      * "fill": the whole rectangle in the most common colour of its border ("paint over with the background").
+      * "redraw": the whole rectangle redrawn by the AI model, when installed (inpaint() does it last); without the
+        model it is cleaned like "clean".
+    shape "ellipse" (since 2026-11-08; absent = rectangle): only the ellipse inscribed in the box is touched, and its
+    colour comes from the ring just outside the ELLIPSE - in an oval or spiky bubble the corners of a rectangle reach
+    the outline (or the art beyond it), so a rectangle that is big enough for the text paints over them.
     """
     ih, iw = image.shape[:2]
     for c in cleanups or []:
@@ -330,15 +410,105 @@ def _add_cleanups(image: np.ndarray, mask: np.ndarray, flats: list, cleanups) ->
         y1, y2 = sorted((max(0, y1), min(ih, y2)))
         if x2 - x1 < 2 or y2 - y1 < 2:
             continue
-        r = 3
-        ox1, oy1, ox2, oy2 = max(0, x1 - r), max(0, y1 - r), min(iw, x2 + r), min(ih, y2 + r)
-        ring = np.ones((oy2 - oy1, ox2 - ox1), bool)
-        ring[y1 - oy1:y2 - oy1, x1 - ox1:x2 - ox1] = False
-        border = image[oy1:oy2, ox1:ox2][ring]
-        if border.size and float(_gray(image[oy1:oy2, ox1:ox2])[ring].std()) <= CLEANUP_PLAIN_STD:
-            flats.append((x1, y1, np.ones((y2 - y1, x2 - x1), bool), tuple(int(v) for v in np.median(border, axis=0))))
+        mode = c.get("mode") if c.get("mode") in CLEANUP_MODES else "clean"
+        ellipse = c.get("shape") == "ellipse"
+        inside = _shape_mask(y2 - y1, x2 - x1, "ellipse" if ellipse else "rect")
+        if mode == "redraw":
+            from services.lama_service import installed
+            if installed():
+                flats.append(Redraw((x1, y1, x2, y2), inside if ellipse else None))
+                continue
+            mode = "clean"
+        border, plain = (_shape_border(image, x1, y1, inside) if ellipse
+                         else _cleanup_border(image, x1, y1, x2, y2))
+        if mode == "fill":
+            colour = _common_colour(border) if border.size else (255, 255, 255)
+            flats.append((x1, y1, inside.copy(), colour))
+            continue
+        if plain:                                       # one plain colour all round: nothing crosses the edge - paint it all
+            flats.append((x1, y1, inside.copy(), tuple(int(v) for v in np.median(border, axis=0))))
+            continue
+        marks = _clean_marks(image, x1, y1, x2, y2)
+        if marks is None:                               # nothing mark-like found: fill it from the surroundings as before
+            mask[y1:y2, x1:x2][inside] = 255
+            continue
+        erase, colour = marks
+        erase = erase & inside
+        if colour is not None:
+            flats.append((x1, y1, erase, colour))
         else:
-            mask[y1:y2, x1:x2] = 255
+            mask[y1:y2, x1:x2][erase] = 255
+
+
+def _cleanup_border(image: np.ndarray, x1: int, y1: int, x2: int, y2: int, r: int = 3):
+    """(BGR pixels of the r px ring around the rectangle, is that ring one plain colour)."""
+    ih, iw = image.shape[:2]
+    ox1, oy1, ox2, oy2 = max(0, x1 - r), max(0, y1 - r), min(iw, x2 + r), min(ih, y2 + r)
+    ring = np.ones((oy2 - oy1, ox2 - ox1), bool)
+    ring[y1 - oy1:y2 - oy1, x1 - ox1:x2 - ox1] = False
+    border = image[oy1:oy2, ox1:ox2][ring]
+    plain = bool(border.size) and float(_gray(image[oy1:oy2, ox1:ox2])[ring].std()) <= CLEANUP_PLAIN_STD
+    return border, plain
+
+
+def _common_colour(pixels: np.ndarray) -> tuple:
+    """Most common colour (16-level bins, then the median inside the winning bin) - the background, not a mix of it with lines."""
+    px = pixels.reshape(-1, pixels.shape[-1]) if pixels.ndim > 1 else pixels.reshape(-1, 1)
+    keys = (px // 16).astype(np.int32)
+    flat = keys[:, 0] * 256 + (keys[:, 1] * 16 + keys[:, 2] if px.shape[1] == 3 else 0)
+    vals, counts = np.unique(flat, return_counts=True)
+    win = px[flat == vals[np.argmax(counts)]]
+    return tuple(int(v) for v in np.median(win, axis=0))
+
+
+def _clean_marks(image: np.ndarray, x1: int, y1: int, x2: int, y2: int):
+    """
+    "Clean area" without collateral damage: the marks to erase inside the rectangle = pieces that differ from its
+    background (darker or lighter) and lie entirely INSIDE it (letter remains, ghosts, specks). Kept: straight lines entering from outside (box and
+    panel borders - a letter glued to such a border is cut off it and erased) and anything else crossing the edge
+    (artwork). The marks are painted with the plain colour around them, or TELEA-filled on their own pixels when the
+    ground there is not plain - never the whole rectangle.
+    :return: (bool ROI of the pixels to erase, BGR colour or None = TELEA), or None when no mark was found.
+    """
+    roi = image[y1:y2, x1:x2]
+    gray = _gray(roi).astype(np.int16)
+    h, w = gray.shape
+    if h < 4 or w < 4:
+        return None
+    border, _ = _cleanup_border(image, x1, y1, x2, y2)
+    border_gray = _gray(border.reshape(-1, 1, 3)) if border.ndim == 2 and border.shape[1] == 3 else border
+    bg = int(np.median(border_gray)) if border.size else 255
+    # a mark differs from the background in EITHER direction: dark letters / pale ghosts (gray < 225) on a white box,
+    # white letters on a black caption box (Nihonkoku Shoukan narration), both on a grey tone
+    dark = (np.abs(gray - bg) > CLEANUP_MARK_DELTA).astype(np.uint8)
+    if not dark.any():
+        return None
+    # straight lines that reach the edge of the rectangle (borders of boxes / panels): never erased
+    lv, lh = max(9, h // 2), max(9, w // 2)
+    lines = cv2.morphologyEx(dark, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_RECT, (1, lv))) \
+        | cv2.morphologyEx(dark, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_RECT, (lh, 1)))
+    if lines.any():
+        n, labels, stats, _ = cv2.connectedComponentsWithStats(lines, connectivity=8)
+        edge = [i for i in range(1, n) if stats[i][0] <= 0 or stats[i][1] <= 0
+                or stats[i][0] + stats[i][2] >= w or stats[i][1] + stats[i][3] >= h]
+        lines = np.isin(labels, edge).astype(np.uint8)
+    keep = cv2.dilate(lines, np.ones((3, 3), np.uint8), iterations=1) > 0
+    marks = (dark > 0) & ~keep
+    n, labels, stats, _ = cv2.connectedComponentsWithStats(marks.astype(np.uint8), connectivity=8)
+    inside = [i for i in range(1, n) if stats[i][0] > 0 and stats[i][1] > 0
+              and stats[i][0] + stats[i][2] < w and stats[i][1] + stats[i][3] < h]
+    if not inside:
+        return None
+    sel = np.isin(labels, inside)
+    sel |= _letter_holes(sel, 0.25 * h * w)           # the inside of outlined letters / counters
+    erase = cv2.dilate(sel.astype(np.uint8), np.ones((3, 3), np.uint8), iterations=2) > 0    # anti-aliasing halo
+    erase &= ~(lines > 0)
+    # the ground right around the marks decides: one plain colour -> paint it, else TELEA on the marks only
+    ring = (cv2.dilate(erase.astype(np.uint8), np.ones((5, 5), np.uint8), iterations=1) > 0) & ~erase & ~(dark > 0)
+    ground = roi[ring]
+    if ground.size and float(gray[ring].std()) <= CLEANUP_PLAIN_STD:
+        return erase, tuple(int(v) for v in np.median(ground, axis=0))
+    return erase, None
 
 
 def build_erase_mask(image: np.ndarray, boxes: list, bubbles: list | None = None, use_interior: bool = True,
@@ -425,15 +595,30 @@ def build_erase_mask(image: np.ndarray, boxes: list, bubbles: list | None = None
 
 
 def inpaint(image: np.ndarray, mask: np.ndarray, flats: list | None = None) -> np.ndarray:
-    """Paint the flat regions with their bubble colour, fill everything else that is masked from its surroundings (TELEA)."""
+    """
+    Paint the flat regions with their bubble colour, fill everything else that is masked from its surroundings (TELEA),
+    then the user's "Redraw (AI)" rectangles (Redraw items in `flats`) - last, so the model sees the cleaned page.
+    """
     out = image.copy()
     rest = mask.copy()
-    for fx, fy, region, color in flats or []:
+    redraws = []
+    for item in flats or []:
+        if isinstance(item, Redraw):
+            redraws.append(item)
+            continue
+        fx, fy, region, color = item
         h, w = region.shape
         out[fy:fy + h, fx:fx + w][region] = color
         rest[fy:fy + h, fx:fx + w][region] = 0
     if rest.any():
         out = cv2.inpaint(out, rest, 5, cv2.INPAINT_TELEA)
+    if redraws:
+        from services.lama_service import redraw
+        for r in redraws:
+            try:
+                out = redraw(out, r.box, r.shape)
+            except Exception as e:                      # noqa: BLE001 - a failed redraw leaves the area as cleaned so far
+                print(f"[INPAINT] AI redraw of {r.box} failed: {e}")
     return out
 
 

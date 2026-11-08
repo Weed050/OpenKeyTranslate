@@ -15,16 +15,17 @@
     <link rel="stylesheet" href="css/appearance.css">
     <link rel="stylesheet" href="css/settings.css">
     <link rel="stylesheet" href="css/help.css">
+    <link rel="stylesheet" href="css/dialogs.css">
     <script src="js/help.js" defer></script>
 </head>
 <body>
  
     <div class="app-shell">
         <nav class="sidebar">
-            <div class="sidebar-brand"><img src="img/okt-logo.svg" alt="" class="brand-icon">OpenKeyTranslate</div>
+            <a class="sidebar-brand" href="index.html" title="All projects (start page)"><img src="img/okt-logo.svg" alt="" class="brand-icon">OpenKeyTranslate</a>
  
             <div class="sidebar-section">
-                <div class="sidebar-label">Active</div>
+                <a class="sidebar-label sidebar-label-link" href="index.html" title="All projects (start page)">Projects</a>
                 <div id="sidebarActive"></div>
             </div>
  
@@ -54,7 +55,7 @@
                         <div class="text-muted">Main workspace folder (database + projects)</div>
                         <div class="text-mono" id="currentWorkspacePath">Loading...</div>
                     </div>
-                    <button class="copy-btn" id="copyWorkspaceBtn" title="Copy path">Copy</button>
+                    <button class="copy-btn" id="copyWorkspaceBtn" title="Copy the folder path to the clipboard">Copy path</button>
                 </div>
                 <div style="display:flex; gap:8px; margin-top:12px;">
                     <button id="changeWorkspaceBtn">Change workspace folder...</button>
@@ -101,14 +102,50 @@
                         <input type="checkbox" id="ocrDebugSettingCheckbox"> Show
                     </label>
                 </div>
+                <div class="row">
+                    <div class="text-muted" title="Stored in this browser only. The box can still be ticked or cleared in the merge dialog for one merge.">Merging bubbles (<b>Merge with &uarr; / &darr;</b>, Shift+click + <b>Merge...</b>): <b>Translate the merged bubble again</b> ticked by default. Off = the joined translation of the pieces stays and you fix it by hand (no request).</div>
+                    <label style="display:flex; align-items:center; gap:6px;">
+                        <input type="checkbox" id="mergeRetranslateSettingCheckbox"> Ticked
+                    </label>
+                </div>
+                <div class="row">
+                    <div class="text-muted" title="Stored in this browser only. A re-read by the OCR (Re-OCR bubble, Set area &amp; re-OCR) always asks, so you see what it read and can undo it.">After you <b>edit the original (English) text</b> of a bubble: translate it again, keep the translation (the panel then reminds you that the text changed), or ask every time</div>
+                    <select id="sourceChangeSelect" style="max-width:220px;">
+                        <option value="ask">Ask every time</option>
+                        <option value="translate">Translate again</option>
+                        <option value="keep">Keep the translation</option>
+                    </select>
+                </div>
+                <p class="text-muted" style="margin:8px 0 0;"><b>Redraw (AI)</b> (optional clean tool for text over drawings) is installed in <a href="#addons">Add-ons</a>.</p>
+            </div>
+
+            <div class="card" id="addons">
+                <h2 data-toc="Add-ons">Add-ons (optional downloads)</h2>
+                <p class="text-muted">Extra tools that are not needed for translating and are not downloaded until you install them. They run on this computer; Remove deletes them again (also listed in <a href="#storage" data-scan>Storage &amp; uninstall</a>).</p>
+                <div class="addon" id="lamaRow">
+                    <div class="addon-main">
+                        <div class="addon-title">Redraw (AI) - big-LaMa model <span class="text-muted">196 MB</span></div>
+                        <div class="text-muted">A clean tool for text over drawings and gradients: in the editor you mark a rectangle (the arrow next to <b>Clean area</b> &gt; <b>Redraw (AI)</b>) and the model redraws what is under it - a few seconds on the CPU. Never used by itself: in white bubbles and on plain paper it invents texture, so the normal cleaning stays the default there. Model: big-LaMa (Suvorov et al., WACV 2022, Apache-2.0), file checked after the download.</div>
+                        <progress id="lamaProgress" class="hidden" max="100" value="0"></progress>
+                        <div id="lamaState" class="key-hint"></div>
+                    </div>
+                    <div class="addon-actions">
+                        <button id="lamaInstallBtn" type="button">Install</button>
+                        <button id="lamaCancelBtn" type="button" class="hidden">Cancel</button>
+                        <button id="lamaRemoveBtn" type="button" class="danger hidden">Remove</button>
+                    </div>
+                </div>
             </div>
 
             <div class="card">
                 <h2 data-toc="Shortcuts">Keyboard shortcuts</h2>
                 <p class="text-muted">Stored in this browser only. A key cannot be given twice where both actions could fire, nor taken from the browser; an action that also works while typing needs Ctrl or Alt. Fixed: Esc cancels, Shift+click picks bubbles to merge, Ctrl+scroll zooms.</p>
                 <div id="shortcutList" class="shortcut-list"></div>
-                <div style="display:flex; gap:8px; align-items:center; margin-top:10px;">
+                <div style="display:flex; gap:8px; align-items:center; margin-top:10px; flex-wrap:wrap;">
                     <button id="resetShortcutsBtn">Reset all to default</button>
+                    <button id="exportShortcutsBtn" title="Save only your shortcuts to a small .json file (to share them or copy them to another browser). The full Backup takes them too when its box for browser preferences is ticked.">Export…</button>
+                    <button id="importShortcutsBtn" title="Load shortcuts from a file made with Export (another browser or computer)">Import…</button>
+                    <input type="file" id="importShortcutsFile" accept=".json,application/json" class="hidden">
                     <span class="text-muted" id="shortcutStatus"></span>
                 </div>
             </div>
@@ -137,7 +174,7 @@
                     <button id="testTranslationBtn" title="One tiny translation exactly as a page would be translated: through the first key that is switched on and not resting after a limit">Test the pool</button>
                 </div>
                 <div id="poolTestResult" class="key-result hidden" role="status"></div>
-                <p class="text-muted key-ab-note">A/B experiment (memory vs. no memory): both versions of a bubble always go through the <b>same key and model</b>. If that key is busy at that moment, the pair is skipped instead of comparing two models.</p>
+                <p class="text-muted key-ab-note" id="keyAbNote">A/B experiment (memory vs. no memory, on in <a href="#memory">Correction memory</a>): both versions of a bubble always go through the <b>same key and model</b>. If that key is busy at that moment, the pair is skipped instead of comparing two models.</p>
                 <h3 class="key-heading">Default model per provider <span class="text-muted">used by every key whose Model field is empty</span></h3>
                 <div class="row">
                     <div class="text-muted">Groq</div>
@@ -170,7 +207,7 @@
             </div>
 
             <div class="card" id="memory">
-                <h2>Correction memory</h2>
+                <h2>Correction memory <button type="button" class="help-q" data-help="settings-memory" title="What these settings do - with examples">?</button></h2>
                 <div class="key-actions" style="align-items:center; margin:0 0 4px; flex-wrap:wrap;">
                     <span class="text-muted" id="embedderState">Memory model: …</span>
                     <button id="embedderTestBtn" title="Loads the local embedding model if it is not loaded yet (so a failed load at start is retried) and checks that it tells similar lines from unrelated ones. Nothing is sent to the internet if the model is already on disk.">Test memory model</button>
@@ -196,15 +233,25 @@
                     <div class="text-muted" title="Share of content words (stopwords ignored) a fuzzy match must ALSO have in common with the line, unless its similarity is 0.90 or more. Filters 'same topic, different line' matches. 25 recommended.">Minimum content-word overlap for fuzzy matches (%, 0 = off)</div>
                     <input type="text" id="memoryLexicalInput" style="max-width:80px;" inputmode="numeric">
                 </div>
-                <label style="display:flex; align-items:center; gap:6px; margin:6px 0;" title="Shows an 'Approve to memory' button in the editor: it stores an UNCHANGED AI translation as an 'approved' memory example. Moving on from a bubble never does that. Off by default - approved entries feed the model's own text back to it; edits are always stored as 'corrected'.">
+                <label style="display:flex; align-items:center; gap:6px; margin:6px 0 0;">
                     <input type="checkbox" id="memoryStoreApprovedCheckbox"> Allow approving unchanged translations into memory ("Approve to memory" button in the editor)
                 </label>
-                <label style="display:flex; align-items:center; gap:6px; margin:6px 0;" title="For bubbles with a memory match the same payload is translated a second time WITHOUT the memory (same glossary and context) - the zero-shot vs memory comparison in Logs.">
-                    <input type="checkbox" id="memoryAbCheckbox"> A/B experiment: also translate matched bubbles without memory (for Logs)
-                </label>
-                <div class="row">
-                    <div class="text-muted">A/B sample rate: share of pages that get the extra call (0.0-1.0; lower saves API quota)</div>
-                    <input type="text" id="memoryAbRateInput" style="max-width:80px;" inputmode="decimal">
+                <p class="setting-note">Normally only translations you <b>changed</b> become memory examples. On: the editor gets an extra
+                    <b>Approve to memory</b> button that stores an AI translation you found perfect as an example too (moving on never does).
+                    Off by default - the AI would then learn from its own text.</p>
+                <!-- A/B switch + the option that only matters while it is on (indented under it, greyed out when off) -->
+                <div class="ab-block">
+                    <label style="display:flex; align-items:center; gap:6px; margin:6px 0 0;">
+                        <input type="checkbox" id="memoryAbCheckbox"><span>A/B experiment (research): also translate matched bubbles <b>without</b> the memory</span>
+                        <button type="button" class="help-q" data-help="ab" title="What an A/B experiment is and what it costs">?</button>
+                    </label>
+                    <p class="setting-note">Measures whether the memory helps: a bubble that got memory examples is translated a second
+                        time without them (the control); History &gt; Research view compares the two. Costs one more request for such bubbles,
+                        so it is off by default. Switching it off keeps the value below for the next time.</p>
+                    <div class="row ab-dependent">
+                        <div class="text-muted">A/B sample rate: share of pages that get the extra call (0.0-1.0; lower saves API quota)</div>
+                        <input type="text" id="memoryAbRateInput" style="max-width:80px;" inputmode="decimal">
+                    </div>
                 </div>
                 <h3 style="margin:14px 0 6px; font-size:14px;">Terminology and casing</h3>
                 <label style="display:flex; align-items:center; gap:6px; margin:6px 0;" title="After translation every glossary term is checked (any Polish inflection counts). Bubbles that miss one get ONE extra call that inserts the term and changes nothing else.">
@@ -221,7 +268,8 @@
             </div>
 
             <div class="card" id="ocr-engine">
-                <h2 data-toc="OCR engine">OCR engine (CPU / GPU)</h2>
+                <h2 data-toc="OCR engine">OCR engine (CPU / GPU) <button type="button" class="help-q" data-help="settings-ocr" title="What the OCR engine is and what these options change">?</button></h2>
+                <p class="text-muted" style="margin-top:0;">The OCR engine (PaddleOCR, runs on this computer) turns the page image into text: one network <b>finds</b> where the lines of text are (detection), another <b>reads</b> the letters in them (recognition). These options choose where it runs and which detection network it uses.</p>
                 <p class="text-muted" id="ocrRuntimeNow">Loading what the OCR uses now…</p>
                 <div class="row">
                     <div class="text-muted" title="auto = the GPU when this Paddle build and the computer have CUDA, else the CPU">Device</div>
@@ -239,6 +287,9 @@
                         <option value="mobile">Mobile - about 3x faster on a CPU, less memory</option>
                     </select>
                 </div>
+                <p class="setting-note">Server on a laptop works too: it finds small and faint lines more reliably, but a page takes about
+                    3x longer and needs more memory (in the self-test: mobile 0.4 s vs server 0.6 s for a small image on a GPU; on a CPU the gap is larger).
+                    Reading the letters is the same either way.</p>
                 <div class="row">
                     <div class="text-muted" title="0 = the library decides. On a laptop 2-4 keeps the computer usable and cooler.">CPU threads (0 = automatic)</div>
                     <input type="text" id="ocrThreadsInput" style="max-width:80px;" inputmode="numeric">
@@ -260,7 +311,7 @@
             </div>
 
             <div class="card">
-                <h2>OCR: bubble handling</h2>
+                <h2>OCR: bubble handling <button type="button" class="help-q" data-help="settings-ocr" title="Every option explained with an example">?</button></h2>
                 <div class="row">
                     <label style="display:flex; align-items:center; gap:6px; margin:0;" title="Joins line-wrap hyphenation (SQUAD- RON) and fixes L/U confusions (LNIT). Stutters like TH-THEN are never touched. The raw OCR text is kept per bubble.">
                         <input type="checkbox" id="ocrTextfixCheckbox"> Clean OCR text (join wrapped words, fix LNIT-style mistakes)
@@ -302,16 +353,19 @@
                     </select>
                 </div>
                 <div class="row">
-                    <label style="display:flex; align-items:center; gap:6px; margin:0;" title="Experimental: looks for white bubbles with letters that no detected text accounts for and OCRs just that spot.">
+                    <label style="display:flex; align-items:center; gap:6px; margin:0;">
                         <input type="checkbox" id="ocrScanCheckbox"> Look for bubbles the OCR did not find at all (experimental)
                     </label>
                 </div>
+                <p class="setting-note">After the normal pass it looks for white, closed areas (bubbles, caption boxes) with letter-sized
+                    marks that no read text covers, and reads just that spot - e.g. a small "Huh?" bubble the OCR skipped. It can also add
+                    junk (a sound effect drawn in a white area); delete such a bubble in the editor. Off by default.</p>
                 <div class="row">
                     <label style="display:flex; align-items:center; gap:6px; margin:0;" title="PaddleOCR's whole-image orientation step. Off: on upright manga it wrongly turned 12 of 67 page strips in a test and garbled their text. Sideways text inside a page is read without it. For one sideways page use Re-OCR in the editor -> 'The whole page is rotated'.">
                         <input type="checkbox" id="ocrDetectRotationCheckbox"> Detect whole-page rotation on every page (only for scans that lie sideways)
                     </label>
                 </div>
-                <p class="text-muted">Skipped bubbles stay in the editor list (you can still force-translate one) but are not sent to the LLM and their original pixels are NOT erased. Applies to pages processed from now on; use <b>Re-OCR</b> in the editor for existing pages.</p>
+                <p class="text-muted" style="margin-top:18px; padding-top:10px; border-top:1px solid var(--border);">Skipped bubbles stay in the editor list (you can still force-translate one) but are not sent to the LLM and their original pixels are NOT erased. Applies to pages processed from now on; use <b>Re-OCR</b> in the editor for existing pages.</p>
                 <button id="saveOcrOptionsBtn" class="primary">Save</button>
                 <p class="text-muted" id="ocrOptionsStatus" style="margin-top:10px;"></p>
             </div>
@@ -354,29 +408,59 @@
             </div>
 
             <div class="card">
-                <h2>OCR: ignored text</h2>
-                <p class="text-muted">Bubbles whose text matches any of these regular expressions (one per line, case-insensitive, "contains" match) are dropped before translation - watermarks, site URLs, credits. Applies to pages processed from now on (no restart); use Re-OCR in the editor for pages already processed. Example: ^\W*\d+\W*$ also drops number-only bubbles.</p>
+                <h2>OCR: ignored text <button type="button" class="help-q" data-help="settings-ocr" title="How to write your own pattern">?</button></h2>
+                <p class="text-muted">Bubbles whose text contains a match of any line below are dropped before translation - for text
+                    that is on many pages but is not part of the story: watermarks, site addresses, scanlation credits. One pattern per line,
+                    upper / lower case does not matter. Applies to pages processed from now on (no restart); <b>Re-OCR</b> in the editor
+                    for pages already processed.</p>
+                <p class="text-muted" style="margin:6px 0;">The lines are <i>regular expressions</i> - a short code for "text like this".
+                    You do not have to write them yourself: add a ready one, or type the exact words (e.g. <code>read on example</code>) - plain
+                    words work as they are. The default line <code>\b[\w-]+\.(?:com|net|org|gg|io)\b</code> means "a word followed by .com, .net,
+                    .org, .gg or .io" = any site address.</p>
+                <div class="ignore-presets" id="ignorePresets" aria-label="Ready patterns"></div>
                 <textarea id="ignorePatternsInput" class="text-mono" rows="5" spellcheck="false"></textarea>
+                <div class="ignore-test">
+                    <input type="text" id="ignoreTestInput" placeholder="Try it: type or paste a bubble text, e.g. READ MORE AT MANGASITE.COM - you see at once if it would be dropped" spellcheck="false">
+                    <span id="ignoreTestResult" class="text-muted"></span>
+                </div>
                 <button id="saveIgnorePatternsBtn" class="primary">Save</button>
                 <p class="text-muted" id="ignorePatternsStatus" style="margin-top:10px;"></p>
             </div>
  
             <div class="card" id="backup">
                 <h2 data-toc="Backup &amp; moving">Backup &amp; move to another computer</h2>
-                <p class="text-muted">One zip with everything: database (projects, corrections, glossary, logs), settings (without this PC's folder path), the .env file and all page images + OCR results. On the new computer install the app, open this page and import the zip - everything is put in the right place automatically.</p>
+                <p class="text-muted">One zip with everything: database (projects, corrections, glossary, logs), settings (without this PC's folder path), your fonts, all page images + OCR results (and, if ticked below, the API keys, the models and this browser's preferences). On the new computer install the app, open this page and import the zip - everything is put in the right place automatically.</p>
+                <details class="move-notes">
+                    <summary>Moving between a PC and a laptop - what to check</summary>
+                    <ul>
+                        <li><b>Work on one computer at a time.</b> Import <i>replaces</i> the projects on the other computer (the old ones are moved
+                            aside into a <code>pre_import_backup_…</code> folder, not deleted) - nothing is merged. Export, import, go on there; to come back, export there and import here.</li>
+                        <li><b>Same app version</b> on both, or a newer one on the computer you import into. An older app cannot open a backup from a newer one.</li>
+                        <li><b>GPU → laptop without an NVIDIA card:</b> if Settings &gt; OCR engine says <i>GPU</i>, set it to <i>Automatic</i> there (Automatic picks the CPU by itself).
+                            CPU threads set for a desktop can make a laptop hot - 2-4 is enough there.</li>
+                        <li><b>Fonts:</b> your fonts are in the zip; fonts installed in Windows are not. A bubble lettered with a Windows font the other computer lacks uses the default font there.</li>
+                        <li><b>API keys</b> only if ticked - otherwise enter them again there. A zip with keys: keep it to yourself.</li>
+                        <li><b>Without the models</b> the other computer downloads the OCR and memory models on first use (internet needed, a few hundred MB).</li>
+                    </ul>
+                </details>
                 <div class="row">
                     <label style="display:flex; align-items:center; gap:6px; margin:0;" title="Off by default: the zip then contains no API keys and no .env - safe to copy or share, you enter the keys again on the new computer. Tick it only for a zip that stays with you.">
                         <input type="checkbox" id="backupSecretsCheckbox"> Include API keys and .env (keep such a zip private)
                     </label>
                 </div>
                 <div class="row">
-                    <label style="display:flex; align-items:center; gap:6px; margin:0;" title="HuggingFace + PaddleOCR model caches: big, but the new computer then needs no download.">
-                        <input type="checkbox" id="backupModelsCheckbox"> Include downloaded models (large)
+                    <label style="display:flex; align-items:center; gap:6px; margin:0;" title="The new computer then needs no download.">
+                        <input type="checkbox" id="backupModelsCheckbox"> Include downloaded models (large): OCR models, the memory model and installed add-ons (big-LaMa) - about 0.5 GB
                     </label>
                 </div>
                 <div class="row">
                     <label style="display:flex; align-items:center; gap:6px; margin:0;">
                         <input type="checkbox" id="backupLogsCheckbox"> Include application logs
+                    </label>
+                </div>
+                <div class="row">
+                    <label style="display:flex; align-items:center; gap:6px; margin:0;" title="They live in this browser, not in the app's folders: keyboard shortcuts, appearance (theme, palette), editor switches, History columns, the chosen clean tool. Importing the zip puts them into the browser you import with.">
+                        <input type="checkbox" id="backupBrowserCheckbox" checked> Include keyboard shortcuts and this browser's preferences (appearance, editor switches)
                     </label>
                 </div>
                 <div style="display:flex; gap:8px; margin-top:8px;">
@@ -394,7 +478,11 @@
                     <button id="storageScanBtn" title="Counts the folders (the program folder can take a few seconds)">Check sizes</button>
                     <span class="text-muted" id="storageStatus"></span>
                 </div>
-                <div id="storageList" class="storage-list"></div>
+                <!-- the whole result folds with one click; the groups inside fold on their own (js/settings.js renderStorage) -->
+                <details class="storage-all hidden" id="storageAll" open>
+                    <summary class="storage-all-summary">Folders and sizes <span class="text-muted" id="storageAllTotal"></span></summary>
+                    <div id="storageList" class="storage-list"></div>
+                </details>
                 <details class="uninstall-box" id="uninstallBox">
                     <summary>Uninstalling OpenKeyTranslate</summary>
                     <ol>
@@ -413,7 +501,10 @@
                 <h2>About</h2>
                 <div class="row">
                     <div class="text-muted">App version</div>
-                    <span class="text-mono" id="appVersionLabel">...</span>
+                    <div style="display:flex; gap:8px; align-items:center;">
+                        <span class="text-mono" id="appVersionLabel">...</span>
+                        <button class="copy-btn" id="changelogBtn" title="What changed in each version (CHANGELOG.md)">What's new</button>
+                    </div>
                 </div>
                 <div class="row">
                     <div class="text-muted">Application log file</div>
@@ -427,8 +518,12 @@
                     <button class="copy-btn" id="openDbFolderBtn">Open</button>
                 </div>
                 <div class="row">
-                    <div class="text-muted" title="Kept in your user app data folder, outside the project/repository folder, so API keys can never be committed">Settings file (contains your API keys)</div>
-                    <span class="text-mono" id="settingsPathLabel" style="font-size:11px; overflow-wrap:anywhere;">...</span>
+                    <div class="text-muted" title="Kept in your user app data folder, outside the project/repository folder, so API keys can never be committed">Settings file (contains your API keys)
+                        <div class="text-mono hidden" id="settingsPathLabel" style="font-size:11px; overflow-wrap:anywhere; margin-top:4px;">...</div></div>
+                    <div style="display:flex; gap:6px;">
+                        <button class="copy-btn" id="showSettingsPathBtn" title="Show where the file is (the path, not its content)">Show path</button>
+                        <button class="copy-btn" id="openSettingsFolderBtn" title="Select the file in Explorer - do not send it to anyone, it holds your keys">Show in Explorer</button>
+                    </div>
                 </div>
                 <div id="logViewerBlock" class="hidden">
                     <label style="display:flex; align-items:center; gap:6px; margin:10px 0;">

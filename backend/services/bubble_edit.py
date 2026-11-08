@@ -13,6 +13,7 @@ JSON shape they work with (services/page_export.save_ocr_json):
 All coordinates are original-image coordinates.
 """
 
+import copy
 import re
 
 from core.config import get_setting
@@ -114,6 +115,43 @@ def reocr_bubble(ocr_data: dict, bubble_id: str, image, ocr_region_fn, protected
         bubble["skip"], bubble["skip_reason"] = True, reason
     _refresh_info(image, ocr_data, bubble)
     return {"bubble": bubble, "text_changed": changed}
+
+
+# what a bubble has NOW that an undo of its re-read must not take away (a re-read never changes these)
+_KEEP_ON_RESTORE = ("translation", "ai_translation", "confirmed_translation", "confirmed_at", "confirmed_via",
+                    "layout", "bulk_edits")
+
+
+def snapshot_bubble(ocr_data: dict, bubble_id: str) -> dict:
+    """Copy of one bubble and its text lines, for restore_bubble (the editor's "Put the old text back" after a re-read)."""
+    bubble = _find(ocr_data, bubble_id)
+    return {"bubble": copy.deepcopy(bubble),
+            "lines": [copy.deepcopy(l) for l in ocr_data.get("lines", []) if l.get("bubble_id") == bubble_id]}
+
+
+def restore_bubble(ocr_data: dict, snap: dict) -> dict:
+    """
+    Put a snapshot_bubble copy back: text, text_raw, box, flags and the text LINES (they decide what the cleaning
+    erases - restoring only the text would leave the lines of a wrongly drawn area). The translation, review stamp
+    and Lettering layout of the bubble as it is now stay. -> the restored bubble.
+    """
+    old = snap["bubble"]
+    bubbles = ocr_data.get("bubbles", [])
+    index = next((i for i, b in enumerate(bubbles) if b["bubble_id"] == old["bubble_id"]), None)
+    if index is None:
+        raise BubbleEditError("That bubble is not on the page any more - nothing to undo.", 404)
+    current = bubbles[index]
+    restored = copy.deepcopy(old)
+    for key in _KEEP_ON_RESTORE:
+        if key in current:
+            restored[key] = current[key]
+        else:
+            restored.pop(key, None)
+    bubbles[index] = restored
+    if "lines" in ocr_data:
+        ocr_data["lines"] = ([l for l in ocr_data["lines"] if l.get("bubble_id") != old["bubble_id"]]
+                             + copy.deepcopy(snap["lines"]))
+    return restored
 
 
 def add_bubble(ocr_data: dict, box, image, ocr_region_fn, protected=()) -> dict:

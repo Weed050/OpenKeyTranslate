@@ -14,6 +14,7 @@ import { api } from "./api.js";
 import { renderSidebar } from "./nav.js";
 import { diffHtml } from "./diff.js";
  
+import { askOk, notify } from "./dialogs.js";
 const params = new URLSearchParams(window.location.search);
 const projectId = params.get("project");
  
@@ -195,7 +196,7 @@ function setupInlineEdit(details, c) {
         event.preventDefault();
         const value = input.value.trim();
         if (!value) {
-            alert("The translation must not be empty - use 'Delete from memory' instead.");
+            notify("The translation must not be empty - use 'Delete from memory' instead.");
             return;
         }
         try {
@@ -209,7 +210,7 @@ function setupInlineEdit(details, c) {
             details.replaceWith(fresh);
             updateCountBadge();
         } catch (e) {
-            alert(`Save failed: ${e.message}`);
+            notify(`Save failed: ${e.message}`);
         }
     });
 }
@@ -229,7 +230,7 @@ function applyUrlTargets() {
             row.style.outline = "2px solid var(--accent, #6c8cff)";
             row.scrollIntoView({ block: "center" });
         } else {
-            alert(`Memory entry #${targetId} no longer exists (it was deleted).`);
+            notify(`Memory entry #${targetId} no longer exists (it was deleted).`);
         }
     }
     if (params.get("find")) {
@@ -306,18 +307,18 @@ async function applyReplace(payload) {
     const ids = [...document.querySelectorAll("[data-replace-id]")]
         .filter((box) => box.checked).map((box) => Number(box.dataset.replaceId));
     if (!ids.length) {
-        alert("Nothing selected.");
+        notify("Nothing selected.");
         return;
     }
     const plural = ids.length === 1 ? "entry" : "entries";
-    if (!confirm(`Change ${ids.length} memory ${plural}: "${payload.find}" -> "${payload.replace}"?`)) return;
+    if (!(await askOk(`Change ${ids.length} memory ${plural}: "${payload.find}" -> "${payload.replace}"?`, { ok: "Change" }))) return;
     try {
         const result = await api.corrections.replace(projectId, { ...payload, ids, apply: true });
         document.getElementById("replacePreview").innerHTML =
             `<p class="text-muted">Changed ${result.count} ${result.count === 1 ? "entry" : "entries"}.</p>`;
         await loadCorrections();
     } catch (e) {
-        alert(`Replace failed: ${e.message}`);
+        notify(`Replace failed: ${e.message}`);
     }
 }
 
@@ -385,7 +386,7 @@ function renderUsage(panel, usage) {
 }
  
 async function deleteCorrection(id, rowEl) {
-    if (!confirm("Remove this correction from memory? It will no longer be suggested as a hint.")) return;
+    if (!(await askOk("Remove this correction from memory? It will no longer be suggested as a hint.", { ok: "Remove", danger: true }))) return;
     try {
         await api.corrections.delete(id);
         rowEl.remove();
@@ -393,7 +394,7 @@ async function deleteCorrection(id, rowEl) {
         usageCache.delete(id);
         updateCountBadge();
     } catch (e) {
-        alert(`Delete failed: ${e.message}`);
+        notify(`Delete failed: ${e.message}`);
     }
 }
  
@@ -454,10 +455,10 @@ document.getElementById("importMemoryFile")?.addEventListener("change", async (e
     try {
         const payload = JSON.parse(await file.text());
         const result = await api.corrections.import(projectId, payload);
-        alert(result.message);
+        notify(result.message);
         loadCorrections();
     } catch (err) {
-        alert(`Import failed: ${err.message}`);
+        notify(`Import failed: ${err.message}`);
     }
     e.target.value = "";
 });
@@ -469,9 +470,9 @@ document.getElementById("reembedMemoryBtn")?.addEventListener("click", async (ev
     btn.disabled = true;
     try {
         const result = await api.corrections.reembed(projectId);
-        alert(result.message);
+        notify(result.message);
     } catch (e) {
-        alert(`Re-embed failed: ${e.message}`);
+        notify(`Re-embed failed: ${e.message}`);
     } finally {
         btn.disabled = false;
     }

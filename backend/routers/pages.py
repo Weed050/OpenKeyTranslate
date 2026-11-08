@@ -23,6 +23,7 @@ line up 1:1 with the inpainted image served below when ocr_scale == 1.0
 
 import os
 import json
+import time
 import cv2
 import numpy as np
 from fastapi import APIRouter, Body, Depends, HTTPException
@@ -40,13 +41,34 @@ from services import bubble_edit, project_prefs
 from services.glossary_service import load_glossary
 from utils.bubble_post import carry_over
 import threading
-from utils.inpainting import build_erase_mask, inpaint
+from utils.inpainting import CLEANUP_MODES, CLEANUP_SHAPES, build_erase_mask, inpaint
 from services.job_queue import enqueue_page_processing, is_queued_or_running, OCR_LOCK
 from utils.image_io import load_image_bgr, write_image, ImageLoadError
 
 # Last failure reason per page (in memory). Shown by GET /pages/{id}/status so the editor can tell the
 # user WHY a page is "failed" instead of a bare status string. Lost on restart (fine: re-run to see it again).
 LAST_ERRORS: dict[int, str] = {}
+
+# One-step undo of the last bubble re-read per page (the editor's "Put the old text back" right after Re-OCR bubble /
+# Set area & re-OCR): {page_id: {"bubble_id", "snap" (bubble_edit.snapshot_bubble), "at"}}. In memory on purpose -
+# any other edit of the page drops it, because a page Re-OCR renumbers bubbles and a split / merge moves lines, so an
+# older snapshot could be written over a different bubble.
+REOCR_UNDO: dict[int, dict] = {}
+REOCR_UNDO_SECONDS = 15 * 60
+
+
+def _follow_source(db: Session, page_id: int, bubble_id: str, old_text: str, new_text: str) -> None:
+    """The bubble's source changed: its unused memory rows follow (memory_service.follow_source_edit). Never fails the edit."""
+    if not old_text or not new_text or old_text == new_text:
+        return
+    try:
+        from services.memory_service import follow_source_edit
+        page = db.query(Page).filter(Page.id == page_id).first()
+        if page is not None:
+            follow_source_edit(db, page.chapter.project_id, page_id, bubble_id, old_text, new_text)
+    except Exception as e:                          # embedder not loaded, DB busy: the edit itself is saved anyway
+        db.rollback()
+        print(f"[MEMORY] could not move memory rows of {bubble_id} to the edited source: {type(e).__name__}: {e}")
 
 
 def reset_stale_statuses(db: Session) -> int:
@@ -564,11 +586,13 @@ def patch_bubble(page_id: int, bubble_id: str, payload: dict, db: Session = Depe
         raise HTTPException(status_code=404, detail="Bubble not found on this page")
 
     skip_changed = False
+    old_text = bubble["text"]
     if "text" in payload:
         new_text = str(payload["text"]).strip()
         if not new_text:
             raise HTTPException(status_code=400, detail="Source text cannot be empty (use Delete or Skip instead)")
         if new_text != bubble["text"]:
+            REOCR_UNDO.pop(page_id, None)
             record_manual_op(ocr_data, "edit_source", bubble_id)
             bubble.setdefault("text_raw", bubble["text"])
             bubble["text"] = new_text
@@ -595,6 +619,7 @@ def patch_bubble(page_id: int, bubble_id: str, payload: dict, db: Session = Depe
             print(f"[REINPAINT] failed after patch: {type(e).__name__}: {e}")
         needs_reocr = not reinpainted
     write_page_json(paths["json"], ocr_data)
+    _follow_source(db, page_id, bubble_id, old_text, bubble["text"])
     return {"bubble": bubble, "reinpainted": reinpainted, "needs_reocr": needs_reocr}
 
 
@@ -657,9 +682,12 @@ def _edit_cleanups(page_id: int, db: Session, change, op: str, **detail) -> dict
 @router.post("/{page_id}/cleanups")
 def add_cleanup(page_id: int, payload: dict, db: Session = Depends(get_db)):
     """
-    "Clean area" in the editor: {"box": [x1, y1, x2, y2]} (image coordinates) - a leftover trace the automatic cleaning
-    missed. Stored in the page JSON ("cleanups"), so Rebuild image and Re-OCR keep it; painted flat when its border is
-    one plain colour, else filled from the surroundings (utils.inpainting._add_cleanups).
+    The editor's clean tools: {"box": [x1, y1, x2, y2], "mode"?: "clean" | "fill" | "redraw", "shape"?: "rect" |
+    "ellipse"} (image coordinates) - a leftover trace the automatic cleaning missed. Stored in the page JSON
+    ("cleanups"; "mode" only when not "clean", "shape" only when "ellipse"), so Rebuild image and Re-OCR keep it.
+    clean = remove the marks inside (lines crossing the edge stay), fill = paint the whole area with the background
+    colour, redraw = the optional AI model redraws it; ellipse = only the ellipse inside the box
+    (utils.inpainting._add_cleanups, services/lama_service.py).
     """
     box = payload.get("box")
     if not (isinstance(box, (list, tuple)) and len(box) == 4):
@@ -670,7 +698,21 @@ def add_cleanup(page_id: int, payload: dict, db: Session = Depends(get_db)):
         raise HTTPException(status_code=400, detail="box must hold 4 numbers")
     if abs(box[2] - box[0]) < 3 or abs(box[3] - box[1]) < 3:
         raise HTTPException(status_code=400, detail="The selected area is too small.")
-    return _edit_cleanups(page_id, db, lambda cl: cl.append({"box": box}), "cleanup_add")
+    mode = payload.get("mode") or "clean"
+    if mode not in CLEANUP_MODES:
+        raise HTTPException(status_code=400, detail=f"mode must be one of {', '.join(CLEANUP_MODES)}")
+    if mode == "redraw":
+        from services.lama_service import installed
+        if not installed():
+            raise HTTPException(status_code=409, detail="The AI redraw model is not installed - Settings > Add-ons.")
+    shape = payload.get("shape") or "rect"
+    if shape not in CLEANUP_SHAPES:
+        raise HTTPException(status_code=400, detail=f"shape must be one of {', '.join(CLEANUP_SHAPES)}")
+    entry = {"box": box} if mode == "clean" else {"box": box, "mode": mode}
+    if shape == "ellipse":
+        entry["shape"] = "ellipse"
+    return _edit_cleanups(page_id, db, lambda cl: cl.append(entry), "cleanup_add", mode=None if mode == "clean" else mode,
+                          shape="ellipse" if shape == "ellipse" else None)
 
 
 @router.delete("/{page_id}/cleanups")
@@ -868,6 +910,7 @@ def reocr_page(page_id: int, payload: dict | None = Body(default=None), db: Sess
     if not page:
         raise HTTPException(status_code=404, detail="Page not found")
     detect = (payload or {}).get("detect_rotation")
+    REOCR_UNDO.pop(page_id, None)                   # bubbles get new ids: an old snapshot could hit another bubble
     result = _run_sync(page_id, reocr=True, detect_rotation=None if detect is None else bool(detect))
     msg = f"Re-OCR done: {result['bubble_count']} bubble(s), {result['carried_over']} kept their translation"
     if result.get("translation_error"):
@@ -920,6 +963,7 @@ def _run_bubble_edit(page_id: int, db: Session, operation, op: str | None = None
     """
     if not _claim(page_id):
         raise HTTPException(status_code=409, detail="This page is being processed - wait for it to finish.")
+    REOCR_UNDO.pop(page_id, None)                   # see REOCR_UNDO: only the edit right after a re-read can be undone
     try:
         _, paths, ocr_data, protected = _edit_context(page_id, db)
         try:
@@ -961,9 +1005,40 @@ def reocr_bubble(page_id: int, bubble_id: str, payload: dict | None = Body(defau
     box = (payload or {}).get("box")      # optional: the area the user drew (bubble whose detected box misses a line)
     if box is not None and not (isinstance(box, (list, tuple)) and len(box) == 4):
         raise HTTPException(status_code=400, detail="box must be [x1, y1, x2, y2]")
-    return _run_bubble_edit(page_id, db, lambda data, image, prot: bubble_edit.reocr_bubble(data, bubble_id, image, ocr_region, prot, box),
-                            op="reocr_bubble", note=lambda r: {"bubble": bubble_id, "drawn_box": True if box else None,
-                                                                "text_changed": bool(r.get("text_changed"))})
+
+    def operation(data, image, prot):
+        snap = bubble_edit.snapshot_bubble(data, bubble_id)
+        return {**bubble_edit.reocr_bubble(data, bubble_id, image, ocr_region, prot, box),
+                "previous_text": snap["bubble"]["text"], "_snap": snap}
+
+    result = _run_bubble_edit(page_id, db, operation,
+                              op="reocr_bubble", note=lambda r: {"bubble": bubble_id, "drawn_box": True if box else None,
+                                                                  "text_changed": bool(r.get("text_changed"))})
+    REOCR_UNDO[page_id] = {"bubble_id": bubble_id, "snap": result.pop("_snap"), "at": time.time()}
+    if result.get("text_changed"):
+        _follow_source(db, page_id, bubble_id, result["previous_text"], result["bubble"]["text"])
+    return {**result, "can_undo": True}
+
+
+@router.post("/{page_id}/bubbles/{bubble_id}/reocr/undo")
+def undo_reocr_bubble(page_id: int, bubble_id: str, db: Session = Depends(get_db)):
+    """
+    Undo the last re-read of this bubble (text, box and text lines back as they were; the translation stays) - offered
+    by the editor right after Re-OCR bubble / Set area & re-OCR. Any other edit of the page in between makes it 409.
+    """
+    entry = REOCR_UNDO.get(page_id)
+    if not entry or entry["bubble_id"] != bubble_id or time.time() - entry["at"] > REOCR_UNDO_SECONDS:
+        raise HTTPException(status_code=409, detail="Nothing to undo: only the last re-read of a bubble can be undone, "
+                                                    "right after it (before any other change of the page).")
+    snap = entry["snap"]
+
+    def operation(data, image, prot):
+        before = next((b["text"] for b in data.get("bubbles", []) if b["bubble_id"] == bubble_id), "")
+        return {"bubble": bubble_edit.restore_bubble(data, snap), "text_before_undo": before}
+
+    result = _run_bubble_edit(page_id, db, operation, op="reocr_undo", note=lambda r: {"bubble": bubble_id})
+    _follow_source(db, page_id, bubble_id, result.get("text_before_undo", ""), result["bubble"]["text"])
+    return result
 
 
 @router.post("/{page_id}/bubbles/reorder")

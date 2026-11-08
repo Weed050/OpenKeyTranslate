@@ -431,6 +431,8 @@ def save_correction(
     used that entry yet (reuse_count 0) changes that row instead of adding a second one - a typo fixed seconds later
     is one correction, not two. If the new text is not storable any more (back to the AI text, too short), that unused
     row is removed: the memory follows what the bubble says now.
+    When the bubble's SOURCE is changed after a correction was stored, follow_source_edit moves that row to the new
+    source first, so this lookup finds it again.
 
     :return: The created / updated Correction, or None if a gate skipped the save.
         Callers should treat None as "acknowledged, not stored" - not an error.
@@ -506,6 +508,37 @@ def save_correction(
     db.commit()
     db.refresh(correction)
     return correction
+
+
+def follow_source_edit(db: Session, project_id: int, page_id: int, bubble_id: str, old_text: str, new_text: str) -> int:
+    """
+    The bubble's English source changed (edited by hand, Re-OCR bubble / area, or that re-read undone): its own memory
+    rows saved with the OLD source now get the NEW one (+ embedding), keeping the user's Polish.
+
+    Why: a correction is often saved before the user notices an OCR misread ("W,1 HUNGRY" -> fixed to "I'M HUNGRY").
+    Without this the memory kept the pair "misread English -> Polish" forever and the next save of the bubble added a
+    second row next to it. Matched by page + bubble + old source together - bubble ids are renumbered by a page Re-OCR,
+    so the id alone could point at another bubble's row. Only rows the memory has NOT used yet (reuse_count 0):
+    translation logs point at used rows and their source must stay what the model was shown. -> rows changed.
+    """
+    old_key = normalize_phrase(memory_text(old_text or ""))
+    if not old_key or not new_text or old_key == normalize_phrase(memory_text(new_text)):
+        return 0
+    rows = (
+        db.query(Correction)
+        .filter(Correction.project_id == project_id, Correction.page_id == page_id, Correction.bubble_id == bubble_id)
+        .all()
+    )
+    rows = [c for c in rows if not (c.reuse_count or 0) and normalize_phrase(memory_text(c.source_text)) == old_key]
+    if not rows:
+        return 0
+    embedding = encode_embedding(embed_text(memory_text(new_text)))
+    for c in rows:
+        c.source_text = new_text
+        c.embedding = embedding
+    db.commit()
+    print(f"[MEMORY] source of {len(rows)} entr{'y' if len(rows) == 1 else 'ies'} follows the edited bubble {bubble_id} (page {page_id})")
+    return len(rows)
 
 
 def reembed_project(db: Session, project_id: int) -> int:

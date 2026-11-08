@@ -14,6 +14,7 @@ import { api } from "./api.js";
 import { offerMemoryCleanup } from "./memory-links.js";
 import { diffHtml } from "./diff.js";
 
+import { askOk, notify } from "./dialogs.js";
 const params = new URLSearchParams(window.location.search);
 const projectId = params.get("project");
 
@@ -177,7 +178,7 @@ function renderUsage(panel, usage, term) {
 }
 
 async function deleteTerm(id, rowEl) {
-    if (!confirm("Remove this glossary term? It will stop being injected into future translations.")) return;
+    if (!(await askOk("Remove this glossary term? It will stop being injected into future translations.", { ok: "Remove", danger: true }))) return;
     try {
         await api.glossary.delete(id);
         rowEl.remove();
@@ -185,7 +186,7 @@ async function deleteTerm(id, rowEl) {
         usageCache.delete(id);
         document.getElementById("glossaryCountBadge").textContent = `${allTerms.length} terms`;
     } catch (e) {
-        alert(`Delete failed: ${e.message}`);
+        notify(`Delete failed: ${e.message}`);
     }
 }
 
@@ -233,7 +234,7 @@ async function runSuggestionScan(fetchSuggestions, busyText, emptyText) {
 
     if (!suggestions.length) {
         block.classList.add("hidden");
-        alert(emptyText);
+        notify(emptyText);
         return;
     }
 
@@ -279,7 +280,7 @@ function suggestionRow(s) {
             loadGlossary();
             offerMemoryCleanup(projectId, s.old_translation, target);
         } catch (e) {
-            alert(`Couldn't add term: ${e.message}`);
+            notify(`Couldn't add term: ${e.message}`);
         }
     });
     row.querySelector("[data-reject]").addEventListener("click", () => row.remove());
@@ -306,10 +307,10 @@ document.getElementById("importGlossaryFile")?.addEventListener("change", async 
     try {
         const payload = JSON.parse(await file.text());
         const result = await api.glossary.import(projectId, payload);
-        alert(result.message);
+        notify(result.message);
         loadGlossary();
     } catch (err) {
-        alert(`Import failed: ${err.message}`);
+        notify(`Import failed: ${err.message}`);
     }
     e.target.value = "";
 });

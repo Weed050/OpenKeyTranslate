@@ -21,6 +21,7 @@
 import { api, API_BASE } from "./api.js";
 import { pageId, state, el, escapeHtml, showToast } from "./editor-shared.js";
 
+import { askOk } from "./dialogs.js";
 const MODE_KEY = "okt-editor-mode";
 const EXPORT_KEY = "okt-export-options";
 
@@ -334,7 +335,7 @@ async function styleToProject(b) {
     const st = styleOfPlacement(p);
     if (p.auto_color) st.color = "black";       // white only because THIS area is dark - not a project choice
     const what = describeStyle(st);
-    if (!confirm(`Project style: ${what}\n\nUsed by every bubble of the project that has no style of its own - also on pages processed later and in exports. Bubbles you styled yourself keep their style (Reset bubble = project style).`)) return;
+    if (!(await askOk(`Project style: ${what}\n\nUsed by every bubble of the project that has no style of its own - also on pages processed later and in exports. Bubbles you styled yourself keep their style (Reset bubble = project style).`, { ok: "Use in whole project" }))) return;
     try {
         const prefs = await api.projects.setPrefs(state.projectId, { lettering_style: isDefaultStyle(st) ? null : st });
         state.projectStyle = prefs.lettering_style || {};
@@ -358,7 +359,7 @@ async function styleToProject(b) {
 }
 
 async function clearProjectStyle() {
-    if (!confirm("Remove the project style? Bubbles without a style of their own go back to the Settings font and plain black letters.")) return;
+    if (!(await askOk("Remove the project style? Bubbles without a style of their own go back to the Settings font and plain black letters.", { ok: "Remove", danger: true }))) return;
     try {
         state.projectStyle = (await api.projects.setPrefs(state.projectId, { lettering_style: null })).lettering_style || {};
         await loadLayout();

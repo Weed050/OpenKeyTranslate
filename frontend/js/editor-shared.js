@@ -6,6 +6,7 @@
 
 import { api } from "./api.js";
 
+import { notify } from "./dialogs.js";
 export const params = new URLSearchParams(window.location.search);
 export const pageId = params.get("page");
 
@@ -39,19 +40,41 @@ export function escapeHtml(text) {
     return div.innerHTML;
 }
 
+/**
+ * A short message at the top of the editor (under the toolbar). It stays at least as long as it takes to read
+ * (a longer text stays longer than `ms`), does not go away while the mouse is over it, and has a close button -
+ * at the bottom, small and for 2-3 s, messages like "the OCR read the same text" were gone before they were read.
+ * `action` {label, run}: one button in the message (e.g. Undo).
+ */
 export function showToast(message, ms = 1800, action = null) {
-    el.saveToast.textContent = message;
-    if (action) {                                   // {label, run}: one button in the message (e.g. Undo)
+    const toast = el.saveToast;
+    const hide = () => { clearTimeout(showToast._t); toast.classList.remove("show"); };
+    toast.textContent = "";
+    const text = document.createElement("span");
+    text.textContent = message;
+    toast.append(text);
+    if (action) {
         const btn = document.createElement("button");
         btn.className = "toast-action";
         btn.textContent = action.label;
-        btn.addEventListener("click", () => { el.saveToast.classList.remove("show"); action.run(); }, { once: true });
-        el.saveToast.append(" ", btn);
+        btn.addEventListener("click", () => { hide(); action.run(); }, { once: true });
+        toast.append(btn);
     }
-    el.saveToast.classList.toggle("has-action", !!action);
-    el.saveToast.classList.add("show");
-    clearTimeout(showToast._t);
-    showToast._t = setTimeout(() => el.saveToast.classList.remove("show"), action ? Math.max(ms, 6000) : ms);
+    const close = document.createElement("button");
+    close.className = "toast-close";
+    close.textContent = "×";
+    close.title = "Close";
+    close.setAttribute("aria-label", "Close the message");
+    close.addEventListener("click", hide, { once: true });
+    toast.append(close);
+    toast.classList.toggle("has-action", !!action);
+    toast.classList.add("show");
+    const readTime = 1500 + String(message).length * 45;          // ~ reading speed; "Saved" stays short
+    const duration = Math.max(ms, readTime, action ? 6000 : 0);
+    const schedule = (after) => { clearTimeout(showToast._t); showToast._t = setTimeout(hide, after); };
+    toast.onmouseenter = () => clearTimeout(showToast._t);
+    toast.onmouseleave = () => { if (toast.classList.contains("show")) schedule(1500); };
+    schedule(duration);
 }
 
 export async function openOrAlert(path) {
@@ -59,7 +82,7 @@ export async function openOrAlert(path) {
     try {
         await api.system.openPath(path);
     } catch (e) {
-        alert(`Couldn't open: ${e.message}`);
+        notify(`Couldn't open: ${e.message}`);
     }
 }
 

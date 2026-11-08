@@ -24,7 +24,7 @@ _DOCS_BUILD = bool(os.environ.get("OKT_DOCS_BUILD"))
 
 # Bump manually on release. Stamped into every log file header (see
 # core/app_logging.py) so a bug report's log always says which version produced it.
-APP_VERSION = "0.4.0"
+APP_VERSION = "0.4.1"
 
 
 def get_default_app_root():
@@ -41,8 +41,16 @@ def get_default_app_root():
 # settings.json (API keys!) lives in the per-user app data folder, NOT in the project folder: next to the code it was
 # one `git add -f` or one generated file away from a public repository. OKT_SETTINGS_FILE overrides the location.
 # Fixed location on purpose - it cannot follow app_root_dir, because that value is stored IN this file.
-SETTINGS_FILE = os.environ.get("OKT_SETTINGS_FILE") or os.path.join(get_default_app_root(), "settings.json")
+SETTINGS_FILE = os.environ.get("OKT_SETTINGS_FILE") or (
+    # docs build / tests (OKT_DOCS_BUILD): a throwaway file next to the throwaway data folder. load_settings() returned
+    # defaults in this mode, but save_settings() still wrote the REAL file - on 2026-11-08 a backup-import test
+    # (restore_backup -> save_settings) replaced the user's settings.json (keys, workspace path, A/B switch) with the
+    # test defaults, and the .bak went with the next two saves.
+    os.path.join(tempfile.gettempdir(), "okt_docs_build", "settings.json") if _DOCS_BUILD
+    else os.path.join(get_default_app_root(), "settings.json"))
 """@private Path of the user's settings file (contains the Windows user name)."""
+_REAL_SETTINGS_FILE = os.path.join(get_default_app_root(), "settings.json")
+"""@private The user's real settings file - never written in a docs build / test run (save_settings refuses)."""
 # Before 2026-10-28 the file lived in the project folder; _move_legacy_settings() moves it once.
 LEGACY_SETTINGS_FILE = os.path.join(os.path.dirname(ROOT_DIR), "settings.json")
 """@private Old location of settings.json (project folder)."""
@@ -129,7 +137,9 @@ DEFAULT_SETTINGS = {
     # When True, matched bubbles are translated a second time without the
     # hint (hint-free "counterfactual"), purely for A/B logging. Turn off
     # once the experiment is done to save on API calls.
-    "memory_ab_test_logging": True,
+    # Default False since 0.4.1 (research feature, costs a 2nd request): only NEW settings files get it - load_settings
+    # never changes a key that is already in the file, so an install that runs the experiment keeps it on.
+    "memory_ab_test_logging": False,
     # Share of translation runs (pages) that get the hint-free counterfactual pass when A/B logging is on.
     # 1.0 = every run (doubles requests for pages with a memory match), 0.3 = ~every third page - saves free-tier quota.
     "memory_ab_sample_rate": 1.0,
@@ -289,7 +299,10 @@ def save_settings(data: dict) -> None:
     """
     Atomic write: temp file -> fsync -> os.replace, after copying the previous file to settings.json.bak.
     A crash mid-write can no longer leave a half-written settings.json (= lost API keys).
+    In a docs build / test run (OKT_DOCS_BUILD) the user's real file is never written - see SETTINGS_FILE.
     """
+    if _DOCS_BUILD and os.path.normcase(os.path.abspath(SETTINGS_FILE)) == os.path.normcase(os.path.abspath(_REAL_SETTINGS_FILE)):
+        raise RuntimeError("OKT_DOCS_BUILD: refusing to write the user's real settings.json")
     os.makedirs(os.path.dirname(SETTINGS_FILE), exist_ok=True)     # app data folder may not exist yet (fresh install)
     tmp_path = SETTINGS_FILE + ".tmp"
     with open(tmp_path, "w", encoding="utf-8") as file:
@@ -442,7 +455,7 @@ MEMORY_TOP_K = settings.get("memory_top_k", 3)
 MEMORY_EMBEDDING_MODEL = settings.get("memory_embedding_model", "all-MiniLM-L6-v2")
 MEMORY_MIN_WORDS = settings.get("memory_min_words", 3)
 MEMORY_SHORT_PHRASE_MAX_WORDS = settings.get("memory_short_phrase_max_words", 2)
-MEMORY_AB_TEST_LOGGING = settings.get("memory_ab_test_logging", True)
+MEMORY_AB_TEST_LOGGING = settings.get("memory_ab_test_logging", False)
 
 # Environment Debugging
 DEBUG = settings.get("ocr_debug")

@@ -14,6 +14,7 @@
 import { api } from "./api.js";
 import { pageId, state, el, escapeHtml, showToast } from "./editor-shared.js";
 
+import { notify } from "./dialogs.js";
 /** Callbacks from editor.js: save(), reload(selectId), retranslateIds(ids), rerender(). */
 let hooks = {};
 let split = null;          // {bubbleId, lines: [{line_id, box, text}], picked: Set}
@@ -41,7 +42,7 @@ export async function startSplit() {
     try {
         ({ lines } = await api.pages.bubbleLines(pageId, bubble.bubble_id));
     } catch (e) {
-        alert(`Split: ${e.message}`);
+        notify(`Split: ${e.message}`);
         return;
     }
     if (lines.length < 2) {
@@ -274,7 +275,7 @@ async function openSplitDialog() {
             if (retranslate) await hooks.retranslateIds(parts);
         } catch (e) {
             ev.target.disabled = false;
-            alert(`${target ? "Move" : "Split"} failed: ${e.message}`);
+            notify(`${target ? "Move" : "Split"} failed: ${e.message}`);
         }
     });
     dlg.showModal();

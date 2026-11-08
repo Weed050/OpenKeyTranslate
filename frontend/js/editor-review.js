@@ -19,6 +19,7 @@
 import { api } from "./api.js";
 import { pageId, state, escapeHtml, showToast } from "./editor-shared.js";
 
+import { askOk } from "./dialogs.js";
 const MODE_KEY = "okt-review-mode";
 const UNDO_KEY = "okt-review-undo";        // sessionStorage: what "Next page" accepted on the page before
 
@@ -94,10 +95,11 @@ export function renderReviewControls(slot) {
         </select>`;
     slot.querySelector("#acceptPageBtn").addEventListener("click", () => acceptPage({ ask: true }));
     slot.querySelector("#layoutCheckBtn").addEventListener("click", toggleLayoutChecked);
-    slot.querySelector("#reviewModeSelect").addEventListener("change", (e) => {
-        const m = e.target.value;
-        if (m !== "bubble" && !confirm(`${REVIEW_MODES[m].label}\n\n${REVIEW_MODES[m].tip}.\n\nBubbles accepted this way are recorded as "accepted with the page". Turn it on?`)) {
-            e.target.value = reviewMode();
+    slot.querySelector("#reviewModeSelect").addEventListener("change", async (e) => {
+        const select = e.target;
+        const m = select.value;
+        if (m !== "bubble" && !(await askOk(`${REVIEW_MODES[m].label}\n\n${REVIEW_MODES[m].tip}.\n\nBubbles accepted this way are recorded as "accepted with the page". Turn it on?`, { ok: "Turn it on" }))) {
+            select.value = reviewMode();
             return;
         }
         setReviewMode(m);
@@ -116,7 +118,7 @@ async function acceptPage({ ask }) {
     if (!(await hooks.saveIfChanged())) return;
     const open = openBubbles();
     if (!open.length) return;
-    if (ask && !confirm(`Accept ${open.length} bubble(s) you have not reviewed yet?\n\nTheir AI text is kept as it is and marked as Accepted (recorded as "accepted with the page").`)) return;
+    if (ask && !(await askOk(`Accept ${open.length} bubble(s) you have not reviewed yet?\n\nTheir AI text is kept as it is and marked as Accepted (recorded as "accepted with the page").`, { ok: "Accept" }))) return;
     try {
         const r = await api.pages.review(pageId, { accept: true });
         applyAccepted(r.accepted);

@@ -144,7 +144,7 @@ def translate_bubbles(
 
     MEMORY_TOP_K = get_setting("memory_top_k", 3)
     MEMORY_SIMILARITY_THRESHOLD = get_setting("memory_similarity_threshold", 0.67)
-    MEMORY_AB_TEST_LOGGING = get_setting("memory_ab_test_logging", True)
+    MEMORY_AB_TEST_LOGGING = get_setting("memory_ab_test_logging", False)
     AB_SAMPLE_RATE = float(get_setting("memory_ab_sample_rate", 1.0))
     POSTEDIT = get_setting("glossary_postedit", True)
     MATCH_CASE = get_setting("translation_match_case", True)

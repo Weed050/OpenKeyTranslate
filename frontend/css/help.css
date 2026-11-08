@@ -49,6 +49,14 @@
   padding: 6px var(--space-sm);
   color: var(--text-secondary);
 }
+/* topic groups = parts of the app; a group folds (js/help.js GROUPS) */
+.help-group > summary { list-style: none; cursor: pointer; font-size: 11px; font-weight: 700; text-transform: uppercase;
+  letter-spacing: .05em; color: var(--text-muted); padding: 8px var(--space-sm) 4px; display: flex; align-items: center; gap: 6px; }
+.help-group > summary::-webkit-details-marker { display: none; }
+.help-group > summary::before { content: "▾"; display: inline-block; width: 10px; transition: transform .15s; }
+.help-group:not([open]) > summary::before { transform: rotate(-90deg); }
+.help-group > summary:hover { color: var(--text-primary); }
+.help-group > button { width: 100%; padding-left: 22px; }
 .help-nav button:hover { background: var(--bg-hover); color: var(--text-primary); }
 .help-nav button:active { transform: none; }
 .help-nav button.active { background: var(--bg-selected); border-left-color: var(--accent); color: var(--text-primary); }
@@ -90,6 +98,18 @@
   color: var(--text-primary);
 }
 .help-list dd { color: var(--text-secondary); }
+/* topic head: the group as a small label above the title */
+.help-topic-head { margin-bottom: var(--space-sm); }
+.help-topic-head h3 { margin: 0; }
+.help-crumb { display: block; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .05em; color: var(--text-muted); }
+/* synthetic before / after examples (inline SVG "pages", white in both themes), centred in the topic */
+.help-example { margin: var(--space-sm) auto var(--space-md); max-width: 640px; }
+.help-ex-row { display: flex; align-items: center; justify-content: center; gap: 10px; flex-wrap: wrap; }
+.help-ex-panel { display: flex; flex-direction: column; align-items: center; gap: 4px; font-size: 11.5px; color: var(--text-muted); }
+.help-ex-svg { width: 150px; height: auto; border: 1px solid var(--border-strong); border-radius: 4px; display: block; }
+.help-example > .help-ex-svg { width: min(100%, 420px); margin: 0 auto; }
+.help-ex-arrow { font-size: 18px; color: var(--text-muted); }
+.help-example figcaption { margin-top: 6px; font-size: 12.5px; color: var(--text-secondary); line-height: 1.5; text-align: center; }
 .help-list dt:last-of-type, .help-list dd:last-of-type { border-bottom: none; }
 
 /* small look-alikes of what the editor shows, so the legend matches the real thing */

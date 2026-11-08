@@ -10,6 +10,7 @@ import { api } from "./api.js";
 import { state, el, showToast, escapeHtml, groupByChapter, compareChapterNames } from "./editor-shared.js";
 import { openImportDialog } from "./import-dialog.js";
 import { openReplaceDialog } from "./replace-dialog.js";
+import { askOk, notify } from "./dialogs.js";
 import { PAGE_BADGES, activeGroups, countGroups, doneScore, groupLabel, reviewedCount, shownStage, stageBarHtml,
          stageChipsHtml, stageGroup, stageTip, trackExported, setTrackExported } from "./stages.js";
 
@@ -150,12 +151,12 @@ function chapterCard(chapter, chapterPages, index) {
     summary.querySelector(".chapter-select").addEventListener("click", (e) => e.stopPropagation()); // don't toggle <details>
     summary.querySelector(".chapter-delete-btn").addEventListener("click", async (event) => {
         event.preventDefault();
-        if (!confirm(`Delete chapter "${chapter}"? Removes its pages and files on disk. Cannot undo.`)) return;
+        if (!(await askOk(`Delete chapter "${chapter}"? Removes its pages and files on disk. Cannot undo.`, { ok: "Delete", danger: true }))) return;
         try {
             await api.projects.deleteChapter(chapterId);
             await showPagePicker();
         } catch (err) {
-            alert(`Delete failed: ${err.message}`);
+            notify(`Delete failed: ${err.message}`);
         }
     });
     return details;
@@ -212,7 +213,7 @@ function pageTile(p) {
                 await api.pages.restore(p.page_id);
                 await showPagePicker();
             } catch (err) {
-                alert(`Restore failed: ${err.message}`);
+                notify(`Restore failed: ${err.message}`);
             }
         });
         row.appendChild(restoreBtn);
@@ -234,7 +235,7 @@ function bindToolbar(byChapter) {
     document.getElementById("showExcludedCheckbox").onchange = () => showPagePicker();
     document.getElementById("goToNextUnprocessedBtn").onclick = goToNextUnprocessed;
     document.getElementById("addChaptersBtn").onclick = () => openImportDialog(showPagePicker);
-    document.getElementById("openExportedBtn").onclick = () => api.projects.openExported(state.projectId).catch((e) => alert(e.message));
+    document.getElementById("openExportedBtn").onclick = () => api.projects.openExported(state.projectId).catch((e) => notify(e.message));
     document.getElementById("rescanBtn").onclick = rescanFolders;
     document.getElementById("replaceTranslationsBtn").onclick = () => openReplaceDialog(state.projectId);
     document.getElementById("exportPagesBtn").onclick = exportTranslatedPages;
@@ -437,7 +438,7 @@ function openFirstMatching() {
     const hidden = hiddenGroups();
     const next = pagesInOrder(lastPages).find((p) => p.status !== "excluded" && pageMatches(p, currentQuery(), hidden));
     if (!next) {
-        alert("No page matches the filter.");
+        notify("No page matches the filter.");
         return;
     }
     window.location.href = `editor.html?project=${state.projectId}&page=${next.page_id}`;
@@ -448,12 +449,12 @@ async function goToNextUnprocessed() {
     try {
         pages = await api.pages.listByProject(state.projectId);
     } catch (e) {
-        alert(`Couldn't load pages: ${e.message}`);
+        notify(`Couldn't load pages: ${e.message}`);
         return;
     }
     const next = pagesInOrder(pages).find((p) => p.status === "pending" || p.status === "failed");
     if (!next) {
-        alert("No unprocessed pages left in this project.");
+        notify("No unprocessed pages left in this project.");
         return;
     }
     window.location.href = `editor.html?project=${state.projectId}&page=${next.page_id}`;
@@ -480,13 +481,13 @@ function setupBulkDelete(byChapter) {
             const done = pages.filter((p) => p.status === "processed").length;
             return `- ${b.dataset.chapterName}: ${pages.length} pages, ${done} processed`;
         });
-        if (!confirm(`Delete ${chosen.length} chapter(s)?\n\n${lines.join("\n")}\n\nRemoves their pages and files on disk (raw + processed). Corrections and glossary stay. Cannot undo.`)) return;
+        if (!(await askOk(`Delete ${chosen.length} chapter(s)?\n\n${lines.join("\n")}\n\nRemoves their pages and files on disk (raw + processed). Corrections and glossary stay. Cannot undo.`, { ok: "Delete", danger: true }))) return;
         try {
             const result = await api.projects.deleteChapters(chosen.map((b) => parseInt(b.dataset.chapterId, 10)));
             showToast(result.message, 3000);
             await showPagePicker();
         } catch (err) {
-            alert(`Delete failed: ${err.message}`);
+            notify(`Delete failed: ${err.message}`);
         }
     };
 }
@@ -569,13 +570,13 @@ function askExportOptions(label, pages) {
             try {
                 customPath = (await api.projects.selectFolder()).path || "";
             } catch (e) {
-                alert(`Couldn't open the folder dialog: ${e.message}`);
+                notify(`Couldn't open the folder dialog: ${e.message}`);
             }
             if (!customPath) dlg.querySelector('input[name="where"][value="project"]').checked = true;
             dlg.querySelector("#exportPath").textContent = customPath;
         }));
         dlg.querySelector('[data-act="cancel"]').addEventListener("click", () => dlg.close());
-        dlg.querySelector('[data-act="ok"]').addEventListener("click", () => {
+        dlg.querySelector('[data-act="ok"]').addEventListener("click", async () => {
             const value = (name) => dlg.querySelector(`input[name="${name}"]:checked`).value;
             const opts = {
                 content: value("content"), format: value("format"),
@@ -584,9 +585,9 @@ function askExportOptions(label, pages) {
                 onlyReviewed: value("which") === "reviewed",
             };
             if (!opts.onlyReviewed && drafts && opts.content !== "clean"
-                && !confirm(`${drafts} page(s) have bubbles you have not reviewed - their AI text is exported as it is.
+                && !(await askOk(`${drafts} page(s) have bubbles you have not reviewed - their AI text is exported as it is.
 
-Export them anyway?`)) return;
+Export them anyway?`, { ok: "Export anyway" }))) return;
             try { localStorage.setItem(EXPORT_KEY, JSON.stringify(opts)); } catch { /* ignore */ }
             answer = { ...opts, path: value("where") === "custom" ? customPath : "" };
             dlg.close();
@@ -620,14 +621,14 @@ async function exportTranslatedPages() {
             }
             if (job.state === "done") {
                 const where = job.result?.path;
-                showToast(job.message, 8000, where ? { label: "Open", run: () => api.system.openPath(where).catch((e) => alert(e.message)) } : null);
+                showToast(job.message, 8000, where ? { label: "Open", run: () => api.system.openPath(where).catch((e) => notify(e.message)) } : null);
                 if (trackExported()) showPagePicker();          // the pages just exported change stage
             }
-            else alert(`Export failed: ${job.message}`);
+            else notify(`Export failed: ${job.message}`);
             break;
         }
     } catch (e) {
-        alert(`Export failed: ${e.message}`);
+        notify(`Export failed: ${e.message}`);
     } finally {
         btn.disabled = false;
         btn.textContent = original;
@@ -657,7 +658,7 @@ async function rescanFolders() {
         dlg.showModal();
         await showPagePicker();
     } catch (e) {
-        alert(`Rescan failed: ${e.message}`);
+        notify(`Rescan failed: ${e.message}`);
     } finally {
         btn.disabled = false;
         btn.textContent = original;

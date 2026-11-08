@@ -28,6 +28,9 @@ class ExportRequest(BaseModel):
     include_secrets: bool = False     # API keys in settings.json + the .env file - opt-in: a zip gets copied around
     include_models: bool = False      # HuggingFace / PaddleX caches (big, but the new PC then needs no download)
     include_logs: bool = False
+    # the browser's own preferences (localStorage "okt-*": keyboard shortcuts, appearance, editor switches) - the
+    # backend cannot read them, so the page sends them along; None = not wanted
+    browser_prefs: dict[str, str] | None = None
 
 
 class ImportRequest(BaseModel):
@@ -152,6 +155,39 @@ def storage_delete(payload: StorageDeleteRequest):
         raise HTTPException(status_code=400, detail=str(e))
 
 
+@router.get("/lama")
+async def lama_status():
+    """Optional AI redraw model (services/lama_service.py): installed / downloading (bytes done of total) / last error."""
+    from services.lama_service import status
+    return status()
+
+
+@router.post("/lama/install")
+def lama_install():
+    """Settings > Add-ons > Install: starts the one-time 196 MB download in the background; poll GET /system/lama."""
+    from services.lama_service import start_install
+    return start_install()
+
+
+@router.post("/lama/cancel")
+def lama_cancel():
+    """Settings > Add-ons > Cancel: stops a running download (the partial file is deleted)."""
+    from services.lama_service import cancel_install
+    return cancel_install()
+
+
+@router.get("/changelog")
+async def changelog():
+    """CHANGELOG.md of the program folder (Settings > About > What's new). Public text - it is in the repository."""
+    from core.config import APP_VERSION, ROOT_DIR
+    path = os.path.join(os.path.dirname(ROOT_DIR), "CHANGELOG.md")
+    try:
+        with open(path, encoding="utf-8") as f:
+            return {"version": APP_VERSION, "text": f.read()}
+    except OSError:
+        raise HTTPException(status_code=404, detail="CHANGELOG.md is not in the program folder.")
+
+
 @router.get("/tail-log")
 async def tail_log(lines: int = 200, errors_only: bool = False):
     """Last N lines of today's log file (errors.log when errors_only, else app.log) - for the in-app log viewer."""
@@ -208,7 +244,7 @@ def export_all(payload: ExportRequest):
     from services import backup_service as bs
     try:
         job_id = bs.start_job("export", bs.create_backup, payload.path, payload.include_secrets,
-                              payload.include_models, payload.include_logs)
+                              payload.include_models, payload.include_logs, payload.browser_prefs)
     except bs.BackupError as e:
         raise HTTPException(status_code=409, detail=str(e))
     return {"job_id": job_id}

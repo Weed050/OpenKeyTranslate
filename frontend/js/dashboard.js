@@ -11,6 +11,7 @@
 import { api } from "./api.js";
 import { renderSidebar } from "./nav.js";
 import { countGroups, doneScore, stageBarHtml, stageLegendHtml } from "./stages.js";
+import { askOk, notify } from "./dialogs.js";
 
 const SORT_KEY = "okt-project-sort";          // {"field", "dir"} (older versions: a bare mode string)
 const byName = (a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: "base" });
@@ -126,19 +127,19 @@ function projectCard(p) {
         try {
             await api.system.openPath(p.workspace_path);
         } catch (err) {
-            alert(`Couldn't open folder: ${err.message}`);
+            notify(`Couldn't open folder: ${err.message}`);
         }
     });
     card.querySelector('[data-act="exported"]').addEventListener("click", () =>
-        api.projects.openExported(p.id).catch((err) => alert(`Couldn't open folder: ${err.message}`)));
+        api.projects.openExported(p.id).catch((err) => notify(`Couldn't open folder: ${err.message}`)));
     card.querySelector('[data-act="delete"]').addEventListener("click", async () => {
-        if (!confirm(`Delete project "${p.name}"?\n\nThis removes its files on disk too (scans, cleaned pages, translations). It cannot be undone - consider Settings > Backup first.`)) return;
+        if (!(await askOk(`Delete project "${p.name}"?\n\nThis removes its files on disk too (scans, cleaned pages, translations). It cannot be undone - consider Settings > Backup first.`, { ok: "Delete project", danger: true }))) return;
         try {
             await api.projects.delete(p.id);
             loadProjects();
             renderSidebar(null);
         } catch (err) {
-            alert(`Delete failed: ${err.message}`);
+            notify(`Delete failed: ${err.message}`);
         }
     });
 

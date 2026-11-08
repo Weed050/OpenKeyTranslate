@@ -270,24 +270,35 @@
   padding: 8px 10px;
 }
  
+/* message at the top, under the page toolbar (js/editor-shared.js showToast): readable size, a close button */
 .save-toast{
   position: fixed;
-  bottom: 18px;
+  top: 64px;
   left: 50%;
-  transform: translateX(-50%);
-  font-size: 12px;
-  color: var(--success);
+  transform: translate(-50%, -6px);
+  z-index: 950;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: min(640px, 90vw);
+  font-size: 13.5px;
+  line-height: 1.4;
+  color: var(--text-primary);
   background: var(--bg-panel-2);
   border: 1px solid var(--border-strong);
+  border-left: 3px solid var(--success);
   border-radius: var(--radius-sm);
-  padding: 6px 12px;
+  box-shadow: 0 6px 20px rgba(0,0,0,.25);
+  padding: 8px 8px 8px 14px;
   opacity: 0;
   pointer-events: none;
-  transition: opacity 0.25s;
+  transition: opacity 0.2s, transform 0.2s;
 }
-.save-toast.show{ opacity: 1; }
-.save-toast.show.has-action{ pointer-events: auto; color: var(--text-primary); }
-.toast-action{ margin-left: 8px; padding: 2px 10px; font-size: 12px; }
+.save-toast.show{ opacity: 1; transform: translate(-50%, 0); pointer-events: auto; }
+.toast-action{ padding: 2px 10px; font-size: 12px; flex-shrink: 0; }
+.toast-close{ flex-shrink: 0; border: none; background: transparent; color: var(--text-muted); font-size: 16px; line-height: 1;
+  padding: 2px 6px; cursor: pointer; }
+.toast-close:hover{ color: var(--text-primary); }
  
 #editorLayout{
   width: 100%;
@@ -353,6 +364,11 @@
 .source-head{ display: flex; align-items: center; justify-content: space-between; margin-bottom: 4px; }
 .source-head label{ margin: 0; }
 .source-raw{ font-size: 11px; color: var(--text-muted); margin-top: 4px; word-break: break-word; }
+/* "the source changed after this translation" (js/editor.js askAfterSourceChange -> Keep the translation) */
+.source-changed-note{ display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 6px; padding: 5px 8px;
+  font-size: 12px; color: var(--text-primary); background: var(--warn-soft); border: 1px solid var(--warn); border-radius: var(--radius-sm); }
+.source-changed-note span{ flex: 1; min-width: 160px; }
+.source-changed-note button{ padding: 2px 8px; font-size: 12px; }
 .source-edit{ display: flex; flex-direction: column; gap: 6px; }
 
 .toolbar-sep{ width: 1px; align-self: stretch; background: var(--border); margin: 0 4px; }
@@ -518,6 +534,16 @@
 .cleanup-menu button:hover { background: var(--accent-soft); }
 .cleanup-menu button.danger { margin-top: 4px; border-top: 1px solid var(--border); border-radius: 0; }
 .cleanup-mark { position: absolute; z-index: 5; pointer-events: none; outline: 2px solid var(--warn); background: color-mix(in srgb, var(--warn) 18%, transparent); }
+
+/* clean tools: one button (the last chosen tool) + an arrow that lists the others - like a tool group in GIMP */
+.tool-split { display: inline-flex; align-items: stretch; }
+.tool-split > #cleanAreaBtn { border-top-right-radius: 0; border-bottom-right-radius: 0; }
+.tool-split > .tool-split-arrow { border-top-left-radius: 0; border-bottom-left-radius: 0; margin-left: -1px;
+  padding-left: 7px; padding-right: 7px; font-size: 11px; }
+.tool-split > .primary + .tool-split-arrow { border-left-color: var(--accent); }
+.clean-tool-menu button { display: grid; grid-template-columns: 16px 1fr; gap: 0 6px; align-items: baseline; }
+.clean-tool-menu button .tool-check { color: var(--accent); }
+.clean-tool-menu button .tool-desc { grid-column: 2; font-size: 11px; color: var(--text-muted); white-space: normal; max-width: 260px; }
 
 /* ---------- Translate / Lettering switch under the image (js/editor-lettering.js renderModeBar) ---------- */
 .mode-bar {
@@ -704,3 +730,10 @@ body.lettering-mode .bubble-outline { display: none; }
 .ocrd-item-dropped { border-left-color: #f08c2e; }
 .ocrd-text { font-family: Consolas, "Courier New", monospace; font-size: 12px; color: var(--text-primary); }
 .ocrd-why { font-size: 11px; color: var(--text-muted); }
+
+/* clean tools: shape of the area (js/editor.js openCleanToolMenu) - an ellipse for oval / spiky bubbles */
+.clean-tool-menu .clean-shape-row { display: flex; align-items: center; gap: 8px; margin-top: 6px; padding: 6px 6px 2px;
+  border-top: 1px solid var(--border); font-size: 12px; color: var(--text-muted); }
+.clean-tool-menu .clean-shape-row .segmented button { display: inline-block; padding: 3px 10px; text-align: center; }
+.clean-tool-menu .clean-shape-row .segmented button.selected { color: var(--accent-text); background: var(--accent); }
+.draw-rect.ellipse, .cleanup-mark.ellipse { border-radius: 50%; }

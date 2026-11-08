@@ -60,6 +60,14 @@ button.icon-btn {
   background: transparent;
   border-color: var(--border);
 }
+/* a toggled toolbar button (Original, Preview text, OCR debug, Clean area while drawing...) is "icon-btn primary":
+   the transparent background above came later and won, leaving the accent-coloured text on the panel colour -
+   invisible in both themes. Same specificity, so this rule must stay after button.icon-btn. */
+button.icon-btn.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-text);
+}
 
 /* a button that reads as a link (secondary actions in bars and notes) */
 button.link-btn {

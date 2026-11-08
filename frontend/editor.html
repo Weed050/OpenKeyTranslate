@@ -22,10 +22,10 @@
  
     <div class="app-shell">
         <nav class="sidebar">
-            <div class="sidebar-brand"><img src="img/okt-logo.svg" alt="" class="brand-icon">OpenKeyTranslate</div>
+            <a class="sidebar-brand" href="index.html" title="All projects (start page)"><img src="img/okt-logo.svg" alt="" class="brand-icon">OpenKeyTranslate</a>
  
             <div class="sidebar-section">
-                <div class="sidebar-label">Active</div>
+                <a class="sidebar-label sidebar-label-link" href="index.html" title="All projects (start page)">Projects</a>
                 <div id="sidebarActive"></div>
             </div>
  
@@ -54,10 +54,23 @@
                         <!-- most used first; rare page tools in More (nothing wraps out of sight) -->
                         <button id="retranslateBtn" class="icon-btn" title="Re-run translation only. Bubbles you edited are kept (Shift+click overwrites them too)">Retranslate</button>
                         <button id="reocrBtn" class="icon-btn" title="Run OCR + inpainting again on this page. Translations of bubbles whose text did not change are kept">Re-OCR</button>
-                        <button id="cleanAreaBtn" class="icon-btn" title="Draw a rectangle over a leftover trace (pale ghost of a letter, a smudge): it is painted with the plain colour around it, or filled from the surroundings on artwork. Kept by Rebuild image and Re-OCR (Esc cancels)">Clean area</button>
+                        <!-- clean tools: the button runs the last chosen one, the arrow opens the list (js/editor.js CLEAN_TOOLS) -->
+                        <span class="tool-split" id="cleanToolGroup">
+                            <button id="cleanAreaBtn" class="icon-btn">Clean area</button><button id="cleanToolMenuBtn" class="icon-btn tool-split-arrow" title="Other clean tools" aria-haspopup="menu">&#9662;</button>
+                        </span>
                         <button id="undoCleanBtn" class="icon-btn hidden" title="Undo a cleaned area of this page: with several, pick which one from the list (Shift+click: remove all of them)">Undo clean</button>
                         <button id="reinpaintBtn" class="icon-btn" title="Rebuild the clean image from the original (after deleting / skipping bubbles) - no OCR, no translation">Rebuild image</button>
                         <button id="addBubbleBtn" class="icon-btn" title="Draw a rectangle over text the OCR missed - it is read and added as a new bubble (Esc cancels)">Add bubble</button>
+                        <button id="previewBtn" class="icon-btn" title="Show the page with the translation typeset into the bubbles (the clean page is shown otherwise). Download from the page list: Export translated pages.">Preview text</button>
+                        <button id="originalBtn" class="icon-btn" title="Show the ORIGINAL page as imported (text not erased) - to see what the OCR or the cleaning missed. Click again to go back (shortcut: O).">Original</button>
+                        <button id="ocrDebugBtn" class="icon-btn hidden" title="OCR debug view: every raw OCR reading with its confidence, second-chance readings, readings under the threshold, what later steps removed and the slice cuts. (This button: Settings &gt; Editor.)">OCR debug</button>
+                        <span class="toolbar-sep"></span>
+                        <button id="zoomOutBtn" class="icon-btn" title="Zoom out (Ctrl + scroll down)">&minus;</button>
+                        <span id="zoomLabel">100%</span>
+                        <button id="zoomInBtn" class="icon-btn" title="Zoom in (Ctrl + scroll up)">+</button>
+                        <!-- reading order: set once per page or project, so it sits last and is the first to wrap to a 2nd row
+                             (an "Undo clean" button showing up must not push Preview text / Original down) -->
+                        <span class="toolbar-sep"></span>
                         <select id="orderSelect" class="toolbar-select" title="Reading order of the bubbles of this page - picking one sorts the page at once (Undo in the message). There is no panel detection - fix single bubbles with Move up / down.">
                             <option value="ttb">Order: top to bottom</option>
                             <option value="rtl">Order: right to left</option>
@@ -66,13 +79,6 @@
                             <option value="chapter">Use this order for the whole chapter…</option>
                             <option value="project">Use this order for the whole project…</option>
                         </select>
-                        <button id="previewBtn" class="icon-btn" title="Show the page with the translation typeset into the bubbles (the clean page is shown otherwise). Download from the page list: Export translated pages.">Preview text</button>
-                        <button id="originalBtn" class="icon-btn" title="Show the ORIGINAL page as imported (text not erased) - to see what the OCR or the cleaning missed. Click again to go back (shortcut: O).">Original</button>
-                        <button id="ocrDebugBtn" class="icon-btn hidden" title="OCR debug view: every raw OCR reading with its confidence, second-chance readings, readings under the threshold, what later steps removed and the slice cuts. (This button: Settings &gt; Editor.)">OCR debug</button>
-                        <span class="toolbar-sep"></span>
-                        <button id="zoomOutBtn" class="icon-btn" title="Zoom out (Ctrl + scroll down)">&minus;</button>
-                        <span id="zoomLabel">100%</span>
-                        <button id="zoomInBtn" class="icon-btn" title="Zoom in (Ctrl + scroll up)">+</button>
                         <span style="margin-left:auto"></span>
                         <details class="toolbar-more" id="toolbarMore">
                             <summary class="icon-btn" title="View and page tools">More &#9662;</summary>

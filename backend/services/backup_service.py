@@ -11,8 +11,15 @@ BUNDLE (one .zip):
                                  include_secrets
   env/.env                       the .env file, only if include_secrets
   workspace/<project>/raw|processed/...   all page images, OCR json, cleaned images
-  models/<cache>/...             optional: HuggingFace + PaddleX caches (so the new PC needs no download)
+  fonts/...                      the user's font files (<app root>/fonts) - Lettering styles name them (since 0.4.1;
+                                 older bundles have none)
+  models/<cache>/...             optional: HuggingFace + PaddleX caches (so the new PC needs no download) and the
+                                 optional add-on models of <app root>/models (big-LaMa, label "app_models")
   logs/...                       optional
+  browser/prefs.json             optional (since 0.4.1): the preferences the BROWSER keeps (localStorage "okt-*":
+                                 keyboard shortcuts, appearance, editor switches, History columns). The backend cannot
+                                 read them, so Settings sends them with the export request; on import they come back in
+                                 the job result and the page writes them into the new browser.
 
 IMPORT puts every part where THIS machine expects it (paths come from settings.json at runtime, the DB stores no
 absolute paths), so nothing is hand-edited. Safety rules:
@@ -51,6 +58,28 @@ M_ENV = "env/.env"
 P_WORKSPACE = "workspace/"
 P_MODELS = "models/"
 P_LOGS = "logs/"
+P_FONTS = "fonts/"
+M_BROWSER = "browser/prefs.json"
+BROWSER_PREFS_MAX_KEYS = 300           # sanity limits: these are small switches, not data
+BROWSER_PREFS_MAX_CHARS = 200_000
+
+
+def _clean_browser_prefs(prefs) -> dict[str, str]:
+    """Only "okt-*" string entries of a sane size - what the page sends (export) or what a bundle holds (import)."""
+    if not isinstance(prefs, dict):
+        return {}
+    out = {k: v for k, v in prefs.items()
+           if isinstance(k, str) and k.startswith("okt-") and isinstance(v, str) and len(v) <= BROWSER_PREFS_MAX_CHARS}
+    return dict(list(out.items())[:BROWSER_PREFS_MAX_KEYS])
+APP_MODELS_LABEL = "app_models"     # <app root>/models (add-ons such as big-LaMa) inside models/ of the bundle
+
+
+def _fonts_dir() -> str:
+    return os.path.join(APP_ROOT_DIR, "fonts")
+
+
+def _app_models_dir() -> str:
+    return os.path.join(APP_ROOT_DIR, "models")
 
 _STORE_EXT = IMG_EXTENSIONS + (".zip", ".gz", ".pdf")      # already compressed -> stored, deflating only burns CPU
 
@@ -174,7 +203,7 @@ def _busy_pages() -> int:
 # ------------------------------------------------------------------ export
 
 def create_backup(job: dict, dest_path: str, include_secrets: bool = False, include_models: bool = False,
-                  include_logs: bool = False) -> dict:
+                  include_logs: bool = False, browser_prefs: dict | None = None) -> dict:
     dest_path = os.path.abspath(dest_path)
     if not dest_path.lower().endswith(".zip"):
         dest_path += ".zip"
@@ -212,20 +241,35 @@ def create_backup(job: dict, dest_path: str, include_secrets: bool = False, incl
             plan.append((env_file, M_ENV))
         if os.path.isdir(WORKSPACE_DIR):
             plan += [(p, P_WORKSPACE + os.path.relpath(p, WORKSPACE_DIR).replace(os.sep, "/")) for p in _walk_files(WORKSPACE_DIR)]
+        if os.path.isdir(_fonts_dir()):
+            plan += [(p, P_FONTS + os.path.relpath(p, _fonts_dir()).replace(os.sep, "/")) for p in _walk_files(_fonts_dir())]
         if include_models:
-            for label, folder_ in cache_dirs().items():
+            folders = dict(cache_dirs())
+            own = os.path.normcase(os.path.abspath(_app_models_dir()))
+            # a models_dir setting can point INTO <app root>/models - then those caches are already in the list
+            if os.path.isdir(_app_models_dir()) and not any(
+                    os.path.normcase(os.path.abspath(f)).startswith(own + os.sep) for f in folders.values()):
+                folders[APP_MODELS_LABEL] = _app_models_dir()
+            for label, folder_ in folders.items():
                 if os.path.isdir(folder_):
                     plan += [(p, f"{P_MODELS}{label}/" + os.path.relpath(p, folder_).replace(os.sep, "/")) for p in _walk_files(folder_)]
         logs_dir = os.path.join(APP_ROOT_DIR, "logs")
         if include_logs and os.path.isdir(logs_dir):
             plan += [(p, P_LOGS + os.path.relpath(p, logs_dir).replace(os.sep, "/")) for p in _walk_files(logs_dir)]
+        prefs = _clean_browser_prefs(browser_prefs) if browser_prefs is not None else {}
+        if prefs:
+            prefs_path = os.path.join(tmpdir, "browser_prefs.json")
+            with open(prefs_path, "w", encoding="utf-8") as f:
+                json.dump(prefs, f, indent=2, ensure_ascii=False)
+            plan.append((prefs_path, M_BROWSER))
         job["total_bytes"] = sum(os.path.getsize(p) for p, _ in plan)
 
         manifest = {
             "format_version": FORMAT_VERSION, "app_version": APP_VERSION,
             "created_at": datetime.now(timezone.utc).isoformat(), "source_platform": platform.system(),
             "has_secrets": bool(include_secrets), "has_env": bool(env_file), "has_models": bool(include_models),
-            "has_logs": bool(include_logs), "file_count": len(plan), "total_bytes": job["total_bytes"],
+            "has_logs": bool(include_logs), "has_browser_prefs": bool(prefs),
+            "file_count": len(plan), "total_bytes": job["total_bytes"],
             "projects": projects,
         }
 
@@ -357,13 +401,26 @@ def restore_backup(job: dict, path: str, mode: str = "fresh", restore_settings: 
             shutil.move(os.path.join(staged_ws, name), os.path.join(WORKSPACE_DIR, name))
 
         # models (merge, never overwrite what is already there)
-        for label, target in cache_dirs().items():
+        for label, target in {**cache_dirs(), APP_MODELS_LABEL: _app_models_dir()}.items():
             src = os.path.join(staging, "models", label)
             if os.path.isdir(src):
                 shutil.copytree(src, target, dirs_exist_ok=True)
 
-        # settings: imported values, but THIS machine's workspace root stays; keys only if the bundle carried them
         notes = []
+        # fonts: added next to the fonts already here; a file with the same name stays as it is
+        staged_fonts = os.path.join(staging, "fonts")
+        if os.path.isdir(staged_fonts):
+            added = 0
+            for src in _walk_files(staged_fonts):
+                dest = os.path.join(_fonts_dir(), os.path.relpath(src, staged_fonts))
+                if not os.path.exists(dest):
+                    os.makedirs(os.path.dirname(dest), exist_ok=True)
+                    shutil.copy2(src, dest)
+                    added += 1
+            if added:
+                notes.append(f"{added} font file(s) added to the app's font folder")
+
+        # settings: imported values, but THIS machine's workspace root stays; keys only if the bundle carried them
         staged_settings = os.path.join(staging, *M_SETTINGS.split("/"))
         if restore_settings and os.path.isfile(staged_settings):
             with open(staged_settings, "r", encoding="utf-8") as f:
@@ -385,6 +442,16 @@ def restore_backup(job: dict, path: str, mode: str = "fresh", restore_settings: 
                 shutil.copy2(env_target, env_target + ".bak")
             shutil.copy2(staged_env, env_target)
             notes.append(".env restored (restart the backend for it to take effect)")
+
+        # browser preferences: handed back to the page (it writes them into this browser's localStorage)
+        browser_prefs = {}
+        staged_prefs = os.path.join(staging, *M_BROWSER.split("/"))
+        if os.path.isfile(staged_prefs):
+            try:
+                with open(staged_prefs, "r", encoding="utf-8") as f:
+                    browser_prefs = _clean_browser_prefs(json.load(f))
+            except (OSError, ValueError):
+                notes.append("the browser preferences in the backup could not be read - skipped")
 
         job["step"] = "reconciling"
         report = _post_import_reconcile()
@@ -412,7 +479,8 @@ def restore_backup(job: dict, path: str, mode: str = "fresh", restore_settings: 
     msg = f"Imported {len(manifest.get('projects', []))} project(s)."
     if moved:
         msg += f" The previous data was moved to {aside}."
-    return {"message": msg, "notes": notes, "reconcile": report, "aside": aside if moved else None}
+    return {"message": msg, "notes": notes, "reconcile": report, "aside": aside if moved else None,
+            "browser_prefs": browser_prefs}
 
 
 def _post_import_reconcile() -> dict:

@@ -8,6 +8,7 @@
 import { api } from "./api.js";
 import { state, showToast, escapeHtml } from "./editor-shared.js";
 
+import { notify } from "./dialogs.js";
 export async function openImportDialog(onImported) {
     const data = await api.projects.selectFolder();
     if (!data.path) return;
@@ -19,13 +20,13 @@ async function loadImportPreview(path, orderMode, onImported) {
     try {
         preview = await api.projects.previewChapters(state.projectId, path, orderMode);
     } catch (e) {
-        alert(`Scan failed: ${e.message}`);
+        notify(`Scan failed: ${e.message}`);
         return;
     }
 
     if (!preview.chapters.length) {
         const skipped = preview.skipped_folders.map((s) => `- ${s.folder}: ${s.extensions_found.join(", ")}`).join("\n");
-        alert("No supported images found in that folder." + (skipped ? `\n\nSkipped (unsupported format):\n${skipped}` : ""));
+        notify("No supported images found in that folder." + (skipped ? `\n\nSkipped (unsupported format):\n${skipped}` : ""));
         return;
     }
     showImportDialog(preview, path, orderMode, onImported);

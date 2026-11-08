@@ -21,6 +21,7 @@ import { actionFor, currentBindings, formatCombo } from "./shortcuts.js";
 import { initReview, renderReviewControls, reviewBeforeNextPage, offerUndoFromPreviousPage, reviewMode } from "./editor-review.js";
 import { initOcrDebug, renderOcrDebug, invalidateOcrDebug } from "./editor-ocrdebug.js";
 import { openReplaceDialog } from "./replace-dialog.js";
+import { choose, wordDiff, askOk, notify } from "./dialogs.js";
  
 const enterAt = params.get("enterAt"); // "first" | "last" | null - set when arriving via cross-page nav
 const resumeBubbleIndex = params.get("bubble"); // set by the dashboard's "Resume where I left off" link
@@ -189,6 +190,9 @@ async function init() {
     document.getElementById("originalBtn").addEventListener("click", toggleOriginal);
     document.getElementById("addBubbleBtn").addEventListener("click", () => setDrawMode(state.drawMode === "add" ? false : "add"));
     document.getElementById("cleanAreaBtn").addEventListener("click", () => setDrawMode(state.drawMode === "clean" ? false : "clean"));
+    document.getElementById("cleanToolMenuBtn").addEventListener("click", (e) => openCleanToolMenu(e.currentTarget));
+    renderCleanTool();
+    loadLamaState();
     document.getElementById("undoCleanBtn").addEventListener("click", (e) => (e.shiftKey ? undoCleanup(true) : openCleanupMenu(e.currentTarget)));
     document.getElementById("orderSelect").addEventListener("change", applyAutoOrder);
     el.imageCanvas.addEventListener("mousedown", onDrawStart);
@@ -436,12 +440,12 @@ function renderPageTools() {
 }
  
 async function excludeCurrentPage() {
-    if (!confirm("Remove this page from the list? The image file stays on disk - toggle 'Show excluded' in the page list to undo.")) return;
+    if (!(await askOk("Remove this page from the list? The image file stays on disk - toggle 'Show excluded' in the page list to undo.", { ok: "Remove from the list" }))) return;
     try {
         await api.pages.exclude(pageId);
         window.location.href = `editor.html?project=${state.projectId}`;
     } catch (e) {
-        alert(`Couldn't exclude page: ${e.message}`);
+        notify(`Couldn't exclude page: ${e.message}`);
     }
 }
  
@@ -480,7 +484,7 @@ async function runRetranslate(overwriteEdited = false) {
     const warn = overwriteEdited
         ? "Re-translate EVERY bubble, including the ones you edited? Your edits on this page will be overwritten (corrections already in memory stay)."
         : "Re-translate this page? Bubbles you edited and skipped bubbles are kept (Shift+click overwrites edited ones too).";
-    if (!confirm(warn)) return;
+    if (!(await askOk(warn))) return;
 
     const btn = document.getElementById("retranslateBtn");
     const originalText = btn.textContent;
@@ -492,7 +496,7 @@ async function runRetranslate(overwriteEdited = false) {
         showToast(result.message, 3500);
         await loadPage();
     } catch (e) {
-        alert(`Retranslate failed: ${e.message}`);
+        notify(`Retranslate failed: ${e.message}`);
     } finally {
         btn.disabled = false;
         btn.textContent = originalText;
@@ -539,7 +543,7 @@ async function runReocr() {
         showToast(result.message, 5000);
         await loadPage();
     } catch (e) {
-        alert(`Re-OCR failed: ${e.message}\n(The previous result is untouched.)`);
+        notify(`Re-OCR failed: ${e.message}\n(The previous result is untouched.)`);
     } finally {
         btn.disabled = false;
         btn.textContent = originalText;
@@ -552,8 +556,8 @@ async function runReinpaint() {
         refreshPageImage();
         showToast(result.message);
     } catch (e) {
-        if (/line data/i.test(e.message) && confirm(`${e.message}\n\nRun Re-OCR now?`)) await runReocr();
-        else if (!/line data/i.test(e.message)) alert(`Rebuild failed: ${e.message}`);
+        if (/line data/i.test(e.message) && (await askOk(`${e.message}\n\nRun Re-OCR now?`, { ok: "Run Re-OCR" }))) await runReocr();
+        else if (!/line data/i.test(e.message)) notify(`Rebuild failed: ${e.message}`);
     }
 }
 
@@ -935,6 +939,11 @@ function renderBubbleDetail() {
             </div>
             <div class="source-text" id="sourceView">${escapeHtml(bubble.text || "")}</div>
             ${textFixed ? `<div class="source-raw">Raw OCR: ${escapeHtml(bubble.text_raw)}</div>` : ""}
+            ${sourceChanged.has(bubble.bubble_id) && !isSkipped && !translating ? `<div class="source-changed-note" role="status">
+                <span>The original text changed after this translation was made - it may not match any more.</span>
+                <button id="staleRetranslateBtn" class="primary">Translate again</button>
+                <button id="staleDismissBtn" title="It still fits (or I will fix it by hand) - hide this note">It fits</button>
+            </div>` : ""}
             <div class="source-edit hidden" id="sourceEdit">
                 <textarea id="sourceInput" rows="3" spellcheck="false">${escapeHtml(bubble.text || "")}</textarea>
                 <div class="detail-actions">
@@ -996,6 +1005,11 @@ function renderBubbleDetail() {
     document.getElementById("cancelSourceBtn").addEventListener("click", () => sourceEdit.classList.add("hidden"));
     document.getElementById("saveSourceBtn").addEventListener("click", () => saveSourceText(document.getElementById("sourceInput").value));
     document.getElementById("undoCleanupBtn")?.addEventListener("click", () => saveSourceText(bubble.text_raw));
+    document.getElementById("staleRetranslateBtn")?.addEventListener("click", () => retranslateCurrentBubble(true));
+    document.getElementById("staleDismissBtn")?.addEventListener("click", () => {
+        sourceChanged.delete(bubble.bubble_id);
+        renderBubbleDetail();
+    });
 
     // tools that also work on a skipped bubble (wrong box, glued / cut bubbles)
     document.getElementById("reocrBubbleBtn").addEventListener("click", reocrCurrentBubble);
@@ -1111,25 +1125,126 @@ function replaceCurrentBubble(updated) {
     renderBubbleDetail();
 }
 
+/*
+ * The source of a bubble changed (typed by the user, or read again by Re-OCR bubble / Set area & re-OCR): what happens
+ * to its translation. Asked in our own dialog (js/dialogs.js) - confirm() had only OK / Cancel, and Cancel looked like
+ * "cancel the re-read" although it only meant "keep the old translation". A kept translation gets a note in the
+ * panel ("the original text changed after this translation") until it is retranslated, saved or dismissed - for this
+ * session only (sourceChanged).
+ * Settings > Editor (localStorage SOURCE_CHANGE_KEY): after a typed source edit ask / always translate / always keep.
+ * A re-read always shows the dialog: the user did not type the new text, so they see what the OCR read and can undo it.
+ */
+const SOURCE_CHANGE_KEY = "okt-source-change";
+const sourceChanged = new Set();
+
+function sourceChangePref() {
+    try {
+        const v = localStorage.getItem(SOURCE_CHANGE_KEY);
+        return v === "translate" || v === "keep" ? v : "ask";
+    } catch {
+        return "ask";
+    }
+}
+
+/**
+ * -> "translate" | "keep" | "undo" | null (closed). `reread` = the change came from the OCR (offers "Put the old
+ * text back"); `bubble` = the bubble after the change.
+ */
+async function askAfterSourceChange(bubble, before, { reread = false } = {}) {
+    const hasTranslation = !!(bubble.translation || "").trim();
+    const pref = sourceChangePref();
+    if (!reread && pref !== "ask") return hasTranslation || pref === "translate" ? pref : "keep";
+    const diff = wordDiff(before, bubble.text);
+    const buttons = [];
+    if (reread) buttons.push({ id: "undo", label: "Put the old text back", left: true, title: "Undo the re-read: the previous text, box and text lines come back (the image is rebuilt)" });
+    if (!bubble.skip && hasTranslation) {
+        // with a translation, keeping it is the default answer (right, focused) - as merging does not translate again
+        // by default; most re-reads only add or fix a word the translation already got right
+        buttons.push({ id: "translate", label: "Translate again", title: "One request for this bubble; your edit of the old translation is replaced" });
+        buttons.push({ id: "keep", label: "Keep the translation", primary: true, title: "Nothing is sent; the panel reminds you that the text changed" });
+    } else if (!bubble.skip) {
+        buttons.push({ id: "keep", label: "Leave untranslated", title: "Type the translation yourself" });
+        buttons.push({ id: "translate", label: "Translate", primary: true, title: "One request for this bubble" });
+    } else {
+        buttons.push({ id: "keep", label: "OK", primary: true });
+    }
+    const { choice, remember } = await choose({
+        title: reread ? "The OCR read a different text" : "The original text changed",
+        html: `<div class="text-change">
+                <span>Before</span><div>${diff.before || '<i class="text-muted">(empty)</i>'}</div>
+                <span>Now</span><div>${diff.after}</div>
+                ${hasTranslation ? `<span>Translation</span><div>${escapeHtml(bubble.translation)}</div>` : ""}
+            </div>
+            <p class="text-muted">${bubble.skip ? "The bubble is skipped, so nothing is translated."
+                : hasTranslation ? "The translation was made for the text before. Keep it and fix it by hand, or translate again."
+                : "The bubble has no translation yet."}</p>`,
+        buttons,
+        remember: !reread && !bubble.skip ? "Do this every time I edit the original text (change it in Settings > Editor)" : "",
+    });
+    if (remember && (choice === "translate" || choice === "keep")) {
+        try { localStorage.setItem(SOURCE_CHANGE_KEY, choice); } catch { /* private mode: asks again next time */ }
+    }
+    return choice;
+}
+
+/** Act on the answer for the bubble that is open now (its id: `id`). */
+async function afterSourceChange(id, choice) {
+    const bubble = state.bubbles[state.selectedIndex];
+    if (!bubble || bubble.bubble_id !== id || bubble.skip) return;
+    if (choice === "translate") {
+        await retranslateCurrentBubble(true);
+    } else if ((bubble.translation || "").trim()) {          // kept (or closed): remind in the panel
+        sourceChanged.add(id);
+        renderBubbleDetail();
+    }
+}
+
 async function saveSourceText(newText) {
     const bubble = state.bubbles[state.selectedIndex];
     const text = (newText || "").trim();
-    if (!text) { alert("Source text can't be empty (use Skip or Delete instead)."); return; }
+    if (!text) { notify("Source text can't be empty (use Skip or Delete instead)."); return; }
     if (text === bubble.text) { renderBubbleDetail(); return; }
+    const before = bubble.text;
     try {
         const result = await api.pages.patchBubble(pageId, bubble.bubble_id, { text });
         replaceCurrentBubble(result.bubble);
         if (result.reinpainted) refreshPageImage();
         showToast("Source text saved");
-        if (!result.bubble.skip && confirm("Source text changed. Retranslate this bubble now?")) await retranslateCurrentBubble(true);
+        if (!result.bubble.skip) await afterSourceChange(result.bubble.bubble_id, await askAfterSourceChange(result.bubble, before));
     } catch (e) {
-        alert(`Couldn't save source text: ${e.message}`);
+        notify(`Couldn't save source text: ${e.message}`);
     }
+}
+
+/**
+ * After Re-OCR bubble / Set area & re-OCR: same text = a short message; a different text = the dialog with before /
+ * after, where "Put the old text back" undoes the re-read on the server (text, box and lines - restoring only the
+ * text would leave the lines of a wrongly drawn area, and the cleaning follows the lines).
+ */
+async function afterReread(result, id, what) {
+    if (!result.text_changed) {
+        showToast(`${what} read again - the OCR read the same text, nothing changed (translation kept)`, 5000);
+        return;
+    }
+    showToast(`${what} read again - the text changed`, 2500);   // replaces "Reading the selected area..."
+    const choice =await askAfterSourceChange(result.bubble, result.previous_text ?? "", { reread: true });
+    if (choice === "undo") {
+        try {
+            await api.pages.undoReocrBubble(pageId, id);
+            await reloadBubbles(id);
+            sourceChanged.delete(id);
+            showToast("The old text is back");
+        } catch (e) {
+            showToast(`Couldn't undo: ${e.message}`, 6000);
+        }
+        return;
+    }
+    await afterSourceChange(id, choice);
 }
 
 async function setSkip(skip) {
     const bubble = state.bubbles[state.selectedIndex];
-    if (skip && (bubble.translation || "").trim() && !confirm("Skip this bubble? Its translation stays in the file but it will not be translated, and the original pixels come back on the page.")) return;
+    if (skip && (bubble.translation || "").trim() && !(await askOk("Skip this bubble? Its translation stays in the file but it will not be translated, and the original pixels come back on the page.", { ok: "Skip" }))) return;
     try {
         const result = await api.pages.patchBubble(pageId, bubble.bubble_id, { skip });
         replaceCurrentBubble(result.bubble);
@@ -1138,7 +1253,7 @@ async function setSkip(skip) {
         if (!skip && !(result.bubble.translation || "").trim()) await retranslateCurrentBubble(true);
         else showToast(skip ? "Bubble skipped" : "Bubble will be translated");
     } catch (e) {
-        alert(`Couldn't change skip: ${e.message}`);
+        notify(`Couldn't change skip: ${e.message}`);
     }
 }
 
@@ -1166,11 +1281,9 @@ async function reocrCurrentBubble() {
     try {
         const result = await api.pages.reocrBubble(pageId, bubble.bubble_id);
         await reloadBubbles(bubble.bubble_id);
-        showToast(result.text_changed ? "Bubble re-read - text changed" : "Bubble re-read - same text");
-        if (result.text_changed && !result.bubble.skip && (result.bubble.translation || "").trim()
-            && confirm("The source text changed. Retranslate this bubble now?")) await retranslateCurrentBubble(true);
+        await afterReread(result, bubble.bubble_id, "Bubble");
     } catch (e) {
-        alert(`Re-OCR bubble failed: ${e.message}`);
+        notify(`Re-OCR bubble failed: ${e.message}`);
         renderBubbleDetail();
     }
 }
@@ -1191,7 +1304,7 @@ async function moveCurrentBubble(direction) {
         await api.pages.reorderBubbles(pageId, { order });
         await reloadBubbles(state.bubbles[index].bubble_id);
     } catch (e) {
-        alert(`Reorder failed: ${e.message}`);
+        notify(`Reorder failed: ${e.message}`);
     }
 }
 
@@ -1208,13 +1321,13 @@ async function applyAutoOrder() {
     if (choice === "chapter" || choice === "project") {
         select.value = state.bubbleOrder;
         const where = choice === "chapter" ? "every processed page of this chapter" : "every processed page of the WHOLE project";
-        if (!confirm(`Sort ${where} ${ORDER_NAMES[state.bubbleOrder]}?\n\nManual Move up / down changes on those pages are replaced. Translations are not changed.`)) return;
+        if (!(await askOk(`Sort ${where} ${ORDER_NAMES[state.bubbleOrder]}?\n\nManual Move up / down changes on those pages are replaced. Translations are not changed.`, { ok: "Sort" }))) return;
         try {
             const { pages } = await api.pages.reorderBubbles(pageId, { auto: state.bubbleOrder, scope: choice });
             await reloadBubbles(keep);
             showToast(`Sorted ${pages} page(s) ${ORDER_NAMES[state.bubbleOrder]}`, 3000);
         } catch (e) {
-            alert(`Sort failed: ${e.message}`);
+            notify(`Sort failed: ${e.message}`);
         }
         return;
     }
@@ -1234,7 +1347,7 @@ async function applyAutoOrder() {
             } } : null);
     } catch (e) {
         select.value = previousMode;
-        alert(`Sort failed: ${e.message}`);
+        notify(`Sort failed: ${e.message}`);
     }
 }
 
@@ -1252,9 +1365,96 @@ function setDrawMode(mode, targetId = null) {
     document.getElementById("cleanAreaBtn").classList.toggle("primary", mode === "clean");
     const hints = {
         reocr: "Drag a rectangle around ALL the text of this bubble (Esc cancels)",
-        clean: "Drag a rectangle over the leftover trace - keep it inside the bubble / plain area (Esc cancels)",
+        clean: currentCleanTool().hint,
     };
     if (mode) showToast(hints[mode] || "Drag a rectangle over the text (Esc cancels)", 3500);
+}
+
+/* ------------------------------ clean tools (one button + a list, like a GIMP tool group) ------------------------------ */
+
+/**
+ * The tools behind the "Clean area" button. The button runs the last chosen one (localStorage okt-clean-tool), the
+ * arrow next to it lists them. "redraw" exists only once the optional AI model is installed (Settings > Add-ons) - it
+ * is never used automatically, only on the rectangle drawn with it. Backend: utils.inpainting._add_cleanups.
+ */
+const CLEAN_TOOLS = {
+    clean: { label: "Clean area", short: "Clean",
+             desc: "Removes the marks inside the rectangle (letter remains, ghosts, specks). Lines and drawing that cross its edge stay.",
+             hint: "Drag a rectangle over the leftover marks - box borders and drawing crossing its edge are kept (Esc cancels)" },
+    fill: { label: "Fill with background", short: "Fill",
+            desc: "Paints the whole rectangle with the most common colour around it.",
+            hint: "Drag a rectangle to paint over with the background colour (Esc cancels)" },
+    redraw: { label: "Redraw (AI)", short: "AI redraw",
+              desc: "The AI model redraws the drawing under the rectangle - for text over artwork or gradients. A few seconds.",
+              hint: "Drag a rectangle over the text on the drawing - the AI redraws what is under it (Esc cancels)" },
+};
+const CLEAN_TOOL_KEY = "okt-clean-tool";
+const CLEAN_SHAPE_KEY = "okt-clean-shape";   // "rect" | "ellipse": the area of every clean tool (oval / spiky bubbles)
+let lamaInstalled = false;
+
+function cleanShape() {
+    try { return localStorage.getItem(CLEAN_SHAPE_KEY) === "ellipse" ? "ellipse" : "rect"; } catch { return "rect"; }
+}
+
+function currentCleanTool() {
+    let id = "clean";
+    try { id = localStorage.getItem(CLEAN_TOOL_KEY) || "clean"; } catch { /* private mode */ }
+    if (!CLEAN_TOOLS[id] || (id === "redraw" && !lamaInstalled)) id = "clean";
+    return { id, ...CLEAN_TOOLS[id] };
+}
+
+function renderCleanTool() {
+    const tool = currentCleanTool();
+    const btn = document.getElementById("cleanAreaBtn");
+    const ellipse = cleanShape() === "ellipse";
+    btn.textContent = ellipse ? `${tool.label} ◯` : tool.label;
+    btn.title = `${tool.desc}${ellipse ? " Shape: ellipse - only the oval inside the dragged box." : ""} Kept by Rebuild image and Re-OCR. The arrow next to it: other clean tools and the shape. (Esc cancels)`;
+}
+
+async function loadLamaState() {
+    try {
+        lamaInstalled = !!(await api.system.lama()).installed;
+    } catch {
+        lamaInstalled = false;
+    }
+    renderCleanTool();
+}
+
+function openCleanToolMenu(anchor) {
+    document.getElementById("cleanToolMenu")?.remove();
+    const menu = document.createElement("div");
+    menu.id = "cleanToolMenu";
+    menu.className = "cleanup-menu clean-tool-menu";
+    menu.setAttribute("role", "menu");
+    const current = currentCleanTool().id;
+    const ids = Object.keys(CLEAN_TOOLS).filter((id) => id !== "redraw" || lamaInstalled);
+    menu.innerHTML = `<div class="cleanup-menu-head">Clean tools - the button keeps the one you pick</div>`
+        + ids.map((id) => `<button type="button" role="menuitem" data-tool="${id}"><span class="tool-check">${id === current ? "✓" : ""}</span>`
+            + `<span>${escapeHtml(CLEAN_TOOLS[id].label)}</span><span class="tool-desc">${escapeHtml(CLEAN_TOOLS[id].desc)}</span></button>`).join("")
+        + (lamaInstalled ? "" : '<div class="cleanup-menu-head" style="padding-top:6px;">Redraw (AI) for text over drawings: install the optional model in <a href="settings.html#addons" target="_blank" rel="noopener">Settings &gt; Add-ons</a>.</div>')
+        + `<div class="clean-shape-row"><span>Shape</span>
+            <div class="segmented" role="radiogroup" aria-label="Shape of the area">
+                <button type="button" data-shape="rect" class="${cleanShape() === "rect" ? "selected" : ""}" title="The whole dragged rectangle">▭ Rectangle</button>
+                <button type="button" data-shape="ellipse" class="${cleanShape() === "ellipse" ? "selected" : ""}" title="Only the oval inside the dragged rectangle - for oval or spiky bubbles, where the corners of a rectangle would paint over the outline">◯ Ellipse</button>
+            </div></div>`;
+    document.body.appendChild(menu);
+    const r = anchor.getBoundingClientRect();
+    Object.assign(menu.style, { left: `${Math.max(4, r.right - menu.offsetWidth)}px`, top: `${r.bottom + 4}px` });
+    const close = () => { menu.remove(); document.removeEventListener("mousedown", outside, true); };
+    const outside = (e) => { if (!menu.contains(e.target) && e.target !== anchor) close(); };
+    menu.querySelectorAll("button[data-tool]").forEach((b) => b.addEventListener("click", () => {
+        try { localStorage.setItem(CLEAN_TOOL_KEY, b.dataset.tool); } catch { /* private mode */ }
+        close();
+        renderCleanTool();
+        setDrawMode("clean");                       // picking a tool = start drawing with it
+    }));
+    menu.querySelectorAll("button[data-shape]").forEach((b) => b.addEventListener("click", () => {
+        try { localStorage.setItem(CLEAN_SHAPE_KEY, b.dataset.shape); } catch { /* private mode */ }
+        close();
+        renderCleanTool();
+        setDrawMode("clean");
+    }));
+    document.addEventListener("mousedown", outside, true);
 }
 
 /* ------------------------------ manual cleanup of leftover traces ------------------------------ */
@@ -1267,21 +1467,23 @@ function renderCleanupButton() {
 }
 
 async function cleanArea(box) {
-    showToast("Cleaning the area...", 20000);
+    const tool = currentCleanTool();
+    showToast(tool.id === "redraw" ? "Redrawing the area (AI, a few seconds)..." : "Cleaning the area...", 60000);
     try {
-        const result = await api.pages.addCleanup(pageId, box);
+        const result = await api.pages.addCleanup(pageId, box, tool.id, cleanShape());
         state.cleanups = result.cleanups;
         renderCleanupButton();
         refreshPageImage();
-        showToast("Area cleaned - Undo clean takes it back");
+        showToast(`${tool.label}: done - Undo clean takes it back`);
     } catch (err) {
-        showToast(`Clean area failed: ${err.message}`, 6000);
+        showToast(`${tool.label} failed: ${err.message}`, 6000);
+        if (tool.id === "redraw") loadLamaState();     // the model may have been removed meanwhile
     }
 }
 
 /** index: that cleaned area (0 = oldest); null = the last one; all = every one. */
 async function undoCleanup(all, index = null) {
-    if (all && !confirm(`Remove all ${state.cleanups.length} cleaned areas of this page?`)) return;
+    if (all && !(await askOk(`Remove all ${state.cleanups.length} cleaned areas of this page?`, { ok: "Remove all", danger: true }))) return;
     try {
         const result = await api.pages.removeCleanups(pageId, all, all ? null : index);
         state.cleanups = result.cleanups;
@@ -1307,17 +1509,17 @@ function openCleanupMenu(anchor) {
     const size = (b) => `${Math.round(Math.abs(b[2] - b[0]))} x ${Math.round(Math.abs(b[3] - b[1]))} px`;
     menu.innerHTML = `<div class="cleanup-menu-head">Cleaned areas - point at one to see it, click to undo it</div>`
         + state.cleanups.map((c, i) => ({ c, i })).reverse().map(({ c, i }) =>
-            `<button type="button" data-i="${i}">#${i + 1}${i === n - 1 ? " (last)" : ""} <span class="text-muted">${size(c.box)}</span></button>`).join("")
+            `<button type="button" data-i="${i}">#${i + 1}${i === n - 1 ? " (last)" : ""} <span class="text-muted">${CLEAN_TOOLS[c.mode]?.short || "Clean"}${c.shape === "ellipse" ? " ◯" : ""} · ${size(c.box)}</span></button>`).join("")
         + `<button type="button" data-all="1" class="danger">Undo all ${n}</button>`;
     document.body.appendChild(menu);
     const r = anchor.getBoundingClientRect();
     Object.assign(menu.style, { left: `${r.left}px`, top: `${r.bottom + 4}px` });
-    const mark = (box) => {
+    const mark = (box, shape) => {
         el.imageCanvas.querySelectorAll(".cleanup-mark").forEach((m) => m.remove());
         if (!box) return;
         const s = state.baseScale * state.zoomFactor;
         const m = document.createElement("div");
-        m.className = "cleanup-mark";
+        m.className = `cleanup-mark${shape === "ellipse" ? " ellipse" : ""}`;
         Object.assign(m.style, { left: `${Math.min(box[0], box[2]) * s}px`, top: `${Math.min(box[1], box[3]) * s}px`,
                                  width: `${Math.abs(box[2] - box[0]) * s}px`, height: `${Math.abs(box[3] - box[1]) * s}px` });
         el.imageCanvas.appendChild(m);
@@ -1325,8 +1527,8 @@ function openCleanupMenu(anchor) {
     const close = () => { menu.remove(); mark(null); document.removeEventListener("mousedown", outside, true); };
     const outside = (e) => { if (!menu.contains(e.target)) close(); };
     menu.querySelectorAll("button[data-i]").forEach((b) => {
-        const box = state.cleanups[parseInt(b.dataset.i, 10)].box;
-        b.addEventListener("mouseenter", () => mark(box));
+        const { box, shape } = state.cleanups[parseInt(b.dataset.i, 10)];
+        b.addEventListener("mouseenter", () => mark(box, shape));
         b.addEventListener("mouseleave", () => mark(null));
         b.addEventListener("click", () => { close(); undoCleanup(false, parseInt(b.dataset.i, 10)); });
     });
@@ -1344,7 +1546,7 @@ function onDrawStart(event) {
     const startX = event.clientX - canvasRect.left;
     const startY = event.clientY - canvasRect.top;
     const rectEl = document.createElement("div");
-    rectEl.className = "draw-rect";
+    rectEl.className = `draw-rect${mode === "clean" && cleanShape() === "ellipse" ? " ellipse" : ""}`;
     el.imageCanvas.appendChild(rectEl);
 
     const geometry = (e) => {
@@ -1376,9 +1578,7 @@ function onDrawStart(event) {
             if (mode === "reocr") {
                 const result = await api.pages.reocrBubble(pageId, targetId, box);
                 await reloadBubbles(targetId);
-                showToast(result.text_changed ? "Area read - text changed" : "Area read - same text");
-                if (result.text_changed && !result.bubble.skip && (result.bubble.translation || "").trim()
-                    && confirm("The source text changed. Retranslate this bubble now?")) await retranslateCurrentBubble(true);
+                await afterReread(result, targetId, "Area");
                 return;
             }
             const result = await api.pages.addBubble(pageId, box);
@@ -1423,7 +1623,7 @@ async function retranslateBubbleIds(ids) {
 async function retranslateCurrentBubble(silent = false) {
     const bubble = state.bubbles[state.selectedIndex];
     const edited = (bubble.translation || "") !== (bubble.ai_translation || "");
-    if (!silent && edited && !confirm("You edited this translation. Retranslate and overwrite it?")) return;
+    if (!silent && edited && !(await askOk("You edited this translation. Retranslate and overwrite it?", { ok: "Retranslate" }))) return;
     state.translating.add(bubble.bubble_id);
     renderBubbleList();
     renderBubbleDetail();
@@ -1432,6 +1632,7 @@ async function retranslateCurrentBubble(silent = false) {
         bubble.translation = result.translation;
         bubble.ai_translation = result.ai_translation;
         state.translating.delete(bubble.bubble_id);
+        sourceChanged.delete(bubble.bubble_id);
         renderBubbleList();
         renderBubbleDetail();
         showToast("Bubble retranslated");
@@ -1439,7 +1640,7 @@ async function retranslateCurrentBubble(silent = false) {
         state.translating.delete(bubble.bubble_id);   // the old text comes back
         renderBubbleList();
         renderBubbleDetail();
-        alert(`Retranslate failed: ${e.message}`);
+        notify(`Retranslate failed: ${e.message}`);
     }
 }
  
@@ -1483,6 +1684,7 @@ async function saveCurrentBubble() {
         });
         bubble.translation = newValue;
         markConfirmed(bubble, newValue);
+        sourceChanged.delete(bubble.bubble_id);      // the user wrote it for the text as it is now
         state.unsavedId = null;
         renderBubbleList();
         recordLastEdit();
@@ -1671,7 +1873,7 @@ function flashInlineStatus(text, isError = false) {
 async function deleteBubble() {
     if (state.selectedIndex === null) return;
     const bubble = state.bubbles[state.selectedIndex];
-    if (!confirm(`Delete bubble ${state.selectedIndex + 1}? This removes it from the page entirely.`)) return;
+    if (!(await askOk(`Delete bubble ${state.selectedIndex + 1}? This removes it from the page entirely.`, { ok: "Delete", danger: true }))) return;
  
     try {
         await api.pages.deleteBubble(pageId, bubble.bubble_id);

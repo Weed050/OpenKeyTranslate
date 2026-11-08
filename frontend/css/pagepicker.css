@@ -270,11 +270,11 @@
   border: 1px solid transparent; justify-self: end; }
 .page-view-tools.is-active { border-color: var(--accent); background: var(--accent-soft); }
 .sort-group { display: inline-flex; align-items: center; gap: 0; }
-.sort-label { font-size: 12px; color: var(--text-muted); margin-right: 6px; }
+.sort-label { font-size: 12px; color: var(--text-muted); margin: 0 6px 0 0; }   /* base label: margin-bottom 4px lifted it above the select text */
 /* field-sizing: the select is as wide as the CHOSEN entry, so the arrow sits right after "Progress" instead of at
    the end of a box sized for the longest entry (browsers without it: the old width) */
 .page-picker-controls select.chapter-sort { width: auto; field-sizing: content; min-width: 0; height: 36px; font-size: 13px;
-  padding-right: 6px; border-top-right-radius: 0; border-bottom-right-radius: 0; }
+  padding-right: 10px; border-top-right-radius: 0; border-bottom-right-radius: 0; }   /* = left padding: the arrow gets the same room as the text */
 .page-picker-controls button.sort-dir { width: 36px; padding: 0; font-size: 16px; margin-left: -1px;
   border-top-left-radius: 0; border-bottom-left-radius: 0; }
 .page-picker-controls .controls-right { grid-column: 1 / -1; }

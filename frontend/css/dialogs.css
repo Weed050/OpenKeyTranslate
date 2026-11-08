@@ -51,3 +51,17 @@
 .rp-row input{ width: 15px; height: 15px; margin: 2px 0 0; accent-color: var(--accent); }
 .rp-where{ color: var(--text-secondary); font-variant-numeric: tabular-nums; }
 .rp-text{ overflow-wrap: anywhere; }
+
+/* the app's own question dialog (js/dialogs.js choose): title + x, body, optional "remember", answer buttons */
+.choice-head{ display: flex; align-items: center; gap: 8px; }
+.choice-head h2{ margin: 0; font-size: 17px; flex: 1; }
+.choice-body{ display: flex; flex-direction: column; gap: 8px; font-size: 13px; overflow: auto; }
+.choice-body p{ margin: 0; }
+.choice-footer{ flex-wrap: wrap; align-items: center; }
+.choice-left{ display: flex; gap: 8px; margin-right: auto; }
+/* before / after of a bubble source (editor: source edited, bubble re-read) */
+.text-change{ display: grid; grid-template-columns: max-content 1fr; gap: 6px 10px; align-items: baseline; }
+.text-change > span{ color: var(--text-muted); font-size: 12px; }
+.text-change > div{ padding: 6px 8px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg-well); overflow-wrap: anywhere; }
+.text-change del{ color: var(--danger); background: var(--danger-soft); text-decoration: line-through; border-radius: 2px; }
+.text-change ins{ color: var(--success); background: var(--success-soft); text-decoration: none; border-radius: 2px; }

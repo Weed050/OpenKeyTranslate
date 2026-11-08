@@ -10,8 +10,19 @@
 import { api } from "./api.js";
 import { pageId, state, escapeHtml, showToast } from "./editor-shared.js";
 
+import { notify } from "./dialogs.js";
 /** Callbacks from editor.js: save(), reload(selectId), retranslate(silent), select(index), rerender(). */
 let hooks = {};
+
+/**
+ * "Translate the merged bubble again": OFF by default (merging two pieces of one sentence with the arrows usually
+ * needs no new request - the joined translation is fine or a quick edit). The default is a browser-local switch in
+ * Settings > Editor (js/settings.js, same key); ticking the box in the dialog counts for that one merge only.
+ */
+const MERGE_RETRANSLATE_KEY = "okt-merge-retranslate";
+function retranslateByDefault() {
+    try { return localStorage.getItem(MERGE_RETRANSLATE_KEY) === "1"; } catch { return false; }
+}
 
 export function initMerge(editorHooks) {
     hooks = editorHooks;
@@ -78,7 +89,7 @@ export async function openMergeDialog(otherIds) {
     try {
         preview = await api.pages.mergePreview(pageId, base.bubble_id, otherIds);
     } catch (e) {
-        alert(`Merge preview failed: ${e.message}`);
+        notify(`Merge preview failed: ${e.message}`);
         return;
     }
     let order = preview.order.slice();
@@ -114,8 +125,8 @@ export async function openMergeDialog(otherIds) {
                 ${(preview.translation || "").trim() ? `<div><span class="text-muted">Joined translation:</span> ${escapeHtml(preview.translation)}</div>` : ""}
             </div>
             ${covered.length ? `<p class="import-error">The merged box also covers bubble${covered.length > 1 ? "s" : ""} ${covered.join(", ")} (not merged) - the translation would be typeset over ${covered.length > 1 ? "them" : "it"}. Merge only pieces of ONE speech bubble.</p>` : ""}
-            <label class="checkbox-label" title="Joined translations of pieces are rarely good Polish; one request to the translator for the whole bubble">
-                <input type="checkbox" id="mergeRetranslate" ${anyTranslation ? "checked" : ""}> Translate the merged bubble again
+            <label class="checkbox-label" title="One request to the translator for the whole merged bubble (when the joined translation of the pieces reads badly). Ticked or not by default: Settings > Editor.">
+                <input type="checkbox" id="mergeRetranslate" ${anyTranslation && retranslateByDefault() ? "checked" : ""}> Translate the merged bubble again
             </label>
             <div class="import-footer">
                 <button data-act="cancel">Cancel</button>
@@ -146,7 +157,7 @@ export async function openMergeDialog(otherIds) {
                 if (retranslate) await hooks.retranslate(true);
             } catch (e) {
                 ev.target.disabled = false;
-                alert(`Merge failed: ${e.message}`);
+                notify(`Merge failed: ${e.message}`);
             }
         });
     };

@@ -19,6 +19,12 @@
 /* Fonts card: the user's font files and the add / open / refresh buttons */
 .fonts-box { margin: var(--space-sm) 0 0; padding: var(--space-md); border: 1px solid var(--border); border-radius: var(--radius-sm); }
 .fonts-head { display: flex; flex-direction: column; gap: 2px; margin-bottom: var(--space-sm); }
+.fonts-more { margin-top: 6px; font-size: 12px; }
+/* Backup: what to check when moving between a PC and a laptop (folded - read when needed) */
+.move-notes { margin: 8px 0 10px; padding: 6px 12px; border: 1px solid var(--border); border-radius: var(--radius-sm); font-size: 12.5px; }
+.move-notes > summary { cursor: pointer; font-weight: 600; }
+.move-notes ul { margin: 8px 0 4px; padding-left: 18px; color: var(--text-secondary); line-height: 1.5; }
+.move-notes li { margin-bottom: 6px; }
 .user-font-list { display: flex; flex-direction: column; gap: 4px; margin-bottom: var(--space-sm); }
 .user-font { display: flex; align-items: center; gap: 10px; padding: 4px 0; border-bottom: 1px solid var(--border); }
 .user-font:last-child { border-bottom: none; }
@@ -108,6 +114,7 @@
 .key-provider { max-width: 190px; }
 .key-model-box { display: inline-flex; gap: 4px; align-items: center; }
 .key-model { width: 210px; }
+.key-model::placeholder { font-style: italic; }   /* grey italic = the provider default, used while the field is empty */
 .key-secret { flex: 1; min-width: 170px; }
 .key-small { padding: 4px 10px; font-size: 12px; }
 .key-extra { display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: center; margin: 6px 0 0 44px; }
@@ -139,8 +146,21 @@
 /* Storage & uninstall card (js/settings.js renderStorage) */
 .storage-head { display: flex; gap: 10px; align-items: center; margin: 6px 0 4px; }
 .storage-list { display: flex; flex-direction: column; }
-.storage-group { margin: 14px 0 4px; font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; color: var(--text-muted); }
+.storage-group { margin: 14px 0 4px; font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; color: var(--text-muted);
+  cursor: pointer; list-style: none; display: flex; align-items: baseline; gap: 6px; }
+.storage-group::-webkit-details-marker { display: none; }
+/* the whole result of Check sizes, folded with one click (inside: the groups, folded one by one) */
+.storage-all { margin-top: var(--space-sm); }
+.storage-all-summary { cursor: pointer; list-style: none; font-weight: 600; font-size: 13px; display: flex; align-items: baseline; gap: 6px; padding: 4px 0; }
+.storage-all-summary::-webkit-details-marker { display: none; }
+.storage-all-summary::before { content: "▾"; display: inline-block; width: 12px; transition: transform .15s; }
+.storage-all:not([open]) > .storage-all-summary::before { transform: rotate(-90deg); }
+.storage-all-summary .text-muted { font-weight: 400; }
+.storage-all > .storage-list { padding-left: 18px; }
+.storage-group::before { content: "▾"; display: inline-block; width: 12px; transition: transform .15s; }
+.storage-fold:not([open]) > .storage-group::before { transform: rotate(-90deg); }
 .storage-group .text-muted { text-transform: none; letter-spacing: 0; font-weight: 400; }
+.storage-group .storage-group-size { margin-left: auto; font-variant-numeric: tabular-nums; text-transform: none; letter-spacing: 0; }
 .storage-row { display: grid; grid-template-columns: 1fr 96px auto; gap: 12px; align-items: start; padding: 9px 0;
                border-top: 1px solid var(--border); }
 .storage-row.missing { opacity: .55; }
@@ -162,3 +182,43 @@
 .uninstall-folder { display: grid; grid-template-columns: 220px 1fr auto; gap: 8px; align-items: center; font-size: 12px; }
 .uninstall-folder code { overflow-wrap: anywhere; font-size: 11px; }
 .uninstall-folder .copy-btn { min-width: 0; }
+
+/* "?" next to a setting or a card title: opens the matching Help topic (js/settings.js initHelpLinks) */
+.help-q { width: 20px; height: 20px; min-width: 0; padding: 0; margin-left: 4px; border-radius: 50%; font-size: 12px; font-weight: 700;
+  line-height: 18px; vertical-align: middle; color: var(--text-secondary); background: var(--bg-panel-2); border: 1px solid var(--border); }
+.help-q:hover { color: var(--accent-text); border-color: var(--accent); }
+h2 .help-q { margin-left: 6px; }
+/* a longer explanation under a setting (what it changes, an example) */
+.setting-note { margin: 2px 0 8px 22px; font-size: 12px; color: var(--text-muted); line-height: 1.45; }
+.row + .setting-note { margin-top: 8px; }   /* a note under a row's dividing line must not touch it */
+/* A/B experiment: switch like the other checkboxes; what depends on it is indented under it with a guide line
+   (greyed out - value kept - while the switch is off). No frame: a box made the inputs inside it sit off the column. */
+.ab-block { margin: 4px 0 10px; }
+.ab-block .ab-dependent { margin-left: 22px; padding-left: 10px; border-left: 2px solid var(--border); border-bottom: none; }
+.ab-dependent.is-off { opacity: .5; }
+.key-ab-note.is-off { display: none; }
+/* Add-ons card: one row per optional download */
+.addon { display: grid; grid-template-columns: 1fr auto; gap: 12px; align-items: start; padding: 8px 0; }
+.addon-title { font-weight: 600; font-size: 13px; margin-bottom: 2px; }
+.addon-main > .text-muted { font-size: 12px; line-height: 1.45; }
+.addon-main progress { width: 100%; height: 8px; margin-top: 8px; accent-color: var(--accent); }
+.addon-actions { display: flex; gap: 6px; }
+/* OCR: ignored text - ready patterns and the tester */
+.ignore-presets { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0; }
+.ignore-presets button { font-size: 12px; padding: 3px 9px; }
+.ignore-presets button.is-on { border-color: var(--accent); color: var(--accent); }   /* in the list - a click takes it out */
+.ignore-test { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin: 8px 0 10px; }
+.ignore-test input { flex: 1; min-width: 220px; }
+.ignore-test .hit { color: var(--warn); }
+.ignore-test .miss { color: var(--success); }
+/* What's new (CHANGELOG.md) */
+.changelog-body { max-height: 60vh; overflow: auto; font-size: 13px; line-height: 1.5; }
+.changelog-body h3 { margin: 14px 0 4px; font-size: 15px; }
+.changelog-body h4 { margin: 10px 0 2px; font-size: 13px; color: var(--text-secondary); }
+.changelog-body ul { margin: 2px 0 6px; padding-left: 20px; }
+.changelog-body li { margin-bottom: 9px; }            /* a free line between the points - one long block read like a wall */
+.changelog-version { border-top: 1px solid var(--border); padding: 6px 0; }
+.changelog-version > summary { cursor: pointer; font-weight: 600; font-size: 14px; padding: 4px 0; }
+.changelog-version > summary .text-muted { font-weight: 400; }
+.changelog-you { font-size: 11px; font-weight: 600; padding: 1px 6px; border-radius: 8px; background: var(--accent-soft); color: var(--accent); margin-left: 6px; }
+.changelog-body code { font-size: 12px; }

@@ -25,6 +25,7 @@ rotation + version tracking working today without a large refactor.
 """
 
 import faulthandler
+import re
 import sys
 import logging
 import logging.handlers
@@ -43,8 +44,45 @@ _crash_file = None              # kept open for the whole run: faulthandler writ
 _FATAL_MARKERS = ("access violation", "stack overflow", "illegal instruction", "Fatal Python error", "in page error")
 
 
+_ANSI = re.compile(r"\x1b\[([0-9;]*)m")
+# uvicorn writes its own level in front ("INFO:     127.0.0.1 ...") - to stderr, like every library below
+_PREFIX_LEVEL = re.compile(r"^(DEBUG|INFO|WARNING|ERROR|CRITICAL):\s+")
+# Python warnings ("...py:113: RequestsDependencyWarning: ...") and progress bars ("Loading weights: 100%|###| 103/103")
+_WARNING = re.compile(r"\b\w*Warning: ")
+_PROGRESS = re.compile(r"\d+%\|.*\|")
+
+
+def _classify(message: str, default: int) -> tuple[int, str]:
+    """
+    The level a line written to a stream really has, and the line without colour codes.
+
+    Everything on stderr used to be logged as ERROR: the log viewer and errors.log were full of "ERROR" lines that were
+    uvicorn's request lines, Paddle's green "Creating model" notes, library warnings and progress bars - a real error
+    was hard to find. Known kinds get their own level; anything else on stderr stays ERROR (a traceback is unknown text).
+    """
+    colours = _ANSI.findall(message)
+    text = _ANSI.sub("", message)
+    prefix = _PREFIX_LEVEL.match(text)
+    if prefix:
+        return logging.getLevelName(prefix.group(1)), text[prefix.end():]
+    if default <= logging.INFO:
+        return default, text
+    if _WARNING.search(text):
+        return logging.WARNING, text
+    if _PROGRESS.search(text):
+        return logging.INFO, text
+    codes = {c for group in colours for c in group.split(";") if c}
+    if "31" in codes or "91" in codes:      # red = the library's own error
+        return logging.ERROR, text
+    if "33" in codes or "93" in codes:      # yellow = warning
+        return logging.WARNING, text
+    if codes:                               # green / other colours = notes (paddlex "Creating model: ...")
+        return logging.INFO, text
+    return default, text
+
+
 class _StreamToLogger:
-    """File-like shim: write() calls both the original stream and the logger."""
+    """File-like shim: write() calls both the original stream and the logger (level per line, see _classify)."""
     def __init__(self, original_stream, logger, level):
         self._original_stream = original_stream
         self._logger = logger
@@ -54,7 +92,8 @@ class _StreamToLogger:
         self._original_stream.write(message)
         message = message.strip()
         if message:
-            self._logger.log(self._level, message)
+            level, text = _classify(message, self._level)
+            self._logger.log(level, text)
 
     def flush(self):
         self._original_stream.flush()

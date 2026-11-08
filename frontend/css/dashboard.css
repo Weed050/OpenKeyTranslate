@@ -5,9 +5,9 @@
 
 .dash-column { max-width: 980px; width: 100%; margin: 0 auto; }
 .dash-column .page-header { justify-content: space-between; align-items: center; }
-.dash-sort { width: auto; field-sizing: content; padding-right: 6px; border-top-right-radius: 0; border-bottom-right-radius: 0; }   /* arrow right after the chosen entry */
+.dash-sort { width: auto; field-sizing: content; padding-right: 10px; border-top-right-radius: 0; border-bottom-right-radius: 0; }   /* arrow right after the chosen entry */
 .dash-column .sort-group { display: inline-flex; align-items: center; }
-.dash-column .sort-label { font-size: 12px; color: var(--text-muted); margin-right: 6px; }
+.dash-column .sort-label { font-size: 12px; color: var(--text-muted); margin: 0 6px 0 0; }   /* base label: margin-bottom 4px lifted it above the select text */
 .dash-column .sort-dir { width: 36px; align-self: stretch; padding: 0; font-size: 16px; margin-left: -1px;
   border-top-left-radius: 0; border-bottom-left-radius: 0; }
 .dash-section-title { font-size: 13px; font-weight: 600; color: var(--text-muted); text-transform: uppercase;
