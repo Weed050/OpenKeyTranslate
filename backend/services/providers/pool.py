@@ -9,7 +9,8 @@ could not back each other up, and every provider class carried its own copy of t
 orders the keys in Settings and switches each one on or off; a request goes to the first usable key and moves on
 along the list when a key is rate-limited, rejected or its server is unreachable:
 
-- RateLimited  -> the key cools down 65 s (a 429 is usually per minute), next key.
+- RateLimited  -> the key cools down for the wait the server asked (Gemini: retryDelay), else 65 s; a spent DAILY
+                  quota (Gemini quotaId ...PerDay...) 1 hour - next key.
 - KeyRejected  -> the key is parked 10 min (wrong key / unknown model does not heal by retrying), next key.
 - Transient    -> the same key is retried twice with a short backoff, then the next key.
 - Unreachable  -> retried twice; then keys on the SAME host are skipped (no internet = every Groq key fails),
@@ -29,18 +30,35 @@ import time
 
 from pydantic import BaseModel
 
+from . import key_usage
 from .base import TranslationProvider, RateLimited, KeyRejected, Unreachable, Transient
 
 RETRIES = 2
 BACKOFF_SECONDS = 2
 RATE_LIMIT_COOLDOWN = 65.0
 REJECTED_COOLDOWN = 600.0
+DAILY_COOLDOWN = 3600.0          # a spent DAILY quota: try the key again in an hour, not every minute
 
 
 def scrub(message: str, entry: dict) -> str:
     """Never let a key reach a message (some servers echo request details)."""
     key = (entry.get("api_key") or "").strip()
     return message.replace(key, key[:4] + "..." + key[-3:]) if len(key) >= 8 else message
+
+
+def _scrubbed(e: Exception, entry: dict) -> Exception:
+    """The same error with the key scrubbed from its text - and its fields kept (RateLimited.retry_after / daily)."""
+    copy = type(e)(scrub(str(e), entry))
+    copy.__dict__.update(e.__dict__)
+    return copy
+
+
+def rate_limit_cooldown(e: RateLimited) -> float:
+    """How long a rate-limited key rests: a day's quota an hour, else what the server asked (+1 s), else 65 s."""
+    if getattr(e, "daily", False):
+        return DAILY_COOLDOWN
+    retry = getattr(e, "retry_after", None)
+    return min(max(retry + 1.0, 5.0), 120.0) if retry else RATE_LIMIT_COOLDOWN
 
 
 _KIND = {RateLimited: "limit / quota reached", KeyRejected: "rejected", Unreachable: "server unreachable",
@@ -57,6 +75,10 @@ def summarize(failures: list[tuple[str, Exception]]) -> str:
         return "No key could translate."
     kinds = {type(e) for _, e in failures}
     labels = ", ".join(label for label, _ in failures)
+    if kinds == {RateLimited} and all(getattr(e, "daily", False) for _, e in failures):
+        return (f"The daily quota of every translation key is used up ({labels}). Free Gemini quotas come back at "
+                f"midnight Pacific time (09:00 in Poland in winter, 10:00 in summer) - or add / switch on another key "
+                f"in Settings > Translation & API keys.")
     if kinds == {RateLimited}:
         return (f"Every translation key is at its rate limit or quota ({labels}). A per-minute limit clears in about a "
                 f"minute; a daily quota (free Gemini keys) only tomorrow - or add / switch on another key in "
@@ -118,14 +140,16 @@ class KeyPool(TranslationProvider):
                 try:
                     result = client.call(entry, system_prompt, user_message, schema, self._temperature, self._max_tokens)
                 except RateLimited as e:
-                    print(f"[KEYS] '{entry['id']}' rate-limited - next key ({scrub(str(e), entry)[:300]})")
-                    self._cool_down(entry["id"], RATE_LIMIT_COOLDOWN)
-                    errors.append((entry["label"], type(e)(scrub(str(e), entry))))
+                    key_usage.record_limit(entry, e.daily, getattr(e, "limit", None), getattr(e, "metric", None))
+                    rest = rate_limit_cooldown(e)
+                    print(f"[KEYS] '{entry['id']}' rate-limited, rests {rest:.0f}s - next key ({scrub(str(e), entry)[:300]})")
+                    self._cool_down(entry["id"], rest)
+                    errors.append((entry["label"], _scrubbed(e, entry)))
                     break
                 except KeyRejected as e:
                     print(f"[KEYS] '{entry['id']}' rejected: {scrub(str(e), entry)} - next key")
                     self._cool_down(entry["id"], REJECTED_COOLDOWN)
-                    errors.append((entry["label"], type(e)(scrub(str(e), entry))))
+                    errors.append((entry["label"], _scrubbed(e, entry)))
                     break
                 except (Unreachable, Transient) as e:
                     if attempt < RETRIES:
@@ -136,8 +160,9 @@ class KeyPool(TranslationProvider):
                     if isinstance(e, Unreachable) and host:
                         dead_hosts.add(host)
                     print(f"[KEYS] '{entry['id']}' {type(e).__name__}: {scrub(str(e), entry)[:300]}")
-                    errors.append((entry["label"], type(e)(scrub(str(e), entry))))
+                    errors.append((entry["label"], _scrubbed(e, entry)))
                     break
+                key_usage.record_success(entry)        # Settings: requests today / what is left (estimate)
                 self.current_key_label = entry["label"]
                 self.current_model = entry["model"]
                 self.current_key_id = entry["id"]

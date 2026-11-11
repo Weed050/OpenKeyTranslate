@@ -38,6 +38,8 @@ Key Architectural Features:
        Since 2026-11-07 also "temperature" (shown and counterfactual rows alike): the sampling temperature of the
        call. Older logs were filled in with 0.4 afterwards (scripts/backfill_log_temperature.py, marked
        "temperature_backfilled").
+       Since 2026-11-11 "retry" on a bubble the first answer left empty: "alone" (asked once more without the other
+       bubbles, same key) or "other_id" (the only answer carried another id). Before, such a bubble stayed empty.
     8. Optional DB Context: project_id/page_id/db are optional. Without them translation still runs, just without
        memory, glossary or logging (e.g. test_main.py's test_ocr_from_path()).
 """
@@ -205,6 +207,34 @@ def translate_bubbles(
     shown_model = provider.current_model or ACTIVE_MODEL_NAME     # a key can have its own model (Settings)
     temperature = getattr(provider, "temperature", None)          # same pool = same temperature for the A/B pair
 
+    # 2b. Bubbles the model answered nothing for. Seen 2026-11-11 (gemini-2.5-flash): one bubble sent with four
+    #     context_only neighbours came back without its entry four times in a row, while the same sentence had been
+    #     translated in the page batch a minute earlier - so not a content filter (a blocked answer raises, it is not
+    #     an empty one). They are asked ONCE more, alone, through the same key (same model in the log); a single bubble
+    #     answered under another id is taken as it is. Logged per bubble as injection_json["retry"].
+    retried: dict[str, str] = {}
+    silent = [b for b in bubbles if not (model_output.get(b["bubble_id"]) or "").strip()]
+    if silent:
+        known = {b["bubble_id"] for b in bubbles} | {c["id"] for c in context_items}
+        stray = [v for k, v in model_output.items() if k not in known and (v or "").strip()]
+        print(f"[TRANSLATION] no translation for {[b['bubble_id'] for b in silent]} - the model returned ids "
+              f"{sorted(model_output)} for a batch of {len(bubbles)} (+{len(context_items)} context)")
+        if len(bubbles) == 1 and len(stray) == 1:
+            model_output[bubbles[0]["bubble_id"]] = stray[0]
+            retried[bubbles[0]["bubble_id"]] = "other_id"
+        else:
+            try:
+                again = provider.translate(
+                    [{"id": b["bubble_id"], "text": b["text"], **memory_fields[b["bubble_id"]],
+                      **glossary_field(b["bubble_id"])} for b in silent], pin=shown_key_id)
+            except Exception as e:
+                again = {}
+                print(f"[TRANSLATION] asking again for the empty bubbles failed: {type(e).__name__}: {e}")
+            for b in silent:
+                if (again.get(b["bubble_id"]) or "").strip():
+                    model_output[b["bubble_id"]] = again[b["bubble_id"]]
+                    retried[b["bubble_id"]] = "alone"
+
     # 3. Terminology check + constrained post-edit (one extra call, only for bubbles that missed a glossary term).
     terms_info: dict[str, dict] = {}
     final_text: dict[str, str] = {}
@@ -299,6 +329,10 @@ def translate_bubbles(
         }
         if bid in terms_info:
             injection["terms"] = terms_info[bid]
+        if bid in retried:
+            # the first answer had nothing for this bubble: "alone" = asked again without the other bubbles (so
+            # batch_size / context_bubbles describe the FIRST call only), "other_id" = answered under another id
+            injection["retry"] = retried[bid]
         if bid in probes:
             # hit-rate statistics (History > Research view): logged for every bubble, never sent to the model
             injection["memory_probe"] = {**probes[bid], "size": len(tm_entries), "threshold": MEMORY_SIMILARITY_THRESHOLD,

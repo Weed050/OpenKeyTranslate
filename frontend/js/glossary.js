@@ -29,8 +29,9 @@ const TERM_SORTERS = {
     en_desc: (a, b) => cmp(b.source_term, a.source_term),
     pl_asc: (a, b) => cmp(a.target_term, b.target_term),
     pl_desc: (a, b) => cmp(b.target_term, a.target_term),
-    auto_first: (a, b) => (b.auto_detected ? 1 : 0) - (a.auto_detected ? 1 : 0) || cmp(a.source_term, b.source_term),
-    manual_first: (a, b) => (a.auto_detected ? 1 : 0) - (b.auto_detected ? 1 : 0) || cmp(a.source_term, b.source_term),
+    // "Source" column: suggestions (AI, scan) first / typed first; same origin -> by English term
+    auto_first: (a, b) => ORIGIN_RANK[originOf(b)] - ORIGIN_RANK[originOf(a)] || cmp(a.source_term, b.source_term),
+    manual_first: (a, b) => ORIGIN_RANK[originOf(a)] - ORIGIN_RANK[originOf(b)] || cmp(a.source_term, b.source_term),
     most_used: (a, b) => (b.used || 0) - (a.used || 0) || cmp(a.source_term, b.source_term),
     least_used: (a, b) => (a.used || 0) - (b.used || 0) || cmp(a.source_term, b.source_term),
     newest: (a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0),
@@ -78,6 +79,30 @@ async function loadGlossary() {
     renderTerms();
 }
 
+/*
+ * "Source" column: where the term came from - every row has one. Every suggestion was accepted by the user; a pencil
+ * = the user changed the proposed Polish term before accepting (the proposal is in the tooltip).
+ * Rows added before 11.11.2026 have no origin: auto_detected tells only "a suggestion (scan or AI)" vs "typed or
+ * imported", so those two get a combined label instead of a guess.
+ */
+const ORIGINS = {
+    manual: ["typed", "Typed by you in the fields above"],
+    scan: ["scan", "Suggested by the scan of your corrections (the same fix made more than once) and accepted by you"],
+    ai: ["AI", "Found by 'Find terms with AI' in your corrections and accepted by you"],
+    import: ["import", "Imported from a glossary file"],
+    old_auto: ["scan / AI", "Accepted from a suggestion - 'Scan corrections' or 'Find terms with AI'; added before the app noted which of the two"],
+    old_manual: ["typed / import", "Typed by you or imported from a file - added before the app noted which of the two"],
+};
+const ORIGIN_RANK = { manual: 0, old_manual: 1, import: 2, scan: 3, ai: 4, old_auto: 5 };
+const originOf = (t) => (ORIGINS[t.origin] ? t.origin : t.auto_detected ? "old_auto" : "old_manual");
+
+function originBadge(t) {
+    const entry = ORIGINS[originOf(t)];
+    const changed = !!t.proposed_term && t.proposed_term !== t.target_term;
+    const title = entry[1] + (changed ? ` - you changed the proposal "${t.proposed_term}"` : "");
+    return `<span class="badge" title="${escapeHtml(title)}">${entry[0]}${changed ? " ✎" : ""}</span>`;
+}
+
 function termRow(t) {
     const details = document.createElement("details");
     details.className = "item-row cols";
@@ -87,7 +112,7 @@ function termRow(t) {
             <span class="cell main"><span>${escapeHtml(t.source_term)}</span></span>
             <span class="cell main"><span>&rarr; ${escapeHtml(t.target_term)}</span></span>
             <span class="cell num" title="${t.used ? `Fired in ${t.used} translated bubble(s)${t.last_used ? `, last on ${escapeHtml(new Date(t.last_used).toLocaleString())}` : ""}` : "Never given to the AI yet (the word did not appear in a translated bubble since it was added)"}">${t.used || 0}&times;</span>
-            <span class="cell">${t.auto_detected ? `<span class="badge" title="Accepted from a suggestion">auto</span>` : ""}</span>
+            <span class="cell">${originBadge(t)}</span>
             <span class="cell num" title="${added ? escapeHtml(added.toLocaleString()) : ""}">${added ? escapeHtml(added.toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" })) : ""}</span>
         </summary>
         <div class="item-body">
@@ -261,7 +286,7 @@ function suggestionRow(s) {
     row.innerHTML = `
         <span><strong>${escapeHtml(s.source_term)}</strong></span>
         <span class="suggestion-arrow">${escapeHtml(s.old_translation || "-")} &rarr;</span>
-        <input type="text" data-target value="${escapeHtml(s.new_translation)}" style="max-width:180px;"
+        <input type="text" data-target value="${escapeHtml(s.new_translation)}" class="suggestion-target"
                title="Polish term - use the base (dictionary) form, the model inflects it">
         <span class="badge" title="How many corrections show this pattern">${s.occurrences}×</span>
         ${s.method === "llm" ? '<span class="badge" title="Extracted by the LLM">AI</span>' : ""}
@@ -269,12 +294,18 @@ function suggestionRow(s) {
         <button class="primary" data-accept>Accept</button>
         <button class="copy-btn" data-reject>Dismiss</button>
     `;
+    // the field is as wide as its text (a long term used to scroll inside 180 px next to an empty half of the row)
+    const targetInput = row.querySelector("[data-target]");
+    const fitTarget = () => { targetInput.style.width = `${Math.max(12, targetInput.value.length + 2)}ch`; };
+    targetInput.addEventListener("input", fitTarget);
+    fitTarget();
     row.querySelector("[data-accept]").addEventListener("click", async () => {
         try {
             const target = row.querySelector("[data-target]").value.trim() || s.new_translation;
             await api.glossary.add(projectId, {
                 source_term: s.source_term, target_term: target,
                 auto_detected: true, occurrences: s.occurrences,
+                origin: s.method === "llm" ? "ai" : "scan", proposed_term: s.new_translation,
             });
             row.remove();
             loadGlossary();

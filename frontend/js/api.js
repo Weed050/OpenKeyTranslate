@@ -74,6 +74,8 @@ export const api = {
         // one key of the pool, by id "provider/label": a tiny translation / the models its server offers
         testKey: (id) => request("/settings/test-key", { method: "POST", body: JSON.stringify({ id }) }),
         keyModels: (id) => request("/settings/key-models", { method: "POST", body: JSON.stringify({ id }) }),
+        // {keys: {"provider/label": {today, limit_day, limit_source, left, exhausted_today, ...}}} - an estimate
+        keyUsage: () => request("/settings/key-usage"),
         updateOcrOptions: (payload) => request("/settings/ocr-options", { method: "POST", body: JSON.stringify(payload) }),
         updateOcrEngine: (payload) => request("/settings/ocr-engine", { method: "POST", body: JSON.stringify(payload) }),
     },
@@ -96,7 +98,9 @@ export const api = {
         }),
         reinpaint: (pageId) => request(`/pages/${pageId}/reinpaint`, { method: "POST" }),
         // manual clean-tool rectangles (stored in the page JSON, kept by Rebuild image / Re-OCR);
-        // mode: "clean" (marks inside) | "fill" (background colour) | "redraw" (AI model, when installed);
+        // mode: "clean" (marks inside) | "fill" (background colour) | "redraw" (AI model, when installed) |
+        //       "text" (only the letters inside, each hole filled the best way found) | "text_ai" (the same letters,
+        //       all redrawn by the AI model - needs it); answer: {cleanups, filled: how the new letters were filled};
         // shape: "rect" | "ellipse" (only the ellipse inside the box)
         addCleanup: (pageId, box, mode = "clean", shape = "rect") =>
             request(`/pages/${pageId}/cleanups`, { method: "POST", body: JSON.stringify({ box, mode, shape }) }),
@@ -112,7 +116,8 @@ export const api = {
         undoReocrBubble: (pageId, bubbleId) => request(`/pages/${pageId}/bubbles/${bubbleId}/reocr/undo`, { method: "POST" }),
         reorderBubbles: (pageId, payload) =>
             request(`/pages/${pageId}/bubbles/reorder`, { method: "POST", body: JSON.stringify(payload) }),
-        addBubble: (pageId, box) => request(`/pages/${pageId}/bubbles`, { method: "POST", body: JSON.stringify({ box }) }),
+        // text given = no OCR, the bubble gets the typed text (drawn sound effects)
+        addBubble: (pageId, box, text) => request(`/pages/${pageId}/bubbles`, { method: "POST", body: JSON.stringify(text === undefined ? { box } : { box, text }) }),
         // otherIds: one id or a list; order: every merged id in joining order (null = reading-order setting)
         mergeBubble: (pageId, bubbleId, otherIds, order = null) =>
             request(`/pages/${pageId}/bubbles/${bubbleId}/merge`, { method: "POST", body: JSON.stringify({ with: otherIds, order }) }),

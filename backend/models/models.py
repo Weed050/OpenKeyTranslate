@@ -265,5 +265,11 @@ class GlossaryTerm(Base):
     auto_detected = Column(Boolean, default=False)
     occurrences = Column(Integer, default=1)
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    # Where the term came from (since 2026-11-11; NULL on older rows - there auto_detected is all that is known):
+    # "manual" typed by the user, "scan" repeated-fix pattern found in the corrections, "ai" extracted by the LLM,
+    # "import" from a glossary file. Every suggestion was ACCEPTED by the user; proposed_term = the Polish term as it
+    # was suggested, so target_term != proposed_term means the user changed it before accepting.
+    origin = Column(String, nullable=True)
+    proposed_term = Column(String, nullable=True)
 
     project = relationship("Project", back_populates="glossary_terms")

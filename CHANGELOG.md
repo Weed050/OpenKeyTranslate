@@ -2,6 +2,110 @@
 
 All notable changes to OpenKeyTranslate. Versions follow `APP_VERSION` in `backend/core/config.py`.
 
+## [0.5.0] - 2026-11-11
+
+### Added
+- **Lettering: your own line breaks.** New **Lines** field in the Lettering panel: the text as it is drawn, line by
+  line. Enter = a line break of your own, also inside a word (a sound effect lettered one letter per line). With an
+  automatic font size your lines stay whole and the size shrinks to fit them. Only the breaks can change there - the
+  words are edited in Translate, so the translation, its "edited" marker and the correction memory are not touched.
+  **Auto** goes back to the automatic wrap; breaks that no longer match an edited translation are ignored.
+- **Add bubble where the OCR reads nothing** (drawn sound effects, hand lettering): instead of "No text was found"
+  the editor asks for the text and adds the bubble without OCR. Nothing is erased for such a bubble - remove the
+  original lettering with Fill with background / Redraw (AI).
+- **Glossary: where a term came from.** The Source column shows it for every term: **typed** (by you), **scan**
+  (repeated fix found in your corrections), **AI** (Find terms with AI), **import**; a pencil marks a suggestion
+  whose Polish term you changed before accepting (the proposal is in the tooltip). Terms added before this version:
+  **scan / AI** or **typed / import** - the app did not note which of the two.
+- **Clean tools: Erase text.** Draw a rectangle over text and only its LETTERS are erased (with their light
+  outline): the OCR lines in the area (also of a skipped bubble), or the area is read when there are none. Letters
+  glued to a fine screentone are found too. The holes are filled by what is around them: one plain colour - painted;
+  a regular screentone - the dots are continued (Black Jack, Chapter 2 page 1: the raster sky stays a raster sky,
+  in a fraction of a second; Redraw (AI) over the whole rectangle made it a smooth grey patch); a drawing - redrawn
+  by the optional AI model, without it filled from around. Where the letters cross the edge of a black (or white)
+  area, that part is painted with its colour and the edge is carried on straight under the letters (Black Jack,
+  Chapter 3 page 2: "The" over the edge of a dark room); in a screentone each pixel takes the repeat that matches its
+  surroundings, so the lines of a drawing in it go on instead of breaking into dashes. The message says what was
+  used (background colour / screentone continued / AI model / filled from around). What the automatic erase changed
+  inside the area is replaced too. Nothing outside the area changes.
+- **Clean tools: Erase text (AI)** (only with the optional model): the same letters, all redrawn by the model - for
+  when Erase text left a visible pattern. Erase text itself already uses the model where nothing better fits.
+- **Clean tools menu**: the shape (rectangle / ellipse) is at the top of the list and the button always shows it
+  (▭ / ◯); Erase text comes first.
+- **Export page into another folder**: the arrow next to Export page (editor) - the system folder dialog, the page
+  goes into <folder>/<project>/<chapter>/ as with Export pages; the last folder is offered again. View export finds it
+  there too.
+- **Settings: how much of each key is used** - under a key: requests made today, its daily limit and about how many
+  are left, with a bar. The limit is the server's own number (Groq sends it with every answer, Gemini names it when
+  its quota is used up) or, without one, the count where the quota ran out last time. Only this app's requests are
+  counted (the same key used elsewhere is not seen); Google's day ends at midnight Pacific time (09:00 in Poland).
+- **Lettering: sides of a text box** can be dragged (a small square in the middle of each side, or anywhere along
+  it) - only that side moves; before, only the corners resized. **Lines: Vertical** = one letter per line, an empty
+  line between words; the "Auto" button of the Lines field is now called **Reset**. **Box to the text** next to
+  "The text does not fit" makes the box as big as the text needs at its size.
+- **Editor: zoom and pan** - Ctrl+scroll zooms at the mouse pointer (the buttons at the middle); holding the middle
+  mouse button and dragging moves the page.
+- **Lettering: Preview text can be switched off** - the clean page under the text boxes (before, Lettering always
+  showed the text). Kept for the next pages until switched on.
+- **Bubble panel: Erase: auto / off.** Off = the bubble stays translated and lettered, but its original pixels come
+  back (the automatic erase smeared the drawing) - then clean that spot yourself, e.g. with Erase text. Before, the
+  only way to get the original pixels back was Skip, which also dropped the translation from the page.
+- **Bubble panel: Google ↗** next to Edit opens the English text in Google Translate in the browser - a second
+  opinion to compare (no key; the text goes to Google only on that click, nothing comes back into the app).
+
+### Fixed
+- **Zoomed in, the left part of the page could not be reached** - the view was centred so that a page wider than it
+  overflowed to the left, out of the scroll range (also with the middle-button scroll). Now the whole page scrolls.
+- **The view jumped to the bubble** when a page had just been OCR'd / translated (and on far jumps): it glides there now,
+  without the browser's smooth scroll that a redraw used to stop half-way.
+- **Re-OCR bubble took text from the next bubble and erased part of a drawing**: the bubble's inside can leak through
+  a light drawing (a white face) into the next bubble; the read then got half of its text ("THERE'S NO MEAI THE REASON
+  ..."), the bubble's box spanned the face and the cleaning erased half of it (Black Jack, Chapter 3 page 7). The
+  text of other bubbles is now blanked before reading, and only lines joined to the bubble's own text are kept (a line
+  the box missed sits next to the others). A rectangle you draw (Set area & re-OCR) is still read as it is.
+- **Backend console flooded** with the same "[BUBBLE GUARD]" / "[BUBBLE OVERFLOW]" lines on every Lettering change:
+  each one is printed once (again after 10 minutes if it stays).
+- **Skip / Unskip**: the button of a skipped bubble ("Translate this") is now called **Unskip**.
+- **Erase text over a black area next to a screentone** carried the black on into the tone in streaks and bit into
+  the black edge (Black Jack, official, Chapter 3 page 2) - see Erase text above.
+- **Exports**: an export whose file was deleted (or whose ZIP / folder is gone) no longer counts as exported. A page
+  exported before its review (AI text as it was) keeps its stage, but with "Exported" shown its tile says
+  "· exported" and the project card counts "n exported before the review" - before, such an export was nowhere.
+- **Retranslate reported "Bubble retranslated" while the bubble came back empty** (and wiped the text it had). The
+  model sometimes answers without an entry for the bubble; it is now asked once more, alone, through the same key.
+  If it still returns nothing, the old text stays and the editor says so. Not a content filter: a blocked answer is
+  an error, and the same sentence had been translated in the page batch a minute before.
+- **The view did not go to the bubble**: a page opened zoomed in stayed at its top-left corner although the first
+  bubble was selected (also after OCR + translation finished on an open page); the view now moves to the selected
+  bubble - or, with none selected, to the first one to translate - as soon as the image is there. A far jump is
+  instant (a smooth scroll across a page at 700% stopped half-way). **Zooming keeps the middle of the view** in
+  place instead of the top-left corner.
+- **Split of two bubbles standing side by side**: the new parts follow the page's reading order (right-to-left: the
+  right one first) - before, the part whose first line sat a few pixels higher came first.
+- **Glossary suggestions**: the Polish term field grows with its text (a long term scrolled inside 180 px).
+- **OCR: a bubble cut into pieces when its lettering touches the outline.** Large lettering (Black Jack) reaches the
+  outline on both sides; the letters then wall the bubble's inside off, and the line plus everything under it became
+  a separate bubble ("BUT TRAFFIC" / "ACCIDENTS ARE DIFFERENT.", "MR." / "USHIDA!"). Lines stacked with (almost) no
+  gap now stay together (`bubble_refine.TIGHT_GAP_LINES`). Checked against the user's own corrections on the 181
+  reviewed pages: manual merges needed 35 -> 0 (Black Jack), 3 -> 0 (Black Jack, official), 6 -> 3 (Nihonkoku).
+- **OCR: a tall bubble swallowed the next bubble below it.** The allowed gap grew with the bubble's height; a line
+  now never joins a bubble more than 3 line heights below it (`merge_boxes.MAX_GAP_LINES`).
+- **OCR: a diagram / a sum read as one bubble** ("FIRST VISIT CHARGE 250 POINTS + COMING AT NIGHT ... = TOTAL"):
+  it is split at lines made only of +, =, || or arrows; the signs become skipped bubbles and stay on the page as
+  drawn. Manual splits needed on the 181 pages: 50 -> 39 together with the gap limit.
+- **Gemini rate limits**: a 429 now tells per-minute from DAILY quota (quotaId ...PerDay...) and how long to wait
+  (retryDelay). A key rests exactly that long (a spent daily quota: 1 hour, not a new try every minute), the message
+  says which one it was - no raw JSON. The research replay script sleeps only until the first key is usable again,
+  stops at once when every daily quota is spent ("run tomorrow after 09:00") and stops cleanly on Ctrl+C.
+- **Gemini 404 on a new key**: Google keeps the 2.5 models only for projects that used them before; a key from a new
+  account got "Model 'gemini-2.5-flash' not found - pick one from Models" (Models still lists it). The message now
+  says the model is not available to new Google projects and to type a newer one.
+- **Settings with the backend off**: a section that could not be saved is listed in a **Not saved** bar at the
+  bottom (click = go there) and marked in the section list; it is saved by itself once the backend answers. Leaving
+  through a link of the app saves first and asks in the app's own dialog only if that fails; after the browser's own
+  question (F5, closing the tab) "stay" scrolls to it. Settings that could not be loaded lock their cards - saving
+  them would have written the page's placeholders and an empty key list over the real settings.
+
 ## [0.4.1] - 2026-11-08
 
 ### Added

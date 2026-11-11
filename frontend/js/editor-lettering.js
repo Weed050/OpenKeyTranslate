@@ -101,7 +101,7 @@ export async function enterCurrentMode() {
     document.body.classList.toggle("lettering-mode", isLettering());
     if (isLettering()) {
         if (state.previewBeforeLettering === undefined) state.previewBeforeLettering = !!state.preview;
-        state.preview = true;
+        state.preview = !state.letteringTextHidden;     // Preview text off in Lettering = the clean page under the boxes
         await loadLayout();
     } else {
         if (state.previewBeforeLettering !== undefined) state.preview = state.previewBeforeLettering;
@@ -163,7 +163,7 @@ export function renderModeBar() {
     const exportKey = hooks.shortcutLabel("exportPage");
     // the switch is used most: on the right, next to the side panel it changes; rarely used things on the left
     bar.innerHTML = `
-        <button type="button" id="exportPageBtn" title="Write this page into the project's exported folder (${what}, ${opts.format.toUpperCase()}) - the options are those of the last export on the project page${exportKey ? ` (${exportKey})` : ""}">Export page</button>
+        <span class="tool-split"><button type="button" id="exportPageBtn" title="Write this page into the project's exported folder (${what}, ${opts.format.toUpperCase()}) - the options are those of the last export on the project page${exportKey ? ` (${exportKey})` : ""}. The arrow: another folder.">Export page</button><button type="button" id="exportPageMenuBtn" class="tool-split-arrow" title="Export this page into another folder" aria-haspopup="menu">&#9662;</button></span>
         <button type="button" class="link-btn" id="viewExportBtn" title="Open the last exported image of this page in a new tab">View export</button>
         <span class="review-slot" id="reviewSlot"></span>
         <span class="mode-bar-spacer"></span>
@@ -173,7 +173,8 @@ export function renderModeBar() {
             <button type="button" data-mode="lettering" class="${isLettering() ? "selected" : ""}" role="radio" aria-checked="${isLettering()}">Lettering</button>
         </div>`;
     bar.querySelectorAll("[data-mode]").forEach((b) => b.addEventListener("click", () => setMode(b.dataset.mode)));
-    bar.querySelector("#exportPageBtn").addEventListener("click", exportPage);
+    bar.querySelector("#exportPageBtn").addEventListener("click", () => exportPage());
+    bar.querySelector("#exportPageMenuBtn").addEventListener("click", (e) => openExportMenu(e.currentTarget));
     bar.querySelector("#viewExportBtn").addEventListener("click", viewExport);
     hooks.renderReview?.(bar.querySelector("#reviewSlot"));
 }
@@ -197,9 +198,51 @@ async function viewExport() {
     }
 }
 
-export async function exportPage() {
+const EXPORT_FOLDER_KEY = "okt-export-page-folder";   // the last folder picked with the arrow next to Export page
+
+/**
+ * The arrow next to "Export page": the project's exported folder (as the button), the last folder picked here, or
+ * another one (the system folder dialog). A picked folder gets <project>/<chapter>/ inside, as Export pages does.
+ */
+function openExportMenu(anchor) {
+    document.getElementById("exportPageMenu")?.remove();
+    let last = "";
+    try { last = localStorage.getItem(EXPORT_FOLDER_KEY) || ""; } catch { /* private mode */ }
+    const menu = document.createElement("div");
+    menu.id = "exportPageMenu";
+    menu.className = "cleanup-menu";
+    menu.setAttribute("role", "menu");
+    menu.innerHTML = `<div class="cleanup-menu-head">Export this page into</div>
+        <button type="button" role="menuitem" data-where="project">Project folder &rsaquo; exported <span class="text-muted">(the button)</span></button>
+        ${last ? `<button type="button" role="menuitem" data-where="last" title="${escapeHtml(last)}">${escapeHtml(last)} <span class="text-muted">&rsaquo; project &rsaquo; chapter</span></button>` : ""}
+        <button type="button" role="menuitem" data-where="pick">Another folder...</button>`;
+    document.body.appendChild(menu);
+    const r = anchor.getBoundingClientRect();
+    Object.assign(menu.style, { left: `${r.left}px`, top: `${Math.max(4, r.top - menu.offsetHeight - 4)}px` });  // the bar is at the bottom
+    const close = () => { menu.remove(); document.removeEventListener("mousedown", outside, true); };
+    const outside = (e) => { if (!menu.contains(e.target) && e.target !== anchor) close(); };
+    menu.querySelectorAll("button[data-where]").forEach((b) => b.addEventListener("click", async () => {
+        close();
+        if (b.dataset.where === "project") return exportPage();
+        if (b.dataset.where === "last") return exportPage(last);
+        let folder = "";
+        try {
+            folder = (await api.projects.selectFolder()).path || "";
+        } catch (e) {
+            showToast(`Couldn't open the folder dialog: ${e.message}`, 5000);
+            return;
+        }
+        if (!folder) return;                                    // dialog cancelled
+        try { localStorage.setItem(EXPORT_FOLDER_KEY, folder); } catch { /* private mode */ }
+        exportPage(folder);
+    }));
+    document.addEventListener("mousedown", outside, true);
+}
+
+/** folder: another folder than the project's exported one ("" = the project folder). */
+export async function exportPage(folder = "") {
     if (!(await hooks.saveIfChanged())) return;
-    const opts = exportOptions();
+    const opts = { ...exportOptions(), path: folder || "" };
     try {
         const r = await api.pages.exportPage(pageId, opts);
         // the file is selected in Explorer: the exported folder lives in the project folder (AppData by default)
@@ -228,7 +271,9 @@ export function renderLetteringOverlay(scale) {
         box.title = `Bubble ${index + 1}${p.overflow ? " - the text does not fit" : ""}`;
         box.innerHTML = `<span class="letter-index">${index + 1}</span>`;
         if (selected) {
-            box.insertAdjacentHTML("beforeend", ["nw", "ne", "sw", "se"].map((h) => `<i class="lh lh-${h}" data-h="${h}"></i>`).join("")
+            // corners: both sides at once; edges (the whole side can be grabbed): that side only
+            box.insertAdjacentHTML("beforeend", ["n", "s", "e", "w"].map((h) => `<i class="le le-${h}" data-h="${h}" title="Drag: move this side (Alt: both opposite sides)"></i>`).join("")
+                + ["nw", "ne", "sw", "se"].map((h) => `<i class="lh lh-${h}" data-h="${h}"></i>`).join("")
                 + '<i class="lrot" data-h="rotate" title="Turn (Shift: free, otherwise snaps to 5°)"></i>');
             box.addEventListener("mousedown", (e) => startDrag(e, bubble.bubble_id, box, scale));
         } else {
@@ -272,21 +317,22 @@ function startDrag(e, bubbleId, node, scale) {
             angle = (Math.atan2(mx, -my) * 180) / Math.PI;
             if (!ev.shiftKey) angle = Math.round(angle / 5) * 5;
         } else {
-            // resize in the box's own (rotated) frame; the opposite corner stays where it is
+            // resize in the box's own (rotated) frame; the opposite corner / side stays where it is. A side handle
+            // (n / s / e / w) changes one direction only (sx or sy = 0)
             const a = rad(start.angle);
             const lx = dx * Math.cos(a) + dy * Math.sin(a);
             const ly = -dx * Math.sin(a) + dy * Math.cos(a);
-            const sx = kind.includes("e") ? 1 : -1;
-            const sy = kind.includes("s") ? 1 : -1;
+            const sx = kind.includes("e") ? 1 : kind.includes("w") ? -1 : 0;
+            const sy = kind.includes("s") ? 1 : kind.includes("n") ? -1 : 0;
             if (ev.altKey) {                         // Alt: grow / shrink evenly in every direction, the centre stays
-                const w = Math.max(12, start.w + 2 * sx * lx);
-                const h = Math.max(12, start.h + 2 * sy * ly);
+                const w = sx ? Math.max(12, start.w + 2 * sx * lx) : start.w;
+                const h = sy ? Math.max(12, start.h + 2 * sy * ly) : start.h;
                 box = [start.cx - w / 2, start.cy - h / 2, start.cx + w / 2, start.cy + h / 2];
                 placeBox(node, box, angle, scale);
                 return;
             }
-            const w = Math.max(12, start.w + sx * lx);
-            const h = Math.max(12, start.h + sy * ly);
+            const w = sx ? Math.max(12, start.w + sx * lx) : start.w;
+            const h = sy ? Math.max(12, start.h + sy * ly) : start.h;
             const ax = -sx * start.w / 2, ay = -sy * start.h / 2;              // anchor in local coordinates
             const gx = start.cx + ax * Math.cos(a) - ay * Math.sin(a);         // ... and on the page
             const gy = start.cy + ax * Math.sin(a) + ay * Math.cos(a);
@@ -549,14 +595,28 @@ export function renderLetteringPanel() {
         wireNav(panel);
         return;
     }
+    // the lines as drawn - unless the automatic wrap had to cut a word (hyphens added): then the plain text
+    const squash = (t) => (t || "").replace(/\s+/g, "").toLowerCase();
+    const drawn = (p.line_texts || []).join("\n");
+    const linesText = squash(drawn) === squash(b.translation) ? drawn : (b.translation || "");
     const seg = (name, options, current) => `<div class="segmented" data-field="${name}">${options.map(([v, label, title]) =>
         `<button type="button" data-value="${v}" class="${String(v) === String(current) ? "selected" : ""}" title="${title || label}">${label}</button>`).join("")}</div>`;
     panel.innerHTML = `
         <div class="lettering-panel">
             <div class="field-label">Bubble ${index + 1}</div>
             <div class="lettering-text">${escapeHtml(b.translation || "")}</div>
-            <p class="text-muted lettering-note">Edit the words in Translate - here only where and how they are drawn. On the page: drag the box to move it, corners resize (Alt: evenly from the centre), the knob above turns it.</p>
-            ${p.overflow ? '<p class="import-error">The text does not fit this area - make the box bigger or the font smaller.</p>' : ""}
+            <p class="text-muted lettering-note">Edit the words in Translate - here only where and how they are drawn. On the page: drag the box to move it, corners and sides resize (Alt: evenly from the centre), the knob above turns it.</p>
+            <div class="lettering-row lettering-lines-row"><span>Lines</span>
+                <span class="lettering-lines">
+                    <textarea id="letterLines" rows="${Math.min(8, Math.max(2, linesText.split("\n").length))}" spellcheck="false"
+                        title="The text as it is drawn, line by line. Enter = your own line break (also inside a word: a sound effect one letter per line). Only the breaks can change here.">${escapeHtml(linesText)}</textarea>
+                    <span class="lettering-lines-btns">
+                        <button type="button" data-act="linesVertical" title="One letter per line, an empty line between words - for a tall narrow bubble or a sound effect written downwards">Vertical</button>
+                        ${p.manual_lines ? '<button type="button" data-act="linesAuto" title="Your line breaks off - the automatic wrap again">Reset</button>' : '<span class="text-muted" title="Line breaks chosen automatically">auto</span>'}
+                    </span>
+                </span></div>
+            ${p.overflow ? `<p class="import-error">The text does not fit this area - make the box bigger or the font smaller.
+                ${p.text_size ? '<button type="button" data-act="boxToText" title="Make the box as big as the text needs at this font size (the middle stays; within the page)">Box to the text</button>' : ""}</p>` : ""}
             <div class="lettering-row"><span>Area</span>
                 <span>${p.manual_box ? "drawn by you" : "automatic (bubble inside)"}</span>
                 ${p.manual_box ? '<button type="button" data-act="areaAuto" title="Back to the automatic area">Automatic</button>' : ""}</div>
@@ -616,6 +676,34 @@ export function renderLetteringPanel() {
     act("rotZero", () => patchLayout(id, { angle: 0 }));
     act("reset", () => patchLayout(id, { reset: true }));
     act("fit", () => patchLayout(id, { box: null, font_size: null, align: "center", valign: "middle" }));
+    act("linesAuto", () => patchLayout(id, { lines: null }));
+    // every word letter by letter, words apart by an empty line (the field accepted that typed by hand already)
+    act("linesVertical", () => {
+        const words = (b.translation || "").split(/\s+/).filter(Boolean);
+        if (!words.length) return;
+        patchLayout(id, { lines: words.flatMap((w, i) => [...(i ? [""] : []), ...Array.from(w)]) });
+    });
+    // "Box to the text": at least as big as the text needs (+ a small margin), around the same middle
+    act("boxToText", () => {
+        const [x1, y1, x2, y2] = p.box;
+        const [tw, th] = p.text_size;
+        const w = Math.max(x2 - x1, tw + 8), h = Math.max(y2 - y1, th + 8);
+        const cx = (x1 + x2) / 2, cy = (y1 + y2) / 2;
+        const W = state.naturalW || Infinity, H = state.naturalH || Infinity;
+        let nx1 = cx - w / 2, ny1 = cy - h / 2;
+        nx1 = Math.max(0, Math.min(nx1, W - w));            // within the page: shifted rather than cut
+        ny1 = Math.max(0, Math.min(ny1, H - h));
+        patchLayout(id, { box: [nx1, ny1, nx1 + w, ny1 + h].map((v) => Math.round(v)) });
+    });
+    panel.querySelector("#letterLines").addEventListener("change", (e) => {
+        const typed = e.target.value;
+        if (squash(typed) !== squash(b.translation)) {
+            showToast("Only the line breaks can be changed here - edit the words in Translate", 4500);
+            e.target.value = linesText;
+            return;
+        }
+        if (typed.trim() !== linesText.trim()) patchLayout(id, { lines: typed.split("\n") });
+    });
     act("bold", () => patchLayout(id, { bold: !p.bold }));
     act("italic", () => patchLayout(id, { italic: !p.italic }));
     act("styleToPage", () => styleToPage(b));

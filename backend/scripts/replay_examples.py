@@ -62,8 +62,9 @@ VARIANTS = {
 DEFAULT_VARIANTS = "A0,A0b,A1,A2"
 K = 3
 SIM_BINS = [(0.0, 0.3, "<0.30"), (0.3, 0.5, "0.30-0.50"), (0.5, 0.67, "0.50-0.67"), (0.67, 1.01, ">=0.67")]
-RATE_LIMIT_WAIT = 65            # seconds - free-tier limits are mostly per minute
+RATE_LIMIT_WAIT = 65            # seconds - when the pool cannot tell how long its keys rest
 MAX_RETRIES = 6
+MAX_WAIT = 300                  # a key resting longer than this (a spent daily quota rests an hour): stop, don't sleep
 
 
 # ---------------------------------------------------------------- reading the app's data (read-only)
@@ -347,6 +348,25 @@ def cmd_run(args) -> None:
     todo = [(p, plan, v) for p, plan in plans for v in variants if (p["id"], v) not in done]
     print(f"[REPLAY] {len(todo)} request(s) to send ({len(done)} done earlier) -> {out}")
 
+    try:
+        _send_all(todo, pool, model, args, req_path, bub_path)
+    except KeyboardInterrupt:
+        print("\n[REPLAY] stopped (Ctrl+C). Everything finished so far is saved - run the same command to continue.")
+
+
+def _rate_limit_wait(pool, error: str) -> int | None:
+    """
+    Seconds to wait before the next try when every key is limited, or None = stop for today. Gemini tells which quota
+    was hit and how long to wait (services/providers/gemini_provider.rate_limit_from); the pool keeps each key resting
+    exactly that long, so the script sleeps until the FIRST key is usable again instead of a blind 65 s.
+    """
+    if "daily quota of every" in error:
+        return None
+    wait = pool._seconds_until_any_key() or RATE_LIMIT_WAIT
+    return None if wait > MAX_WAIT else max(3, wait)
+
+
+def _send_all(todo, pool, model, args, req_path, bub_path):
     sent = 0
     for p, plan, v in todo:
         payload = payload_for(plan, v)
@@ -366,9 +386,10 @@ def cmd_run(args) -> None:
             except Exception as e:                      # keys are scrubbed from these messages by the pool
                 error = f"{type(e).__name__}: {e}"
                 limited = any(s in error.lower() for s in ("rate", "cooling", "quota", "429", "no translation key"))
-                if limited and attempt < MAX_RETRIES:
-                    print(f"  rate limit ({error[:120]}) - waiting {RATE_LIMIT_WAIT}s ({attempt + 1}/{MAX_RETRIES})")
-                    time.sleep(RATE_LIMIT_WAIT)
+                wait = _rate_limit_wait(pool, error) if limited else None
+                if limited and wait is not None and attempt < MAX_RETRIES:
+                    print(f"  every key is at its per-minute limit - waiting {wait}s ({attempt + 1}/{MAX_RETRIES})")
+                    time.sleep(wait)
                     continue
                 result = None
                 break
@@ -379,7 +400,11 @@ def cmd_run(args) -> None:
                                "model": model, "temperature": args.temperature})
             print(f"  FAILED ch {p['chapter']} {p['file_name']} {v}: {error[:200]}")
             if "limit" in error.lower() or "quota" in error.lower():
-                print("[REPLAY] stopping - keys exhausted for now; run the same command later to continue.")
+                daily = "daily quota" in error or (pool._seconds_until_any_key() or 0) > MAX_WAIT
+                print(f"[REPLAY] stopping after {sent} request(s) - "
+                      + ("the DAILY quota of the keys is used up: run the same command tomorrow after 09:00 (midnight "
+                         "Pacific time)." if daily else "keys still limited: run the same command in a few minutes.")
+                      + " Finished requests are kept, it continues where it stopped.")
                 return
             continue
         for e in plan["bubbles"]:

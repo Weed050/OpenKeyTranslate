@@ -24,6 +24,7 @@ import cv2
 import numpy as np
 import os
 from core.config import TYPESETTING_PADDING_RATIO, get_setting
+from utils.log_once import print_once      # the same line not on every Lettering redraw
 from utils.bubble_interior import find_interior   # one shared flood-fill implementation (also used by inpainting)
 import pyphen
 
@@ -216,7 +217,7 @@ def auto_text_shape(image_original: np.ndarray, b: dict, img_w: int, img_h: int,
     why: list = []
     interior = find_interior(image_original, (cx, cy), ocr_bbox, why=why)
     if interior is None:
-        print(f"[BUBBLE GUARD] {why[0] if why else 'rejected'} - falling back to the OCR bounding box.")
+        print_once(f"[BUBBLE GUARD] bubble_id={b.get('bubble_id')}: {why[0] if why else 'rejected'} - falling back to the OCR bounding box.")
         bbox, shape = None, None
     else:
         bbox = interior.bbox
@@ -254,6 +255,8 @@ def fit_text_shape(text: str, font_path: str, shape) -> dict | None:
     None when nothing fits down to SHAPE_MIN_SIZE (the caller keeps the rectangle). Extra keys: "box" (the shape's
     bounding box), "slots" [(dx, width)] per line and "top" (dy of the first line), both relative to "box".
     """
+    if "\n" in text:
+        return None                  # the user's own line breaks (layout "lines"): the rectangle keeps them
     words = text.split()
     if not words:
         return None
@@ -308,56 +311,75 @@ def _block_metrics(font, font_size: int, n_lines: int, min_gap: int = 0):
     return line_h, gap, (n_lines * line_h) + ((n_lines - 1) * gap)
 
 
+def _wrap_whole_words(words, font, target_w):
+    """Greedy word wrap that never splits a word; None when one word alone is wider than the area."""
+    lines, current = [], []
+    for word in words:
+        if font.getbbox(word)[2] - font.getbbox(word)[0] > target_w:
+            return None             # a single word wider than the whole area: smaller font
+        test_line = " ".join(current + [word]) if current else word
+        if font.getbbox(test_line)[2] - font.getbbox(test_line)[0] <= target_w:
+            current.append(word)
+        elif current:
+            lines.append(" ".join(current))
+            current = [word]
+        else:
+            lines.append(word)
+            current = []
+    if current:
+        lines.append(" ".join(current))
+    return lines
+
+
 def fit_text(text: str, font_path: str, target_w: int, target_h: int, font_size: int | None = None) -> dict | None:
     """
     Lines + font for `text` in a target_w x target_h area: {"lines", "font", "line_h", "gap", "total_h", "size",
     "overflow"}. font_size None = automatic: the largest size from 40 px down whose word wrap fits (smaller sizes with
     words split at Polish syllables as the fallback). A fixed font_size (Lettering) is used as it is, even when the
     block is taller than the area ("overflow": True - the editor shows it).
+    A "\n" in `text` is a line break the user set in Lettering (layout "lines", see plan_bubble): each such line is
+    wrapped on its own and an empty one stays an empty line. Text without "\n" is laid out exactly as before.
     """
-    words = text.split()
-    if not words or target_w <= 10 or target_h <= 10:
+    forced = [p.split() for p in text.replace("\r", "").split("\n")]
+    if not any(forced) or target_w <= 10 or target_h <= 10:
         return None
+
+    def wrap_all(wrap):
+        lines = []
+        for words in forced:
+            part = wrap(words) if words else [""]
+            if part is None:
+                return None
+            lines.extend(part)
+        return lines
 
     if font_size:
         font = _load_font(font_path, int(font_size))
-        lines = _wrap_text_with_splitting(words, font, target_w)
+        lines = wrap_all(lambda words: _wrap_text_with_splitting(words, font, target_w))
         line_h, gap, total_h = _block_metrics(font, int(font_size), len(lines), min_gap=1)
         return {"lines": lines, "font": font, "line_h": line_h, "gap": gap, "total_h": total_h,
                 "size": int(font_size), "overflow": total_h > target_h}
 
-    size = 40                       # Starting, large font size
-    while size > 8:                 # Algorithm for adjusting size and breaking lines
-        font = _load_font(font_path, size)
-        lines, current, too_long = [], [], False
-        for word in words:
-            if font.getbbox(word)[2] - font.getbbox(word)[0] > target_w:
-                too_long = True     # a single word wider than the whole area: smaller font
-                break
-            test_line = " ".join(current + [word]) if current else word
-            if font.getbbox(test_line)[2] - font.getbbox(test_line)[0] <= target_w:
-                current.append(word)
-            elif current:
-                lines.append(" ".join(current))
-                current = [word]
-            else:
-                lines.append(word)
-                current = []
-        if not too_long:
-            if current:
-                lines.append(" ".join(current))
-            line_h, gap, total_h = _block_metrics(font, size, len(lines))
-            if total_h <= target_h:
-                return {"lines": lines, "font": font, "line_h": line_h, "gap": gap, "total_h": total_h,
-                        "size": size, "overflow": False}
-        size -= 2
+    # The user's own lines first stay WHOLE (a smaller font instead of wrapping them again); only when no size down
+    # to 10 px manages that, they are wrapped like any other text. Without forced breaks: one pass, as always.
+    for whole in ((True, False) if len(forced) > 1 else (False,)):
+        size = 40                       # Starting, large font size
+        while size > 8:                 # Algorithm for adjusting size and breaking lines
+            font = _load_font(font_path, size)
+            lines = wrap_all(lambda words: _wrap_whole_words(words, font, target_w))
+            if lines is not None and (not whole or len(lines) == len(forced)):
+                line_h, gap, total_h = _block_metrics(font, size, len(lines))
+                if total_h <= target_h:
+                    return {"lines": lines, "font": font, "line_h": line_h, "gap": gap, "total_h": total_h,
+                            "size": size, "overflow": False}
+            size -= 2
 
     # Fallback branch: word wrapping with syllable splitting, from the minimum readable size down
     min_font_size, absolute_min = 11, 7
     size = min_font_size
     while True:
         font = _load_font(font_path, size)
-        lines = _wrap_text_with_splitting(words, font, target_w)
+        lines = wrap_all(lambda words: _wrap_text_with_splitting(words, font, target_w))
         line_h, gap, total_h = _block_metrics(font, size, len(lines), min_gap=1)
         if total_h <= target_h or size <= absolute_min:
             return {"lines": lines, "font": font, "line_h": line_h, "gap": gap, "total_h": total_h,
@@ -413,7 +435,15 @@ def _clean_layout(layout) -> dict:
         out["font"] = layout["font"].strip()
     out["bold"] = layout.get("bold") is True
     out["italic"] = layout.get("italic") is True
+    lines = layout.get("lines")
+    if isinstance(lines, (list, tuple)) and lines and all(isinstance(l, str) for l in lines):
+        out["lines"] = [" ".join(l.split()) for l in lines][:80]
     return out
+
+
+def same_letters(a: str, b: str) -> bool:
+    """The same text apart from spaces, line breaks and letter case (the test for the user's own line breaks)."""
+    return "".join((a or "").split()).casefold() == "".join((b or "").split()).casefold()
 
 
 _FAMILY_OF: dict[str, str] = {}
@@ -451,6 +481,12 @@ def plan_bubble(image_original: np.ndarray, b: dict, img_w: int, img_h: int, fon
     if get_setting("typesetting_uppercase", True):
         text = text.upper()          # manga lettering is upper case; switch off for sentence-case lettering
     layout = _clean_layout(b.get("layout"))
+    # The user's own line breaks (Lettering "Lines"): used only while they still spell the bubble's text - after the
+    # translation is edited they no longer match and the automatic wrap is back. A break may fall inside a word
+    # (a sound effect lettered one letter per line).
+    manual_lines = bool(layout.get("lines")) and same_letters("".join(layout["lines"]), text)
+    if manual_lines:
+        text = "\n".join(l.upper() if get_setting("typesetting_uppercase", True) else l for l in layout["lines"])
     tilt = b.get("text_rect")                       # tilted original text (map label): [cx, cy, w, h, angle]
     shape = None
     if "box" in layout:
@@ -478,11 +514,12 @@ def plan_bubble(image_original: np.ndarray, b: dict, img_w: int, img_h: int, fon
         print(f"[BUBBLE SKIP] bubble_id={b.get('bubble_id')}: area too small ({x2 - x1}x{y2 - y1}px) - text not drawn")
         return None
     if fit["overflow"]:
-        print(f"[BUBBLE OVERFLOW] bubble_id={b.get('bubble_id')}: text does not fit at {fit['size']}px "
-              f"({fit['total_h']}px > {y2 - y1}px). Text: {text!r}")
+        print_once(f"[BUBBLE OVERFLOW] bubble_id={b.get('bubble_id')}: text does not fit at {fit['size']}px "
+                   f"({fit['total_h']}px > {y2 - y1}px). Text: {text!r}")
     angle = layout["angle"] if "angle" in layout else (tilt[4] if tilt else 0.0)
     return {"bubble_id": b.get("bubble_id"), "box": area, "manual_box": "box" in layout,
             "manual_size": "font_size" in layout, "angle": angle, "manual_angle": "angle" in layout,
+            "manual_lines": manual_lines,
             "slots": fit.get("slots"), "top": fit.get("top"),
             "align": layout.get("align", "center"), "stroke": layout.get("stroke", "none"),
             "valign": layout.get("valign", "middle"), "color": layout.get("color", "black"), "font_name": family, "bold": layout.get("bold", False),

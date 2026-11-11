@@ -6,7 +6,7 @@ translator decides, and the AI learns from every correction.
 
 > 🇵🇱 A Polish-language README is available at [`README-pl.md`](./README-pl.md) (older; this file is the current one).
 
-**Status: working prototype, version 0.4.1** (see [`CHANGELOG.md`](./CHANGELOG.md)). The whole first chapter of a test
+**Status: working prototype, version 0.5.0** (see [`CHANGELOG.md`](./CHANGELOG.md)). The whole first chapter of a test
 series has been translated with it. It is still a thesis project: expect rough edges, and the README will be rewritten
 when the thesis is finished.
 

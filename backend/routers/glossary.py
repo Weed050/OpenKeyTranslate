@@ -36,6 +36,7 @@ async def list_terms(project_id: int, db: Session = Depends(get_db)):
     return [
         {"id": t.id, "source_term": t.source_term, "target_term": t.target_term,
          "auto_detected": t.auto_detected, "occurrences": t.occurrences,
+         "origin": t.origin, "proposed_term": t.proposed_term,
          "used": usage.get(t.source_term.lower(), {}).get("used", 0),
          "last_used": usage.get(t.source_term.lower(), {}).get("last_used"),
          "created_at": t.created_at.isoformat() if t.created_at else None}   # "Added" column / sort on the Memory page
@@ -68,9 +69,13 @@ async def add_term(project_id: int, payload: dict, db: Session = Depends(get_db)
                        f"(-> '{existing_term.target_term}'). Delete it first to change the translation.",
             )
 
+    auto = bool(payload.get("auto_detected", False))
+    origin = payload.get("origin") if payload.get("origin") in ("manual", "scan", "ai") else ("scan" if auto else "manual")
+    proposed = (payload.get("proposed_term") or "").strip() or None
     term = GlossaryTerm(
         project_id=project_id, source_term=source_term, target_term=target_term,
-        auto_detected=payload.get("auto_detected", False), occurrences=payload.get("occurrences", 1),
+        auto_detected=auto, occurrences=payload.get("occurrences", 1),
+        origin=origin, proposed_term=proposed if origin != "manual" else None,
     )
     db.add(term)
     db.commit()
@@ -138,7 +143,8 @@ async def export_glossary(project_id: int, db: Session = Depends(get_db)):
         "exported_at": datetime.now(timezone.utc).isoformat(),
         "terms": [
             {"source_term": t.source_term, "target_term": t.target_term,
-             "auto_detected": t.auto_detected, "occurrences": t.occurrences}
+             "auto_detected": t.auto_detected, "occurrences": t.occurrences,
+             "origin": t.origin, "proposed_term": t.proposed_term}
             for t in terms
         ],
     }
@@ -169,6 +175,9 @@ async def import_glossary(project_id: int, payload: dict, db: Session = Depends(
         db.add(GlossaryTerm(
             project_id=project_id, source_term=source_term, target_term=target_term,
             auto_detected=row.get("auto_detected", False), occurrences=row.get("occurrences", 1),
+            # a file written by this app keeps where the term came from; any other file = "import"
+            origin=row.get("origin") if row.get("origin") in ("manual", "scan", "ai", "import") else "import",
+            proposed_term=(row.get("proposed_term") or None),
         ))
         existing.add(key)
         added += 1

@@ -23,6 +23,7 @@
 .progress-legend { display: flex; flex-wrap: wrap; gap: 6px 18px; font-size: 12px; }
 .progress-legend span { display: inline-flex; align-items: center; gap: 6px; }
 .progress-legend .legend-total { margin-left: auto; }
+.progress-legend .legend-note { color: var(--text-muted); font-style: italic; }
 
 .project-actions { display: flex; gap: var(--space-sm); margin-top: var(--space-md); }
 .btn { display: inline-flex; align-items: center; justify-content: center; min-width: 96px; height: 32px; padding: 0 14px;

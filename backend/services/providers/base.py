@@ -44,7 +44,19 @@ class KeyCallError(Exception):
 
 
 class RateLimited(KeyCallError):
-    """429 / quota spent: this key cools down for a while, the next key is tried."""
+    """
+    429 / quota spent: this key cools down for a while, the next key is tried.
+    retry_after = seconds the server asked to wait (Gemini sends it), None = unknown; daily = the DAY's quota is spent
+    (free Gemini keys: resets at midnight Pacific time) - waiting a minute and retrying only burns time.
+    """
+
+    def __init__(self, message: str = "", retry_after: float | None = None, daily: bool = False,
+                 limit: int | None = None, metric: str | None = None):
+        super().__init__(message)
+        self.retry_after = retry_after
+        self.daily = daily
+        self.limit = limit          # the number the server named for the spent limit (Gemini, Groq), None = not said
+        self.metric = metric        # which limit ("GenerateRequestsPerDayPerProjectPerModel-FreeTier", "requests per day")
 
 
 class KeyRejected(KeyCallError):

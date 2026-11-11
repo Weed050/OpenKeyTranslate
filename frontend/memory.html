@@ -63,7 +63,7 @@
            Rows and header share one grid so the columns line up. */
         .list-cols, .item-row.cols > summary { display: grid; grid-template-columns: var(--cols); align-items: center; gap: 12px; }
         #correctionList, #correctionCols { --cols: 14px minmax(0, 1fr) 96px 64px 104px; }
-        #glossaryList, #glossaryCols { --cols: 14px minmax(0, 1fr) minmax(0, 1fr) 56px 64px 104px; }
+        #glossaryList, #glossaryCols { --cols: 14px minmax(0, 1fr) minmax(0, 1fr) 56px 104px 104px; }
         .list-cols { padding: 8px 12px; margin-top: 4px; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border-strong);
                      margin-bottom: 10px; background: var(--bg-panel-2); border-radius: var(--radius-sm) var(--radius-sm) 0 0; }
         .list-cols button { all: unset; cursor: pointer; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .05em;
@@ -94,6 +94,8 @@
             border:1px solid var(--border); border-radius:var(--radius-sm); margin-bottom:6px; font-size:13px;
         }
         .suggestion-arrow { color:var(--text-muted); }
+        /* width follows the text (set in glossary.js); the example line on the right gives way first */
+        .suggestion-target { flex:0 0 auto; min-width:12ch; max-width:min(52ch, 45%); }
         .suggestion-example { color:var(--text-muted); font-size:11px; flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
  
         .usage-variant { display:flex; gap:6px; font-size:12px; padding:2px 0; }
@@ -223,7 +225,7 @@
                     <button data-sort="en" title="Sort by the English term, A-Z (again: Z-A)">English<span class="arrow"></span></button>
                     <button data-sort="pl" title="Sort by the Polish term, A-Z (again: Z-A)">Polish<span class="arrow"></span></button>
                     <button data-sort="used" title="Translated bubbles where the term fired (was given to the AI) - most first (again: least)">Used<span class="arrow"></span></button>
-                    <button data-sort="auto" title="Accepted from a suggestion first (again: typed by you first)">Source<span class="arrow"></span></button>
+                    <button data-sort="auto" title="Where the term came from: typed = by you, scan / AI = a suggestion you accepted (pencil: you changed the proposal), import = from a file. Terms added before 11.11.2026: 'scan / AI' or 'typed / import' - the app did not note which. Click: suggestions first (again: typed first)">Source<span class="arrow"></span></button>
                     <button data-sort="added" title="Newest first (again: oldest first)">Added<span class="arrow"></span></button>
                 </div>
                 <div id="glossaryList"></div>

@@ -20,6 +20,8 @@ Thinking: Gemini 2.5 models "think" by default and those tokens count against ma
 could end in a truncated, unparseable JSON. gemini_thinking_budget (settings) caps it; 0 = off on Flash.
 """
 
+import re
+
 import httpx
 from pydantic import BaseModel
 from google import genai
@@ -42,13 +44,40 @@ def _thinking_config(model: str):
     return types.ThinkingConfig(thinking_budget=int(budget))
 
 
+_RETRY_DELAY = re.compile(r"retryDelay['\"]?\s*:\s*['\"](\d+(?:\.\d+)?)s|retry in (\d+(?:\.\d+)?)\s*s", re.I)
+_QUOTA_METRIC = re.compile(r"Quota exceeded for metric:\s*([^,\\\n]+),\s*limit:\s*(\d+)")
+
+
+def rate_limit_from(text: str) -> RateLimited:
+    """
+    A 429 body -> RateLimited with what the server says: the wait (RetryInfo retryDelay / "Please retry in 46.6s") and
+    whether a PER-DAY quota is spent (quotaId ...PerDay...). Before, every 429 cooled the key 65 s - with a daily quota
+    spent that meant a minute of waiting and a new 429, again and again (the replay script waited 6 x 65 s per request).
+    The raw JSON (~400 characters per key) is no longer part of the message, only the metric and its limit.
+    """
+    daily = "PerDay" in text
+    m = _RETRY_DELAY.search(text)
+    retry = float(m.group(1) or m.group(2)) if m else None
+    q = _QUOTA_METRIC.search(text)
+    metric = f", {q.group(1).rsplit('/', 1)[-1]} limit {q.group(2)}" if q else ""
+    kind = "daily quota used up" if daily else "per-minute limit" + (f", retry in {retry:.0f}s" if retry else "")
+    return RateLimited(f"Rate limit or quota reached (429 RESOURCE_EXHAUSTED: {kind}{metric})", retry_after=retry, daily=daily,
+                       limit=int(q.group(2)) if q else None, metric=q.group(1).rsplit("/", 1)[-1].strip() if q else None)
+
+
 def _classify(e: genai_errors.ClientError, model: str) -> Exception:
     code = getattr(e, "code", None)
     text = str(e)
     if code == 429:
-        return RateLimited(f"Rate limit or quota reached (429 RESOURCE_EXHAUSTED): {text[:300]}")
+        return rate_limit_from(text)
     if code in (401, 403) or "API_KEY_INVALID" in text or "API key not valid" in text:
         return KeyRejected("Key rejected - wrong or revoked key. Copy it again from aistudio.google.com/apikey.")
+    if code == 404 and "no longer available" in f"{text} {getattr(e, 'message', '') or ''}":
+        # Google keeps older models (2.5 since 2026) only for projects that used them before - a key made in a new
+        # Google account / project gets 404 "...is no longer available to new users", while ListModels still lists it.
+        return KeyRejected(f"Model '{model}' is not available to new Google projects (404) - only keys that used it "
+                           f"before still can. Type a newer Gemini model for this key (Models may still list the old "
+                           f"one; current ones: aistudio.google.com/docs/deprecations).")
     if code == 404:
         return KeyRejected(f"Model '{model}' not found (404) - pick one from Models.")
     return e

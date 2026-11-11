@@ -576,7 +576,8 @@ def _process_image(image_bgr: np.ndarray, protected_terms=()) -> dict:
             stats = refine_bubbles(image_scaled, partial, ocr_region, scan=get_setting("ocr_scan_missed_bubbles", False))
             items, grouped_lines, bubbles = partial["items"], partial["lines"], partial["bubbles"]
             if any(stats.values()):
-                print(f"[REFINE] numbers split {stats['numbers']}, split {stats['split']}, merged {stats['merged']}, found {stats['found']} missed bubble(s), "
+                print(f"[REFINE] numbers split {stats['numbers']}, diagram parts {stats['operators']}, split {stats['split']}, "
+                      f"merged {stats['merged']}, found {stats['found']} missed bubble(s), "
                       f"re-read {stats['refined']} half-detected bubble(s).")
         except Exception as e:
             print(f"[REFINE] skipped after an error: {type(e).__name__}: {e}")

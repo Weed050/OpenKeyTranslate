@@ -327,6 +327,14 @@ def test_one_key(payload: dict):
     return test_key(str(payload.get("id") or ""))
 
 
+@router.get("/key-usage")
+def key_usage():
+    """Per key: requests made today, the day's limit when known and an estimate of what is left (no secrets) -
+    services/providers/key_usage.summary; the usage line under each key in Settings."""
+    from services.providers.key_usage import summary
+    return {"keys": summary()}
+
+
 @router.post("/key-models")
 def key_models(payload: dict):
     """Models the server offers for one key ({"id": "provider/label"}) -> {"models": [...]} or {"error": "..."}."""

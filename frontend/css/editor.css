@@ -47,18 +47,23 @@
 .toolbar-more-menu hr{ width: 100%; border: 0; border-top: 1px solid var(--border); margin: 2px 0; }
 .toolbar-more-group{ display: flex; flex-direction: column; gap: 4px; }
  
+/* The page is centred by auto margins, not justify-content: center - a centred flex item wider than the view overflows
+   to the LEFT too, and that part cannot be scrolled to (zoomed in, the left side of the page was out of reach). */
 .image-viewport{
   flex: 1;
   overflow: auto;
   display: flex;
   align-items: flex-start;
-  justify-content: center;
+  justify-content: flex-start;
   padding: var(--space-lg);
 }
- 
+.image-viewport.panning, .image-viewport.panning * { cursor: grabbing !important; }
+
 .image-canvas{
   position: relative;
   flex-shrink: 0;
+  margin-left: auto;
+  margin-right: auto;
 }
  
 .image-canvas img{
@@ -537,7 +542,7 @@
 
 /* clean tools: one button (the last chosen tool) + an arrow that lists the others - like a tool group in GIMP */
 .tool-split { display: inline-flex; align-items: stretch; }
-.tool-split > #cleanAreaBtn { border-top-right-radius: 0; border-bottom-right-radius: 0; }
+.tool-split > #cleanAreaBtn, .tool-split > #exportPageBtn { border-top-right-radius: 0; border-bottom-right-radius: 0; }
 .tool-split > .tool-split-arrow { border-top-left-radius: 0; border-bottom-left-radius: 0; margin-left: -1px;
   padding-left: 7px; padding-right: 7px; font-size: 11px; }
 .tool-split > .primary + .tool-split-arrow { border-left-color: var(--accent); }
@@ -561,6 +566,8 @@
 .mode-bar-spacer { flex: 1; }
 .mode-hint kbd { font-size: 11px; }
 .mode-bar #exportPageBtn { padding: 4px 12px; font-size: 12px; }
+.mode-bar #exportPageMenuBtn { padding: 4px 6px; font-size: 10px; }
+#exportPageMenu button { white-space: nowrap; max-width: 520px; overflow: hidden; text-overflow: ellipsis; }
 /* page review controls (js/editor-review.js): Accept page, Layout checked, review mode */
 .mode-bar { flex-wrap: wrap; }
 .review-slot { display: inline-flex; align-items: center; gap: 6px; padding-left: 8px; margin-left: 2px; border-left: 1px solid var(--border); }
@@ -611,6 +618,25 @@
 .lh-se { right: -6px; bottom: -6px; cursor: nwse-resize; }
 .lh-ne { right: -6px; top: -6px; cursor: nesw-resize; }
 .lh-sw { left: -6px; bottom: -6px; cursor: nesw-resize; }
+/* side handles: the whole side can be grabbed (an invisible strip), a small square marks its middle */
+.letter-area .le { position: absolute; }
+.le-n { left: 8px; right: 8px; top: -5px; height: 10px; cursor: ns-resize; }
+.le-s { left: 8px; right: 8px; bottom: -5px; height: 10px; cursor: ns-resize; }
+.le-e { top: 8px; bottom: 8px; right: -5px; width: 10px; cursor: ew-resize; }
+.le-w { top: 8px; bottom: 8px; left: -5px; width: 10px; cursor: ew-resize; }
+.letter-area .le::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 8px;
+  height: 8px;
+  margin: -4px 0 0 -4px;
+  box-sizing: border-box;
+  background: var(--bg-panel);
+  border: 2px solid var(--accent);
+  border-radius: 2px;
+}
 .letter-area .lrot {
   position: absolute;
   left: 50%;
@@ -649,6 +675,14 @@ body.lettering-mode .bubble-outline { display: none; }
 .lettering-row { display: flex; align-items: center; gap: var(--space-sm); flex-wrap: wrap; font-size: 13px; }
 .lettering-row > span:first-child { width: 72px; color: var(--text-muted); }
 .lettering-size { display: inline-flex; align-items: center; gap: 4px; }
+/* "Lines": the text as drawn, Enter = own line break (changes are sent when the field is left) */
+.lettering-lines-row { align-items: flex-start; }
+.lettering-lines { display: flex; align-items: flex-start; gap: 6px; flex: 1; min-width: 0; }
+.lettering-lines textarea { flex: 1; min-width: 0; resize: vertical; text-align: center; font-size: 12px; line-height: 1.35; padding: 4px 6px; }
+.lettering-lines button { padding: 2px 9px; }
+.lettering-lines-btns { display: flex; flex-direction: column; align-items: stretch; gap: 4px; }
+.lettering-lines-btns .text-muted { text-align: center; font-size: 12px; }
+.import-error [data-act="boxToText"] { margin-left: 6px; padding: 2px 9px; }
 .lettering-size input { width: 64px; padding: 3px 6px; }
 .lettering-size button { padding: 2px 9px; }
 
@@ -732,8 +766,8 @@ body.lettering-mode .bubble-outline { display: none; }
 .ocrd-why { font-size: 11px; color: var(--text-muted); }
 
 /* clean tools: shape of the area (js/editor.js openCleanToolMenu) - an ellipse for oval / spiky bubbles */
-.clean-tool-menu .clean-shape-row { display: flex; align-items: center; gap: 8px; margin-top: 6px; padding: 6px 6px 2px;
-  border-top: 1px solid var(--border); font-size: 12px; color: var(--text-muted); }
+.clean-tool-menu .clean-shape-row { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; padding: 2px 6px 8px;
+  border-bottom: 1px solid var(--border); font-size: 12px; color: var(--text-muted); }
 .clean-tool-menu .clean-shape-row .segmented button { display: inline-block; padding: 3px 10px; text-align: center; }
 .clean-tool-menu .clean-shape-row .segmented button.selected { color: var(--accent-text); background: var(--accent); }
 .draw-rect.ellipse, .cleanup-mark.ellipse { border-radius: 50%; }

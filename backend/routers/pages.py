@@ -41,7 +41,7 @@ from services import bubble_edit, project_prefs
 from services.glossary_service import load_glossary
 from utils.bubble_post import carry_over
 import threading
-from utils.inpainting import CLEANUP_MODES, CLEANUP_SHAPES, build_erase_mask, inpaint
+from utils.inpainting import CLEANUP_MODES, CLEANUP_SHAPES, TEXT_MODES, build_erase_mask, erase_report, inpaint
 from services.job_queue import enqueue_page_processing, is_queued_or_running, OCR_LOCK
 from utils.image_io import load_image_bgr, write_image, ImageLoadError
 
@@ -299,8 +299,9 @@ def set_bubble_layout(page_id: int, bubble_id: str, payload: dict, db: Session =
 @router.post("/{page_id}/export")
 def export_page(page_id: int, payload: dict | None = Body(default=None), db: Session = Depends(get_db)):
     """
-    The editor's "Export page": {"content": "translated" | "clean" | "both", "format": "png" | "jpg", "quality": 92}
-    -> files in <project folder>/exported/<chapter>/ (the same place the project page's export uses by default).
+    The editor's "Export page": {"content": "translated" | "clean" | "both", "format": "png" | "jpg", "quality": 92,
+    "path"?: a folder} -> files in <project folder>/exported/<chapter>/ (the same place the project page's export uses
+    by default), or <path>/<project>/<chapter>/ for a folder picked in the editor (as the project page's export).
     """
     from services.render_service import export_one_page, EXPORT_CONTENT, EXPORT_FORMATS
     page, _ = _rendered_page(page_id, db)
@@ -308,8 +309,11 @@ def export_page(page_id: int, payload: dict | None = Body(default=None), db: Ses
     content, fmt = payload.get("content", "translated"), payload.get("format", "png")
     if content not in EXPORT_CONTENT or fmt not in EXPORT_FORMATS:
         raise HTTPException(status_code=400, detail=f"content must be one of {EXPORT_CONTENT}, format one of {EXPORT_FORMATS}")
+    dest = payload.get("path")
+    if dest is not None and not isinstance(dest, str):
+        raise HTTPException(status_code=400, detail="path must be a folder")
     try:
-        files = export_one_page(page, content, fmt, int(payload.get("quality", 92)))
+        files = export_one_page(page, content, fmt, int(payload.get("quality", 92)), (dest or "").strip() or None)
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="Inpainted image not found - run the pipeline first")
     except (ImageLoadError, ValueError) as e:
@@ -341,15 +345,26 @@ def review_page_endpoint(page_id: int, payload: dict | None = Body(default=None)
 
 @router.get("/{page_id}/exported")
 def exported_file(page_id: int, db: Session = Depends(get_db)):
-    """The page's last export (<project>/exported/<chapter>/<page>.png|jpg) as an image - "View export" in the editor."""
+    """
+    The page's last export as an image - "View export" in the editor: the newest <page>.png|jpg in
+    <project>/exported/<chapter>/ or in the folder of its last export (export_log.json; another folder picked for
+    Export page / Export pages - a ZIP is not looked into).
+    """
     from fastapi.responses import FileResponse
     from services.render_service import default_export_root
+    from services.page_progress import load_export_log
     page = db.query(Page).filter(Page.id == page_id).first()
     if not page:
         raise HTTPException(status_code=404, detail="Page not found")
-    folder = os.path.join(default_export_root(page.chapter.project), page.chapter.number)
+    project = page.chapter.project
+    folders = [os.path.join(default_export_root(project), page.chapter.number)]
+    entry = load_export_log(project).get(str(page.id))
+    dest = entry.get("dest") if isinstance(entry, dict) else None
+    if isinstance(dest, str) and dest and os.path.isdir(dest):
+        folders += [dest, os.path.join(dest, page.chapter.number)]
     stem = os.path.splitext(page.file_name)[0]
-    found = [f for f in (os.path.join(folder, f"{stem}.{ext}") for ext in ("png", "jpg")) if os.path.exists(f)]
+    found = [f for folder in folders for f in (os.path.join(folder, f"{stem}.{ext}") for ext in ("png", "jpg"))
+             if os.path.exists(f)]
     if not found:
         raise HTTPException(status_code=404, detail="This page has not been exported yet")
     newest = max(found, key=os.path.getmtime)
@@ -556,6 +571,11 @@ def retranslate_bubble(page_id: int, bubble_id: str, db: Session = Depends(get_d
         raise HTTPException(status_code=500, detail=f"Translation failed: {e}")
 
     new_translation = translated[0].get("translation", "")
+    if not new_translation.strip():
+        # the model answered, but with nothing for this bubble (asked twice, see translate_bubbles 2b): writing ""
+        # would wipe the text the bubble had and the editor used to report "Bubble retranslated"
+        raise HTTPException(status_code=502, detail="The AI returned no translation for this bubble (asked twice). "
+                            "The text it had was kept - press Retranslate again or type your own.")
     target["translation"] = target["ai_translation"] = new_translation
     target.pop("split_check", None)                 # a fresh translation of this piece: nothing left to check
     record_manual_op(ocr_data, "retranslate_bubble", bubble_id)
@@ -571,7 +591,10 @@ def patch_bubble(page_id: int, bubble_id: str, payload: dict, db: Session = Depe
                        the editor offers 'Retranslate bubble' next)
       {"skip": true}   do not translate this bubble and put the original pixels back (skip_reason = "manual")
       {"skip": false}  translate it after all (page numbers etc. can be forced); the text is erased again
-    A skip change rebuilds the clean image from the saved line data when the page has it.
+      {"auto_erase": false}  keep translating + lettering it, but put its ORIGINAL pixels back (bubble
+                       "no_auto_erase": true; manual_ops "erase_off") - the automatic erase did a bad job and the user
+                       cleans that spot with the clean tools; true = erased automatically again ("erase_on")
+    A skip / auto_erase change rebuilds the clean image from the saved line data when the page has it.
     """
     page = db.query(Page).filter(Page.id == page_id).first()
     if not page:
@@ -610,6 +633,15 @@ def patch_bubble(page_id: int, bubble_id: str, payload: dict, db: Session = Depe
             else:
                 bubble.pop("skip", None)
                 bubble.pop("skip_reason", None)
+    if "auto_erase" in payload:
+        off = not bool(payload["auto_erase"])
+        if off != bool(bubble.get("no_auto_erase")):
+            skip_changed = True                   # same consequence: the clean image is rebuilt
+            record_manual_op(ocr_data, "erase_off" if off else "erase_on", bubble_id)
+            if off:
+                bubble["no_auto_erase"] = True
+            else:
+                bubble.pop("no_auto_erase", None)
 
     reinpainted = needs_reocr = False
     if skip_changed:
@@ -666,11 +698,16 @@ def _edit_cleanups(page_id: int, db: Session, change, op: str, **detail) -> dict
         ocr_data["cleanups"] = cleanups
         if not cleanups:
             ocr_data.pop("cleanups")
-        if not reinpaint_from_json(paths, ocr_data):
-            raise HTTPException(status_code=409, detail="This page was processed before line data was saved - use Re-OCR once.")
+        with erase_report() as filled:
+            if not reinpaint_from_json(paths, ocr_data):
+                raise HTTPException(status_code=409, detail="This page was processed before line data was saved - use Re-OCR once.")
         record_manual_op(ocr_data, op, **detail)
         write_page_json(paths["json"], ocr_data)
-        return {"cleanups": cleanups}
+        result = {"cleanups": cleanups}
+        if op == "cleanup_add" and cleanups:
+            # how the new "Erase text" area was filled (colour / tone / ai / telea) - the editor's message says it
+            result["filled"] = filled.get(len(cleanups) - 1)
+        return result
     except ImageLoadError as e:
         raise HTTPException(status_code=422, detail=str(e))
     except FileNotFoundError:
@@ -682,12 +719,17 @@ def _edit_cleanups(page_id: int, db: Session, change, op: str, **detail) -> dict
 @router.post("/{page_id}/cleanups")
 def add_cleanup(page_id: int, payload: dict, db: Session = Depends(get_db)):
     """
-    The editor's clean tools: {"box": [x1, y1, x2, y2], "mode"?: "clean" | "fill" | "redraw", "shape"?: "rect" |
-    "ellipse"} (image coordinates) - a leftover trace the automatic cleaning missed. Stored in the page JSON
-    ("cleanups"; "mode" only when not "clean", "shape" only when "ellipse"), so Rebuild image and Re-OCR keep it.
-    clean = remove the marks inside (lines crossing the edge stay), fill = paint the whole area with the background
-    colour, redraw = the optional AI model redraws it; ellipse = only the ellipse inside the box
+    The editor's clean tools: {"box": [x1, y1, x2, y2], "mode"?: "clean" | "fill" | "redraw" | "text" | "text_ai",
+    "shape"?: "rect" | "ellipse"} (image coordinates) - a leftover trace the automatic cleaning missed. Stored in the
+    page JSON ("cleanups"; "mode" only when not "clean", "shape" only when "ellipse"), so Rebuild image and Re-OCR keep
+    it. clean = remove the marks inside (lines crossing the edge stay), fill = paint the whole area with the background
+    colour, redraw = the optional AI model redraws it, text = "Erase text": only the letters inside (each hole filled
+    from around: colour / screentone / the AI model on a drawing when installed), text_ai = "Erase text (AI)": the
+    same letters, all redrawn by the model (needs it); ellipse = only the ellipse inside the box
     (utils.inpainting._add_cleanups, services/lama_service.py).
+    "text" / "text_ai" store the text lines they erase with the entry ("lines": polygons), so a rebuild needs no OCR:
+    the page's own OCR lines whose centre lies in the area (also of skipped bubbles), else the area is read now
+    (_text_lines). The answer's "filled" says how the new letters were filled: ["colour" | "tone" | "ai" | "telea"].
     """
     box = payload.get("box")
     if not (isinstance(box, (list, tuple)) and len(box) == 4):
@@ -701,7 +743,7 @@ def add_cleanup(page_id: int, payload: dict, db: Session = Depends(get_db)):
     mode = payload.get("mode") or "clean"
     if mode not in CLEANUP_MODES:
         raise HTTPException(status_code=400, detail=f"mode must be one of {', '.join(CLEANUP_MODES)}")
-    if mode == "redraw":
+    if mode in ("redraw", "text_ai"):
         from services.lama_service import installed
         if not installed():
             raise HTTPException(status_code=409, detail="The AI redraw model is not installed - Settings > Add-ons.")
@@ -711,8 +753,48 @@ def add_cleanup(page_id: int, payload: dict, db: Session = Depends(get_db)):
     entry = {"box": box} if mode == "clean" else {"box": box, "mode": mode}
     if shape == "ellipse":
         entry["shape"] = "ellipse"
+    if mode in TEXT_MODES:
+        entry["lines"] = _text_lines(page_id, db, box)
+        if not entry["lines"]:
+            raise HTTPException(status_code=422, detail="No text was found in that area - draw it over the letters, "
+                                "or use Redraw (AI) / Clean area for marks the OCR cannot read.")
     return _edit_cleanups(page_id, db, lambda cl: cl.append(entry), "cleanup_add", mode=None if mode == "clean" else mode,
                           shape="ellipse" if shape == "ellipse" else None)
+
+
+def _text_lines(page_id: int, db: Session, box: list) -> list:
+    """
+    Text-line polygons for an "Erase text" area (image coordinates, 1 decimal): the page's saved OCR lines whose
+    centre lies in the area - any owner, a skipped bubble too (its letters are on the page) - or, when there are none,
+    what the OCR reads in the area now (text the page pass never saw).
+    """
+    x1, x2 = sorted((box[0], box[2]))
+    y1, y2 = sorted((box[1], box[3]))
+
+    def inside(poly) -> bool:
+        try:
+            cx = sum(float(p[0]) for p in poly) / len(poly)
+            cy = sum(float(p[1]) for p in poly) / len(poly)
+        except (TypeError, ValueError, IndexError, ZeroDivisionError):
+            return False
+        return x1 <= cx <= x2 and y1 <= cy <= y2
+
+    def rounded(poly) -> list:
+        return [[round(float(p[0]), 1), round(float(p[1]), 1)] for p in poly]
+
+    _, paths, ocr_data, _ = _edit_context(page_id, db)
+    found = [rounded(l["box"]) for l in ocr_data.get("lines") or [] if l.get("box") and inside(l["box"])]
+    if found:
+        return found
+    try:
+        image = load_image_bgr(paths["raw"])
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Raw image not found")
+    except ImageLoadError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    with OCR_LOCK, page_rotation(ocr_data.get("detect_rotation")):
+        items = ocr_region(image, (x1, y1, x2, y2))
+    return [rounded(it["box"]) for it in items if it.get("box") and inside(it["box"])]
 
 
 @router.delete("/{page_id}/cleanups")
@@ -1090,12 +1172,21 @@ def reorder_bubbles(page_id: int, payload: dict, db: Session = Depends(get_db)):
 
 @router.post("/{page_id}/bubbles")
 def add_bubble(page_id: int, payload: dict, db: Session = Depends(get_db)):
-    """Add a bubble from a rectangle the user drew over text the OCR never saw: {"box": [x1, y1, x2, y2]} (image coordinates)."""
+    """
+    Add a bubble from a rectangle the user drew over text the OCR never saw: {"box": [x1, y1, x2, y2]} (image
+    coordinates). With "text": "..." nothing is read - the bubble gets the text the user typed (drawn sound effects
+    the OCR cannot read; manual_ops "add_bubble_manual").
+    """
     box = payload.get("box")
     if not (isinstance(box, (list, tuple)) and len(box) == 4):
         raise HTTPException(status_code=400, detail="box must be [x1, y1, x2, y2]")
-    return _run_bubble_edit(page_id, db, lambda data, image, prot: bubble_edit.add_bubble(data, box, image, ocr_region, prot),
-                            op="add_bubble", note=lambda r: {"bubble": r["bubble"]["bubble_id"]})
+    typed = payload.get("text")
+    if typed is not None and not isinstance(typed, str):
+        raise HTTPException(status_code=400, detail="text must be a string")
+    return _run_bubble_edit(page_id, db,
+                            lambda data, image, prot: bubble_edit.add_bubble(data, box, image, ocr_region, prot, manual_text=typed),
+                            op="add_bubble" if typed is None else "add_bubble_manual",
+                            note=lambda r: {"bubble": r["bubble"]["bubble_id"]})
 
 
 @router.post("/{page_id}/bubbles/{bubble_id}/merge")

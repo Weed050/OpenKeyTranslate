@@ -16,6 +16,9 @@ All coordinates are original-image coordinates.
 import copy
 import re
 
+import cv2
+import numpy as np
+
 from core.config import get_setting
 from services.bubble_refine import bbox_of, center, expand, read_region, rect_poly, union_bbox
 from utils.bubble_interior import find_interior
@@ -80,6 +83,74 @@ def _reading_region(image, bubble: dict) -> tuple:
     return expand(it.bbox if it else bbox, 0.02 if it else 0.3, iw, ih)
 
 
+REREAD_REACH_LINES = 3          # a re-read keeps lines at most this many line heights from the bubble's own text
+
+
+def _without_other_bubbles(image, ocr_data: dict, bubble_id: str, region) -> np.ndarray:
+    """
+    A copy of the page with the text lines of every OTHER bubble painted white inside `region` - what a re-read of
+    this bubble must not take. The interior of a bubble can leak through a light drawing (a white face) into the next
+    bubble: the read then took half of its "MEANING" ("THERE'S NO MEAI THE REASON..."), the bubble box spanned the
+    face between them and the cleaning erased half of it (Black Jack, official, Chapter_3/page_007).
+    """
+    out = image.copy()
+    x1, y1, x2, y2 = (int(v) for v in region)
+    mask = np.zeros(image.shape[:2], np.uint8)
+    for line in ocr_data.get("lines", []):
+        if line.get("bubble_id") in (None, bubble_id) or not line.get("box"):
+            continue
+        try:
+            cv2.fillPoly(mask, [np.array([[float(p[0]), float(p[1])] for p in line["box"]], np.float32).round().astype(np.int32)], 255)
+        except (TypeError, ValueError, IndexError):
+            continue
+    mask = cv2.dilate(mask, np.ones((7, 7), np.uint8))
+    part = np.zeros(mask.shape, bool)
+    part[y1:y2, x1:x2] = True
+    out[(mask > 0) & part] = 255
+    return out
+
+
+def _near_own_text(reading: dict, bubble: dict) -> dict:
+    """
+    Of a re-read, the lines joined to the bubble's own text: starting with those that overlap its current box, every
+    line at most REREAD_REACH_LINES line heights from one already kept (a line the box missed sits right next to the
+    others). Text found farther away in a leaked interior - the next bubble, junk in the drawing - is left out. When no
+    line overlaps the old box (the box was wrong), everything read is kept, as before.
+    """
+    lines = reading["lines"]
+    if len(lines) < 2:
+        return reading
+    boxes = [bbox_of(l["box"]) for l in lines]
+    heights = sorted(b[3] - b[1] for b in boxes)
+    reach = REREAD_REACH_LINES * max(8.0, heights[len(heights) // 2])
+    ox1, oy1, ox2, oy2 = bbox_of(bubble["box"])
+    kept = {i for i, (a, b, c, d) in enumerate(boxes) if a < ox2 and c > ox1 and b < oy2 and d > oy1}
+    if not kept:
+        return reading
+    grew = True
+    while grew:
+        grew = False
+        for i, (a, b, c, d) in enumerate(boxes):
+            if i in kept:
+                continue
+            for j in list(kept):
+                ka, kb, kc, kd = boxes[j]
+                gap_x = max(0.0, max(ka, a) - min(kc, c))
+                gap_y = max(0.0, max(kb, b) - min(kd, d))
+                if gap_x <= reach / 2 and gap_y <= reach:
+                    kept.add(i)
+                    grew = True
+                    break
+    if len(kept) == len(lines):
+        return reading
+    keep = [l for i, l in enumerate(lines) if i in kept]
+    union = bbox_of(keep[0]["box"])
+    for l in keep[1:]:
+        union = union_bbox(union, bbox_of(l["box"]))
+    return {**reading, "lines": keep, "text": " ".join(l["text"] for l in keep), "box": rect_poly(union),
+            "avg_score": sum(l["score"] for l in keep) / len(keep)}
+
+
 def reocr_bubble(ocr_data: dict, bubble_id: str, image, ocr_region_fn, protected=(), box=None) -> dict:
     """
     Read the bubble's whole region again as one crop and replace its text + lines. The old text goes to text_raw.
@@ -95,9 +166,14 @@ def reocr_bubble(ocr_data: dict, bubble_id: str, image, ocr_region_fn, protected
         if x2 - x1 < 12 or y2 - y1 < 12:
             raise BubbleEditError("The selected area is too small.", 400)
         region = (int(x1), int(y1), int(x2), int(y2))
+        reading = read_region(image, region, ocr_region_fn)           # the area the user drew: read as it is
     else:
+        # the interior found by itself: never the text of other bubbles, only lines joined to this one's (since
+        # 2026-11-11 - see _without_other_bubbles)
         region = _reading_region(image, bubble)
-    reading = read_region(image, region, ocr_region_fn)
+        reading = read_region(_without_other_bubbles(image, ocr_data, bubble_id, region), region, ocr_region_fn)
+        if reading is not None:
+            reading = _near_own_text(reading, bubble)
     if reading is None:
         raise BubbleEditError("No text was found in this bubble's area.", 422)
 
@@ -154,20 +230,38 @@ def restore_bubble(ocr_data: dict, snap: dict) -> dict:
     return restored
 
 
-def add_bubble(ocr_data: dict, box, image, ocr_region_fn, protected=()) -> dict:
-    """OCR a rectangle the user drew and add its content as a NEW bubble (text OCR never saw)."""
+def add_bubble(ocr_data: dict, box, image, ocr_region_fn, protected=(), manual_text: str | None = None) -> dict:
+    """
+    OCR a rectangle the user drew and add its content as a NEW bubble (text OCR never saw).
+    `manual_text`: the OCR cannot read this text (drawn sound effects, hand lettering) and the user typed it - no OCR
+    runs, the bubble is the drawn rectangle with that text, marked "manual_text": true. It has NO text lines, so the
+    cleaning erases nothing for it: the original lettering is removed with the clean tools (Fill / Redraw).
+    """
     ih, iw = image.shape[:2]
     x1, y1, x2, y2 = (float(v) for v in box)
     x1, x2 = sorted((max(0.0, x1), min(float(iw), x2)))
     y1, y2 = sorted((max(0.0, y1), min(float(ih), y2)))
     if x2 - x1 < 12 or y2 - y1 < 12:
         raise BubbleEditError("The selected area is too small.", 400)
+    bubbles = ocr_data.setdefault("bubbles", [])
+    bubble_id = f"bubble_{_next_number([b['bubble_id'] for b in bubbles], 'bubble_')}"
+
+    if manual_text is not None:
+        typed = " ".join(str(manual_text).split())
+        if not typed:
+            raise BubbleEditError("Type the text of the new bubble.", 400)
+        bubble = {"bubble_id": bubble_id, "text": typed, "translation": "", "ai_translation": "",
+                  "box": rect_poly((round(x1, 1), round(y1, 1), round(x2, 1), round(y2, 1))), "line_count": 0,
+                  "added_by_user": True, "manual_text": True}
+        cy = (y1 + y2) / 2
+        index = next((i for i, b in enumerate(bubbles) if center(bbox_of(b["box"]))[1] > cy), len(bubbles))
+        bubbles.insert(index, bubble)
+        return {"bubble": bubble, "index": index}
+
     reading = read_region(image, (x1, y1, x2, y2), ocr_region_fn)
     if reading is None:
         raise BubbleEditError("No text was found in the selected area.", 422)
 
-    bubbles = ocr_data.setdefault("bubbles", [])
-    bubble_id = f"bubble_{_next_number([b['bubble_id'] for b in bubbles], 'bubble_')}"
     text = _clean(reading["text"], protected)
     bubble = {
         "bubble_id": bubble_id, "text": text, "translation": "", "ai_translation": "",
@@ -387,6 +481,22 @@ def _manual_parts(translations, n: int) -> list[str] | None:
     return [t.strip() for t in translations]
 
 
+def _union_of(lines: list[dict]) -> tuple:
+    union = bbox_of(lines[0]["box"])
+    for l in lines[1:]:
+        union = union_bbox(union, bbox_of(l["box"]))
+    return union
+
+
+def _side_by_side(a, b) -> bool:
+    """Two boxes next to each other, not one under the other: at least half of the smaller one's height is shared
+    and they (almost) do not overlap in x."""
+    shared_y = min(a[3], b[3]) - max(a[1], b[1])
+    shared_x = min(a[2], b[2]) - max(a[0], b[0])
+    return (shared_y >= 0.5 * min(a[3] - a[1], b[3] - b[1])
+            and shared_x <= 0.2 * min(a[2] - a[0], b[2] - b[0]))
+
+
 def _split_plan(ocr_data: dict, bubble_id: str, new_line_ids, image=None, ocr_region_fn=None, protected=(),
                 translations=None) -> dict:
     """
@@ -406,6 +516,13 @@ def _split_plan(ocr_data: dict, bubble_id: str, new_line_ids, image=None, ocr_re
     if not groups[0] or not groups[1]:
         raise BubbleEditError("Pick some, but not all, lines of the bubble for the new bubble.", 400)
     groups.sort(key=lambda g: min((round(bbox_of(l["box"])[1] / 6), bbox_of(l["box"])[0]) for l in g))   # source order
+    # Two bubbles NEXT to each other that the OCR read as one: the page's reading order decides which comes first
+    # (right-to-left manga: the right one), not whose first line happens to sit a few pixels higher.
+    mode = ocr_data.get("bubble_order") or get_setting("bubble_order", "ttb")
+    if mode in ("rtl", "ltr"):
+        boxes = [_union_of(g) for g in groups]
+        if _side_by_side(*boxes):
+            groups.sort(key=lambda g: center(_union_of(g))[0], reverse=(mode == "rtl"))
 
     pieces = []
     for g in groups:
@@ -578,6 +695,10 @@ def set_layout(ocr_data: dict, bubble_id: str, changes: dict, base: dict | None 
       valign     middle | top | bottom
       font       font family name (services/font_service.py); null = the default font (Settings)
       bold / italic  true / false (imitated when the family has no such file)
+      lines      the translation with the user's OWN line breaks: a list of lines or one text with "\n"; null / [] =
+                 automatic wrap. Only the breaks may differ from the translation (spaces and letter case are free, a
+                 break may fall inside a word) - the words are edited in Translate. Ignored by the renderer once the
+                 translation no longer matches.
       reset      true = forget everything (back to automatic)
     Only values that differ from the defaults are kept, so an untouched bubble has no "layout" and renders exactly as
     before. `base` = the project's lettering style (services/project_prefs.py): font / bold / italic / stroke / color
@@ -601,6 +722,27 @@ def set_layout(ocr_data: dict, bubble_id: str, changes: dict, base: dict | None 
             if x2 - x1 < 8 or y2 - y1 < 8:
                 raise BubbleEditError("The text area is too small.", 400)
             layout["box"] = [x1, y1, x2, y2]
+    if "lines" in changes:
+        raw = changes["lines"]
+        if isinstance(raw, str):
+            raw = raw.replace("\r", "").split("\n")
+        if raw in (None, []) or not isinstance(raw, (list, tuple)) or not all(isinstance(l, str) for l in raw):
+            if raw not in (None, []):
+                raise BubbleEditError("lines must be a list of text lines", 400)
+            layout.pop("lines", None)
+        else:
+            lines = [" ".join(l.split()) for l in raw][:80]
+            while lines and not lines[0]:
+                lines.pop(0)
+            while lines and not lines[-1]:
+                lines.pop()
+            current = bubble.get("translation") or bubble.get("text") or ""
+            if "".join("".join(lines).split()).casefold() != "".join(current.split()).casefold():
+                raise BubbleEditError("Only the line breaks can be changed here - edit the words in Translate.", 400)
+            if len(lines) > 1:
+                layout["lines"] = lines
+            else:
+                layout.pop("lines", None)        # one line = nothing forced: automatic wrap
     if "font_size" in changes:
         if changes["font_size"] in (None, "", 0):
             layout.pop("font_size", None)

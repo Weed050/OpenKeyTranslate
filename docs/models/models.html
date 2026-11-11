@@ -322,6 +322,12 @@
                                 <a class="variable" href="#GlossaryTerm.created_at">created_at</a>
                         </li>
                         <li>
+                                <a class="variable" href="#GlossaryTerm.origin">origin</a>
+                        </li>
+                        <li>
+                                <a class="variable" href="#GlossaryTerm.proposed_term">proposed_term</a>
+                        </li>
+                        <li>
                                 <a class="variable" href="#GlossaryTerm.project">project</a>
                         </li>
                 </ul>
@@ -620,8 +626,14 @@ used by the OCR/Translation pipeline.</p>
 </span><span id="L-264"><a href="#L-264"><span class="linenos">264</span></a>    <span class="n">auto_detected</span> <span class="o">=</span> <span class="n">Column</span><span class="p">(</span><span class="n">Boolean</span><span class="p">,</span> <span class="n">default</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
 </span><span id="L-265"><a href="#L-265"><span class="linenos">265</span></a>    <span class="n">occurrences</span> <span class="o">=</span> <span class="n">Column</span><span class="p">(</span><span class="n">Integer</span><span class="p">,</span> <span class="n">default</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
 </span><span id="L-266"><a href="#L-266"><span class="linenos">266</span></a>    <span class="n">created_at</span> <span class="o">=</span> <span class="n">Column</span><span class="p">(</span><span class="n">DateTime</span><span class="p">(</span><span class="n">timezone</span><span class="o">=</span><span class="kc">True</span><span class="p">),</span> <span class="n">default</span><span class="o">=</span><span class="k">lambda</span><span class="p">:</span> <span class="n">datetime</span><span class="o">.</span><span class="n">now</span><span class="p">(</span><span class="n">timezone</span><span class="o">.</span><span class="n">utc</span><span class="p">))</span>
-</span><span id="L-267"><a href="#L-267"><span class="linenos">267</span></a>
-</span><span id="L-268"><a href="#L-268"><span class="linenos">268</span></a>    <span class="n">project</span> <span class="o">=</span> <span class="n">relationship</span><span class="p">(</span><span class="s2">&quot;Project&quot;</span><span class="p">,</span> <span class="n">back_populates</span><span class="o">=</span><span class="s2">&quot;glossary_terms&quot;</span><span class="p">)</span>
+</span><span id="L-267"><a href="#L-267"><span class="linenos">267</span></a>    <span class="c1"># Where the term came from (since 2026-11-11; NULL on older rows - there auto_detected is all that is known):</span>
+</span><span id="L-268"><a href="#L-268"><span class="linenos">268</span></a>    <span class="c1"># &quot;manual&quot; typed by the user, &quot;scan&quot; repeated-fix pattern found in the corrections, &quot;ai&quot; extracted by the LLM,</span>
+</span><span id="L-269"><a href="#L-269"><span class="linenos">269</span></a>    <span class="c1"># &quot;import&quot; from a glossary file. Every suggestion was ACCEPTED by the user; proposed_term = the Polish term as it</span>
+</span><span id="L-270"><a href="#L-270"><span class="linenos">270</span></a>    <span class="c1"># was suggested, so target_term != proposed_term means the user changed it before accepting.</span>
+</span><span id="L-271"><a href="#L-271"><span class="linenos">271</span></a>    <span class="n">origin</span> <span class="o">=</span> <span class="n">Column</span><span class="p">(</span><span class="n">String</span><span class="p">,</span> <span class="n">nullable</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+</span><span id="L-272"><a href="#L-272"><span class="linenos">272</span></a>    <span class="n">proposed_term</span> <span class="o">=</span> <span class="n">Column</span><span class="p">(</span><span class="n">String</span><span class="p">,</span> <span class="n">nullable</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+</span><span id="L-273"><a href="#L-273"><span class="linenos">273</span></a>
+</span><span id="L-274"><a href="#L-274"><span class="linenos">274</span></a>    <span class="n">project</span> <span class="o">=</span> <span class="n">relationship</span><span class="p">(</span><span class="s2">&quot;Project&quot;</span><span class="p">,</span> <span class="n">back_populates</span><span class="o">=</span><span class="s2">&quot;glossary_terms&quot;</span><span class="p">)</span>
 </span></pre></div>
 
 
@@ -1964,8 +1976,14 @@ for example, any mapped columns or relationships.</p>
 </span><span id="GlossaryTerm-266"><a href="#GlossaryTerm-266"><span class="linenos">266</span></a>    <span class="n">auto_detected</span> <span class="o">=</span> <span class="n">Column</span><span class="p">(</span><span class="n">Boolean</span><span class="p">,</span> <span class="n">default</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
 </span><span id="GlossaryTerm-267"><a href="#GlossaryTerm-267"><span class="linenos">267</span></a>    <span class="n">occurrences</span> <span class="o">=</span> <span class="n">Column</span><span class="p">(</span><span class="n">Integer</span><span class="p">,</span> <span class="n">default</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
 </span><span id="GlossaryTerm-268"><a href="#GlossaryTerm-268"><span class="linenos">268</span></a>    <span class="n">created_at</span> <span class="o">=</span> <span class="n">Column</span><span class="p">(</span><span class="n">DateTime</span><span class="p">(</span><span class="n">timezone</span><span class="o">=</span><span class="kc">True</span><span class="p">),</span> <span class="n">default</span><span class="o">=</span><span class="k">lambda</span><span class="p">:</span> <span class="n">datetime</span><span class="o">.</span><span class="n">now</span><span class="p">(</span><span class="n">timezone</span><span class="o">.</span><span class="n">utc</span><span class="p">))</span>
-</span><span id="GlossaryTerm-269"><a href="#GlossaryTerm-269"><span class="linenos">269</span></a>
-</span><span id="GlossaryTerm-270"><a href="#GlossaryTerm-270"><span class="linenos">270</span></a>    <span class="n">project</span> <span class="o">=</span> <span class="n">relationship</span><span class="p">(</span><span class="s2">&quot;Project&quot;</span><span class="p">,</span> <span class="n">back_populates</span><span class="o">=</span><span class="s2">&quot;glossary_terms&quot;</span><span class="p">)</span>
+</span><span id="GlossaryTerm-269"><a href="#GlossaryTerm-269"><span class="linenos">269</span></a>    <span class="c1"># Where the term came from (since 2026-11-11; NULL on older rows - there auto_detected is all that is known):</span>
+</span><span id="GlossaryTerm-270"><a href="#GlossaryTerm-270"><span class="linenos">270</span></a>    <span class="c1"># &quot;manual&quot; typed by the user, &quot;scan&quot; repeated-fix pattern found in the corrections, &quot;ai&quot; extracted by the LLM,</span>
+</span><span id="GlossaryTerm-271"><a href="#GlossaryTerm-271"><span class="linenos">271</span></a>    <span class="c1"># &quot;import&quot; from a glossary file. Every suggestion was ACCEPTED by the user; proposed_term = the Polish term as it</span>
+</span><span id="GlossaryTerm-272"><a href="#GlossaryTerm-272"><span class="linenos">272</span></a>    <span class="c1"># was suggested, so target_term != proposed_term means the user changed it before accepting.</span>
+</span><span id="GlossaryTerm-273"><a href="#GlossaryTerm-273"><span class="linenos">273</span></a>    <span class="n">origin</span> <span class="o">=</span> <span class="n">Column</span><span class="p">(</span><span class="n">String</span><span class="p">,</span> <span class="n">nullable</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+</span><span id="GlossaryTerm-274"><a href="#GlossaryTerm-274"><span class="linenos">274</span></a>    <span class="n">proposed_term</span> <span class="o">=</span> <span class="n">Column</span><span class="p">(</span><span class="n">String</span><span class="p">,</span> <span class="n">nullable</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+</span><span id="GlossaryTerm-275"><a href="#GlossaryTerm-275"><span class="linenos">275</span></a>
+</span><span id="GlossaryTerm-276"><a href="#GlossaryTerm-276"><span class="linenos">276</span></a>    <span class="n">project</span> <span class="o">=</span> <span class="n">relationship</span><span class="p">(</span><span class="s2">&quot;Project&quot;</span><span class="p">,</span> <span class="n">back_populates</span><span class="o">=</span><span class="s2">&quot;glossary_terms&quot;</span><span class="p">)</span>
 </span></pre></div>
 
 
@@ -2074,6 +2092,28 @@ for example, any mapped columns or relationships.</p>
         
     </div>
     <a class="headerlink" href="#GlossaryTerm.created_at"></a>
+    
+    
+
+                            </div>
+                            <div id="GlossaryTerm.origin" class="classattr">
+                                <div class="attr variable">
+            <span class="name">origin</span>
+
+        
+    </div>
+    <a class="headerlink" href="#GlossaryTerm.origin"></a>
+    
+    
+
+                            </div>
+                            <div id="GlossaryTerm.proposed_term" class="classattr">
+                                <div class="attr variable">
+            <span class="name">proposed_term</span>
+
+        
+    </div>
+    <a class="headerlink" href="#GlossaryTerm.proposed_term"></a>
     
     
 

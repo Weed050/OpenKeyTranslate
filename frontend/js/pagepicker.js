@@ -191,6 +191,9 @@ function pageTile(p) {
     if (p.layout) lines.push("Bubbles / layout checked");
     const outdated = trackExported() && p.export === "outdated";
     if (outdated) lines.push("Changed after the last export");
+    // exported before the review: the stage stays (Translated (AI) ...), the tile says it was exported
+    const draftExported = trackExported() && p.export === "current" && !["reviewed", "checked", "exported"].includes(stage);
+    if (draftExported) lines.push("Exported before the review - with the AI text as it was");
     link.title = p.error ? `${p.file_name}\n${p.error}` : lines.filter(Boolean).join("\n");
     const progress = stage === "translated" && p.reviewed ? ` ${p.reviewed}/${p.bubbles}` : "";   // review in progress
     const layoutMark = p.layout && stage !== "checked" && stage !== "exported"
@@ -198,7 +201,7 @@ function pageTile(p) {
     link.innerHTML = `
         <span class="page-name">${escapeHtml(p.file_name)}</span>
         ${layoutMark}
-        <span class="badge stage-badge" data-status="${escapeHtml(stage)}">${escapeHtml(label)}${progress}${outdated ? " &middot; export old" : ""}</span>
+        <span class="badge stage-badge" data-status="${escapeHtml(stage)}">${escapeHtml(label)}${progress}${outdated ? " &middot; export old" : ""}${draftExported ? " &middot; exported" : ""}</span>
     `;
     row.appendChild(link);
 

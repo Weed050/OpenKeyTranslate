@@ -75,6 +75,50 @@
 }
 .settings-toc a:hover { color: var(--text-primary); background: var(--bg-hover); }
 .settings-toc a.active { color: var(--accent); border-left-color: var(--accent); background: var(--accent-soft); font-weight: 500; }
+/* sections with input that is not stored yet (js/settings.js updateUnsavedUi): being typed = dot, save failed = warning */
+.settings-toc a.toc-dirty::after,
+.settings-toc a.toc-failed::after { content: " \25CF"; color: var(--text-muted); font-size: 10px; }
+.settings-toc a.toc-failed { color: var(--warn); border-left-color: var(--warn); }
+.settings-toc a.toc-failed::after { color: var(--warn); }
+
+/* "Not saved: ..." - stays at the bottom of the view while any section could not be saved */
+.unsaved-bar {
+  position: sticky;
+  bottom: var(--space-sm);
+  z-index: 5;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  max-width: 980px;
+  margin: var(--space-md) auto 0;
+  padding: 10px 14px;
+  background: var(--bg-panel, var(--bg-card));
+  border: 1px solid var(--warn);
+  border-left-width: 4px;
+  border-radius: var(--radius-sm);
+  box-shadow: 0 4px 16px var(--shadow);
+  font-size: 13px;
+}
+.unsaved-bar strong { color: var(--warn); }
+.unsaved-bar .unsaved-list { flex: 1; min-width: 0; }
+@keyframes unsaved-flash {
+  0%, 100% { box-shadow: none; }
+  30% { box-shadow: 0 0 0 3px var(--warn); }
+}
+.settings-cards > .card.unsaved-flash { animation: unsaved-flash 1.6s ease-in-out 2; }
+
+/* settings could not be loaded: the cards saved to the backend are locked (inert) until it answers */
+.settings-offline {
+  margin: 0 0 var(--space-md);
+  padding: 10px 14px;
+  background: var(--warn-soft);
+  border: 1px solid var(--warn);
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  line-height: 1.5;
+}
+.settings-cards > .card.not-loaded { opacity: 0.55; }
 
 @media (max-width: 1100px) {
   .settings-layout { grid-template-columns: minmax(0, 1fr); }
@@ -124,6 +168,13 @@
 .key-beta-tag { display: inline-block; padding: 0 5px; border-radius: 4px; font-size: 10px; font-weight: 600; text-transform: uppercase;
                 letter-spacing: .04em; color: var(--warn); background: var(--warn-soft); }
 .key-problem { margin: 6px 0 0 44px; font-size: 12px; color: var(--warn); }
+/* requests today / limit / left (js/settings.js showKeyUsage) */
+.key-usage { margin: 6px 0 0 44px; font-size: 12px; color: var(--text-muted); display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.key-usage b { color: var(--text); font-weight: 600; }
+.key-usage .key-usage-out { color: var(--danger); font-weight: 600; }
+.key-usage-bar { flex: 0 0 140px; height: 6px; border-radius: 3px; background: var(--bg-panel-2); border: 1px solid var(--border); overflow: hidden; }
+.key-usage-bar i { display: block; height: 100%; background: var(--accent); }
+.key-usage-bar i.high { background: var(--danger); }
 .key-actions { display: flex; gap: 8px; margin-top: 8px; }
 .key-ab-note { font-size: 12px; margin: 8px 0 0; }
 .key-ab-note b { color: var(--text-primary); font-weight: 600; }

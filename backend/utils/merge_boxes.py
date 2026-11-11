@@ -438,7 +438,15 @@ def _group_stats(b_group):
     # groups where a single wide line would skew the center.
     median_cx = median(box_stats(l["box"])["cx"] for l in b_group)
     agg["median_cx"] = median_cx
+    agg["line_h"] = median(box_stats(l["box"])["h"] for l in b_group)
     return agg
+
+
+# A line never joins a group more than this many LINE heights below it (2026-11-10). The other limit is relative to
+# the whole GROUP height (y_dist_mult), so a tall bubble reached further and further down its column: in Black Jack
+# Chapter_1/page_023 a 6-line bubble swallowed the next bubble 4.2 line heights below it. Lines of one bubble are
+# 0-1 line heights apart (one line missed by the OCR); None = no such limit (the behaviour before).
+MAX_GAP_LINES = 3.0
 
 
 def _score_candidate(l_stats, b_stats, y_dist_mult, x_overlap_thresh):
@@ -463,6 +471,9 @@ def _score_candidate(l_stats, b_stats, y_dist_mult, x_overlap_thresh):
     abs_gap_limit = 120.0
     max_gap = min(abs_gap_limit, b_stats["h"] * y_dist_mult)
     if vertical_gap >= max_gap:
+        return None
+    # separate limit in line heights (MAX_GAP_LINES); max_gap itself stays as it was - it also scales the score
+    if MAX_GAP_LINES is not None and vertical_gap >= MAX_GAP_LINES * max(b_stats.get("line_h", 0.0), l_stats["h"]):
         return None
 
     overlap_x = max(0.0, min(l_stats["x2"], b_stats["x2"]) - max(l_stats["x1"], b_stats["x1"]))

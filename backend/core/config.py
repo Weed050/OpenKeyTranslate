@@ -24,7 +24,7 @@ _DOCS_BUILD = bool(os.environ.get("OKT_DOCS_BUILD"))
 
 # Bump manually on release. Stamped into every log file header (see
 # core/app_logging.py) so a bug report's log always says which version produced it.
-APP_VERSION = "0.4.1"
+APP_VERSION = "0.5.0"
 
 
 def get_default_app_root():

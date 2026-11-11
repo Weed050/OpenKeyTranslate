@@ -25,6 +25,8 @@ from dataclasses import dataclass
 import cv2
 import numpy as np
 
+from utils.log_once import print_once
+
 
 @dataclass
 class Interior:
@@ -191,6 +193,6 @@ def detect_bubble_interior(image_bgr, seed_point, ocr_bbox, dark_thresh=180, bor
     why: list = []
     it = find_interior(image_bgr, seed_point, ocr_bbox, dark_thresh, border_dilate, max_growth, why=why)
     if it is None:
-        print(f"[BUBBLE GUARD] {why[0] if why else 'rejected'} - falling back to the OCR bounding box.")
+        print_once(f"[BUBBLE GUARD] {why[0] if why else 'rejected'} - falling back to the OCR bounding box.")
         return None, None
     return it.hull, it.bbox

@@ -7,7 +7,7 @@
  
 import { api, API_BASE } from "./api.js";
 import { renderSidebar } from "./nav.js";
-import { askOk, notify } from "./dialogs.js";
+import { askOk, notify, choose } from "./dialogs.js";
 import { ACTIONS, SCOPES, currentBindings, loadOverrides, saveOverrides, validateBinding, comboFromEvent,
          formatCombo, normalizeCombo } from "./shortcuts.js";
  
@@ -24,8 +24,25 @@ window.addEventListener("DOMContentLoaded", () => {
 
 /* ------------------------------ autosave + unsaved-changes guard ------------------------------ */
 
+/*
+ * Every backend section saves itself when a field is left (runSave). A save that does not go through keeps its section
+ * in failedSections with the reason: "offline" = no answer from the backend (retried by itself every few seconds and
+ * when the window gets focus) or "invalid" = a value the user has to fix. Such sections are listed in a bar at the
+ * bottom of the page (a click on a name scrolls there) and marked in the section list on the right - before, the only
+ * trace was the status line of a card you had already scrolled away from.
+ * Leaving through a link of the app: unsaved sections are saved first; when that fails, the app's own dialog asks
+ * (Show me / Leave without saving). F5, closing the tab or typing an address can only get the browser's own question
+ * (a page is not allowed to replace it); when the answer there is "stay", the page scrolls to the first unsaved section.
+ * Until the settings are LOADED nothing is saved: the fields still hold the page's placeholders, and a save would write
+ * them (and an empty key list) over the real settings. The cards are locked and the page reloads once the backend answers.
+ */
 const dirtySections = new Set();
+const failedSections = new Map();       // section -> "offline" | "invalid"
 const saveTimers = {};
+const savesInFlight = {};
+let settingsLoaded = false;
+let retryTimer = null;
+let leavingOnPurpose = false;
 const SECTION_STATUS = {
     translation: "translationStatus", memory: "memorySettingsStatus", ocr: "ocrOptionsStatus", engine: "ocrEngineStatus",
     typesetting: "typesettingStatus", ignore: "ignorePatternsStatus",
@@ -52,16 +69,85 @@ function sectionStatus(section, text) {
 function markDirty(section) {
     if (!dirtySections.has(section)) sectionStatus(section, "Unsaved changes - saved when you leave the field.");
     dirtySections.add(section);
+    updateUnsavedUi();
 }
 
 function markClean(section, message) {
     dirtySections.delete(section);
+    failedSections.delete(section);
     if (message !== undefined) sectionStatus(section, message);
+    updateUnsavedUi();
+}
+
+/** catch-block of a save: no answer at all (fetch threw a TypeError) = backend offline, retried; else the server's reason */
+function saveFailed(section, e) {
+    const offline = e instanceof TypeError;
+    sectionStatus(section, offline
+        ? "Not saved: no answer from the backend (is it running?) - saved by itself as soon as it answers."
+        : `Not saved: ${e.message}`);
+    failedSections.set(section, offline ? "offline" : "invalid");
+    if (offline) startRetrying();
+    updateUnsavedUi();
+    return false;
+}
+
+/**
+ * Save one section (autosave, its Save button, the retry, leaving the page). One save per section at a time: a request
+ * made while one is running runs once more after it, with the fields as they are then.
+ */
+function runSave(section, opts = {}) {
+    if (!settingsLoaded) return Promise.resolve(false);
+    const running = savesInFlight[section];
+    if (running) {
+        running.again = true;
+        return running.done;
+    }
+    const me = { again: false };
+    savesInFlight[section] = me;
+    me.done = (async () => {
+        let ok = false;
+        try {
+            do {
+                me.again = false;
+                failedSections.delete(section);
+                ok = await SAVERS[section](opts);
+                if (!ok && !failedSections.has(section)) failedSections.set(section, "invalid");   // a value check said no
+            } while (me.again);
+        } finally {
+            delete savesInFlight[section];
+            updateUnsavedUi();
+        }
+        return ok;
+    })();
+    return me.done;
 }
 
 function scheduleSave(section) {
     clearTimeout(saveTimers[section]);
-    saveTimers[section] = setTimeout(() => SAVERS[section]({ auto: true }), 200);
+    saveTimers[section] = setTimeout(() => runSave(section, { auto: true }), 200);
+}
+
+/** every section with input that is not stored yet, saved now; true when nothing is left unsaved */
+async function saveAllPending() {
+    const sections = [...new Set([...dirtySections, ...failedSections.keys()])];
+    sections.forEach((s) => clearTimeout(saveTimers[s]));
+    const results = await Promise.all(sections.map((s) => runSave(s, { auto: true })));
+    return results.every(Boolean) && !dirtySections.size;
+}
+
+function startRetrying() {
+    if (retryTimer) return;
+    retryTimer = setInterval(retryOffline, 5000);
+}
+
+async function retryOffline() {
+    const waiting = [...failedSections].filter(([, why]) => why === "offline").map(([s]) => s);
+    if (!waiting.length) {
+        clearInterval(retryTimer);
+        retryTimer = null;
+        return;
+    }
+    await Promise.all(waiting.map((s) => runSave(s, { auto: true })));
 }
 
 function wireField(section, el) {
@@ -70,15 +156,145 @@ function wireField(section, el) {
     el.addEventListener("change", () => { markDirty(section); scheduleSave(section); });   // blur / tick / select
 }
 
+/** the card of a section (the one holding its status line) and that card's name in the section list */
+function sectionCard(section) {
+    return document.getElementById(SECTION_STATUS[section])?.closest(".card") || null;
+}
+
+function sectionName(section) {
+    const card = sectionCard(section);
+    const link = card && document.querySelector(`#settingsToc a[href="#${card.id}"]`);
+    return link?.textContent || card?.querySelector("h2")?.textContent.trim() || section;
+}
+
+function unsavedInPageOrder() {
+    const all = [...new Set([...failedSections.keys(), ...dirtySections])];
+    const pos = (s) => [...document.querySelectorAll(".settings-cards > .card")].indexOf(sectionCard(s));
+    return all.sort((a, b) => pos(a) - pos(b));
+}
+
+/** scroll to a section that is not saved (default: the first one) and make its card blink once */
+function showUnsaved(section = unsavedInPageOrder()[0]) {
+    const card = section && sectionCard(section);
+    if (!card) return;
+    card.scrollIntoView({ behavior: "smooth", block: "start" });
+    card.classList.remove("unsaved-flash");
+    void card.offsetWidth;                                   // restart the animation
+    card.classList.add("unsaved-flash");
+}
+
+const WHY_TEXT = {
+    offline: "no answer from the backend - retrying",
+    invalid: "a value needs fixing - see the card",
+};
+
+/** the bar at the bottom of the page + the markers in the section list */
+function updateUnsavedUi() {
+    document.querySelectorAll("#settingsToc a").forEach((a) => a.classList.remove("toc-dirty", "toc-failed"));
+    for (const s of dirtySections) {
+        const card = sectionCard(s);
+        if (card) document.querySelector(`#settingsToc a[href="#${card.id}"]`)?.classList.add("toc-dirty");
+    }
+    for (const s of failedSections.keys()) {
+        const card = sectionCard(s);
+        if (card) document.querySelector(`#settingsToc a[href="#${card.id}"]`)?.classList.add("toc-failed");
+    }
+
+    let bar = document.getElementById("unsavedBar");
+    if (!failedSections.size) {
+        bar?.remove();
+        return;
+    }
+    if (!bar) {
+        bar = document.createElement("div");
+        bar.id = "unsavedBar";
+        bar.className = "unsaved-bar";
+        bar.setAttribute("role", "status");
+        bar.addEventListener("click", async (e) => {
+            const go = e.target.closest("[data-section]");
+            if (go) showUnsaved(go.dataset.section);
+            else if (e.target.closest("[data-save-now]")) await saveAllPending();
+        });
+        document.querySelector(".main-content")?.appendChild(bar);
+    }
+    const items = unsavedInPageOrder().filter((s) => failedSections.has(s)).map((s) =>
+        `<button type="button" class="link-btn" data-section="${s}" title="Go to this section">${sectionName(s)}</button>`
+        + ` <span class="text-muted">(${WHY_TEXT[failedSections.get(s)]})</span>`);
+    bar.innerHTML = `<strong>Not saved:</strong> <span class="unsaved-list">${items.join(" &middot; ")}</span>
+        <button type="button" data-save-now title="Try to save every section listed here now">Save now</button>`;
+}
+
 function wireAutosave() {
     for (const [section, ids] of Object.entries(SECTION_FIELDS)) {
         ids.forEach((id) => wireField(section, document.getElementById(id)));
     }
+    window.addEventListener("focus", () => { if (retryTimer) retryOffline(); });
+
+    // a link of the app (sidebar, logo, project): save first; only when that fails ask - in the app's own dialog
+    document.addEventListener("click", async (e) => {
+        if (!dirtySections.size && !failedSections.size) return;
+        const a = e.target.closest("a[href]");
+        if (!a || e.defaultPrevented || e.button !== 0 || e.ctrlKey || e.metaKey || e.shiftKey || a.target === "_blank") return;
+        const url = new URL(a.href, location.href);
+        if (url.origin === location.origin && url.pathname === location.pathname && url.search === location.search) return;
+        e.preventDefault();
+        if (await saveAllPending()) {
+            leavingOnPurpose = true;
+            location.href = url.href;
+            return;
+        }
+        const rows = unsavedInPageOrder().map((s) =>
+            `<li><b>${sectionName(s)}</b> - ${failedSections.get(s) === "offline" ? "no answer from the backend (is it running?)" : "a value needs fixing"}</li>`);
+        const { choice } = await choose({
+            title: "Some settings are not saved",
+            html: `<ul>${rows.join("")}</ul><p>Leaving now loses these changes.</p>`,
+            buttons: [{ id: "leave", label: "Leave without saving", danger: true, left: true },
+                      { id: "show", label: "Show me", primary: true }],
+        });
+        if (choice === "leave") {
+            leavingOnPurpose = true;
+            location.href = url.href;
+        } else {
+            showUnsaved();
+        }
+    }, true);
+
+    // F5 / closing the tab / another address: only the browser's own question is possible. If the answer is "stay",
+    // the page lives on and the timer runs - then show where the unsaved input is.
     window.addEventListener("beforeunload", (event) => {
-        if (!dirtySections.size) return;
+        if (leavingOnPurpose || (!dirtySections.size && !failedSections.size)) return;
         event.preventDefault();
-        event.returnValue = "";          // the browser shows its own "leave page?" dialog
+        event.returnValue = "";
+        setTimeout(() => showUnsaved(), 400);
     });
+}
+
+/**
+ * The settings could not be loaded (backend not running): lock the cards that are saved to the backend - their fields
+ * hold placeholders, not your settings - and reload the page as soon as the backend answers. Appearance and keyboard
+ * shortcuts live in the browser and stay usable.
+ */
+function settingsNotLoaded(message) {
+    Object.keys(SECTION_STATUS).forEach((s) => {
+        const card = sectionCard(s);
+        if (card) { card.inert = true; card.classList.add("not-loaded"); }
+    });
+    if (!document.getElementById("settingsOffline")) {
+        const note = document.createElement("div");
+        note.id = "settingsOffline";
+        note.className = "settings-offline";
+        note.innerHTML = `<strong>Settings could not be loaded</strong> - ${message}. Is the backend running? The cards
+            that are saved there are locked until it answers (nothing typed into them could be saved); this page reloads
+            by itself then. Appearance and keyboard shortcuts work without it.`;
+        document.querySelector(".settings-cards .page-header")?.after(note);
+    }
+    const poll = setInterval(async () => {
+        try {
+            await api.settings.get();
+            clearInterval(poll);
+            location.reload();
+        } catch { /* still no answer */ }
+    }, 4000);
 }
 
 function savedNow() {
@@ -400,9 +616,12 @@ async function loadSettings() {
         loadOcrRuntime();
         document.getElementById("inpaintModeSelect").value = appSettings.inpaint_mode || "glyph";
         document.getElementById("bubbleOrderSelect").value = appSettings.bubble_order || "ttb";
+        settingsLoaded = true;
         Object.keys(SECTION_STATUS).forEach((section) => markClean(section));
     } catch (e) {
         document.getElementById("currentWorkspacePath").textContent = `Error: ${e.message}`;
+        settingsLoaded = false;
+        settingsNotLoaded(e instanceof TypeError ? "no answer from the backend" : e.message);
     }
 }
  
@@ -648,7 +867,7 @@ function flashStatus(message) {
     document.getElementById("settingsStatus").textContent = message;
 }
  
-document.getElementById("saveMemorySettingsBtn").addEventListener("click", () => saveMemorySettings());
+document.getElementById("saveMemorySettingsBtn").addEventListener("click", () => runSave("memory"));
 
 async function saveMemorySettings() {
     const status = { set textContent(t) { sectionStatus("memory", t); } };
@@ -681,12 +900,11 @@ async function saveMemorySettings() {
         markClean("memory", `${savedNow()} - ${result.message}`);
         return true;
     } catch (e) {
-        status.textContent = `Not saved: ${e.message}`;
-        return false;
+        return saveFailed("memory", e);
     }
 }
 
-document.getElementById("saveIgnorePatternsBtn").addEventListener("click", () => saveIgnorePatterns());
+document.getElementById("saveIgnorePatternsBtn").addEventListener("click", () => runSave("ignore"));
 
 async function saveIgnorePatterns() {
     const patterns = document.getElementById("ignorePatternsInput").value
@@ -696,8 +914,7 @@ async function saveIgnorePatterns() {
         markClean("ignore", `${savedNow()} - ${result.message}`);
         return true;
     } catch (e) {
-        sectionStatus("ignore", `Not saved: ${e.message}`);
-        return false;
+        return saveFailed("ignore", e);
     }
 }
  
@@ -838,6 +1055,7 @@ function fillTranslationForm() {
     document.getElementById("translationMaxTokensInput").value = appSettings.translation_max_tokens ?? 4096;
     document.getElementById("geminiThinkingInput").value = appSettings.gemini_thinking_budget ?? 0;
     renderKeyRows();
+    loadKeyUsage();
 }
 
 function fillDatalist(id, values) {
@@ -990,6 +1208,12 @@ function keyRowElement(row, i) {
         wrap.appendChild(warn);
     }
 
+    const usage = document.createElement("div");
+    usage.className = "key-usage hidden";
+    wrap.appendChild(usage);
+    row._usage = usage;
+    showKeyUsage(row);
+
     const result = document.createElement("div");
     result.className = "key-result hidden";
     result.setAttribute("role", "status");
@@ -1020,7 +1244,7 @@ document.getElementById("addKeyBtn")?.addEventListener("click", () => {
     keyRows[keyRows.length - 1]._keyInput?.focus();
 });
 
-document.getElementById("saveTranslationBtn")?.addEventListener("click", () => saveTranslation());
+document.getElementById("saveTranslationBtn")?.addEventListener("click", () => runSave("translation"));
 
 async function saveTranslation() {
     const status = (t) => sectionStatus("translation", t);
@@ -1074,16 +1298,15 @@ async function saveTranslation() {
         renderSidebar(null);       // health banner: a "no API key" warning disappears right away
         return true;
     } catch (e) {
-        status(`Not saved: ${e.message}`);
-        return false;
+        return saveFailed("translation", e);
     }
 }
 
 /** Save first when the section has unsaved input: tests and model lists use the STORED key. */
 async function savedForServer() {
-    if (!dirtySections.has("translation")) return true;
+    if (!dirtySections.has("translation") && !failedSections.has("translation")) return true;
     clearTimeout(saveTimers.translation);
-    return saveTranslation();
+    return runSave("translation");
 }
 
 const RESULT_KIND = {
@@ -1132,6 +1355,55 @@ async function testOneKey(row) {
         row._lastResult = { ok: false, kind: "error", message: e.message };
     }
     showKeyResult(row._result, row._lastResult);
+    loadKeyUsage();                     // the test was a request too
+}
+
+/*
+ * Usage line under a key: requests this app made with it today, the day's limit when a server named it (Groq with
+ * every answer, Gemini in its "quota used up" answer) or the count reached when the quota ran out (estimate), and a
+ * bar of what is used. Requests made with the same key elsewhere are not seen - backend services/providers/key_usage.py.
+ */
+let keyUsage = {};
+
+async function loadKeyUsage() {
+    try {
+        keyUsage = (await api.settings.keyUsage()).keys || {};
+    } catch {
+        keyUsage = {};
+    }
+    keyRows.forEach(showKeyUsage);
+}
+
+function showKeyUsage(row) {
+    const box = row._usage;
+    if (!box) return;
+    const u = keyUsage[keyId(row)];
+    if (!u || (!u.today && !u.limit_day && !u.last_limit)) {
+        box.classList.add("hidden");
+        return;
+    }
+    const resetNote = row.provider === "gemini" ? "Google's day ends at midnight Pacific time (09:00 in Poland, 08:00 in summer)" : "the day is counted in UTC";
+    const parts = [`<b>${u.today}</b> request${u.today === 1 ? "" : "s"} today`];
+    let share = null;
+    if (u.exhausted_today) {
+        parts.push(`<span class="key-usage-out">daily quota used up</span>`);
+        share = 1;
+    } else if (u.limit_day) {
+        const left = u.left ?? Math.max(0, u.limit_day - u.today);
+        parts.push(`limit ${u.limit_day}/day ${u.limit_source === "server" ? "(said by the server)" : "(estimate: where it ran out last time)"}`);
+        parts.push(`<b>~${left}</b> left`);
+        share = Math.min(1, Math.max(0, 1 - left / u.limit_day));
+    } else {
+        parts.push(`<span class="text-muted">limit not known yet - it is learned when the server says the quota is used up</span>`);
+    }
+    if (u.limit_minute) parts.push(`${u.last_minute}/${u.limit_minute} in the last minute`);
+    const last = u.last_limit && u.last_limit.at
+        ? `\nLast limit reached: ${new Date(u.last_limit.at * 1000).toLocaleString()} (${u.last_limit.daily ? "per day" : "per minute"}${u.last_limit.metric ? `, ${u.last_limit.metric}` : ""})` : "";
+    const week = Object.entries(u.week || {}).map(([d, n]) => `${d}: ${n}`).join("\n");
+    box.title = `Model ${u.model || "?"} - counted by this app only (requests made with this key elsewhere are not seen); ${resetNote}.${last}${week ? `\n\nRequests per day:\n${week}` : ""}`;
+    box.innerHTML = `<span class="key-usage-text">${parts.join(" &middot; ")}</span>`
+        + (share === null ? "" : `<span class="key-usage-bar"><i style="width:${Math.round(share * 100)}%" class="${share >= 0.9 ? "high" : ""}"></i></span>`);
+    box.classList.remove("hidden");
 }
 
 async function fetchKeyModels(row) {
@@ -1183,7 +1455,7 @@ document.getElementById("testTranslationBtn")?.addEventListener("click", async (
     }
 });
 
-document.getElementById("saveOcrOptionsBtn")?.addEventListener("click", () => saveOcrOptions());
+document.getElementById("saveOcrOptionsBtn")?.addEventListener("click", () => runSave("ocr"));
 
 async function saveOcrOptions() {
     try {
@@ -1201,8 +1473,7 @@ async function saveOcrOptions() {
         markClean("ocr", `${savedNow()} - ${result.message}`);
         return true;
     } catch (e) {
-        sectionStatus("ocr", `Not saved: ${e.message}`);
-        return false;
+        return saveFailed("ocr", e);
     }
 }
 
@@ -1315,7 +1586,7 @@ document.getElementById("importAllBtn")?.addEventListener("click", async () => {
 });
 
 
-document.getElementById("saveTypesettingBtn")?.addEventListener("click", () => saveTypesetting());
+document.getElementById("saveTypesettingBtn")?.addEventListener("click", () => runSave("typesetting"));
 
 /* ------------------------------ fonts (Settings > Text & fonts) ------------------------------ */
 
@@ -1436,14 +1707,13 @@ async function saveTypesetting() {
         markClean("typesetting", `${savedNow()} - the next preview / export uses it.`);
         return true;
     } catch (e) {
-        sectionStatus("typesetting", `Not saved: ${e.message}`);
-        return false;
+        return saveFailed("typesetting", e);
     }
 }
 
 /* ----------------------- OCR engine (core/ocr_runtime.py) ----------------------- */
 
-document.getElementById("saveOcrEngineBtn")?.addEventListener("click", () => saveOcrEngine());
+document.getElementById("saveOcrEngineBtn")?.addEventListener("click", () => runSave("engine"));
 
 async function saveOcrEngine() {
     try {
@@ -1456,8 +1726,7 @@ async function saveOcrEngine() {
         markClean("engine", `${savedNow()} - ${result.message}`);
         return true;
     } catch (e) {
-        sectionStatus("engine", `Not saved: ${e.message}`);
-        return false;
+        return saveFailed("engine", e);
     }
 }
 
@@ -1626,7 +1895,8 @@ document.getElementById("embedderTestBtn")?.addEventListener("click", testEmbedd
 loadEmbedderState();
 if (location.hash === "#memory") testEmbedder();
 
-// section -> save function (autosave calls them with {auto: true}; the Save buttons without arguments)
+// section -> save function; always called through runSave (autosave, Save buttons, retry, leaving the page).
+// A save function returns true when stored; on a failed request it returns saveFailed(section, e).
 const SAVERS = {
     translation: saveTranslation, memory: saveMemorySettings, ocr: saveOcrOptions, engine: saveOcrEngine,
     typesetting: saveTypesetting, ignore: saveIgnorePatterns,

@@ -10,7 +10,7 @@
 
 import { api } from "./api.js";
 import { renderSidebar } from "./nav.js";
-import { countGroups, doneScore, stageBarHtml, stageLegendHtml } from "./stages.js";
+import { countGroups, doneScore, exportedDraftNote, stageBarHtml, stageLegendHtml } from "./stages.js";
 import { askOk, notify } from "./dialogs.js";
 
 const SORT_KEY = "okt-project-sort";          // {"field", "dir"} (older versions: a bare mode string)
@@ -157,7 +157,7 @@ function fillProgress(card, progress) {
     card.querySelector(".progress-bar").innerHTML = stageBarHtml(counts);
     const when = progress.last_activity
         ? new Date(progress.last_activity * 1000).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" }) : "";
-    legend.innerHTML = stageLegendHtml(counts, esc)
+    legend.innerHTML = stageLegendHtml(counts, esc) + exportedDraftNote(progress.stages, esc)
         + `<span class="legend-total" title="Last change on any page">${when ? `last change ${esc(when)} &middot; ` : ""}${progress.total} pages</span>`;
     if (!progress.processed) {
         const exp = card.querySelector(".export-link");
