@@ -9,7 +9,10 @@
 #   - a folder, not one file: a one-file exe unpacks ~2 GB to %TEMP% on every start (slow) and is what antivirus
 #     heuristics flag most often;
 #   - no UPX compression (same reason);
-#   - console window: the log is visible and closing the window stops the app (launcher.py);
+#   - a console program, although the app opens in its own window (launcher.py + app_window.py: pywebview / WebView2;
+#     its files come with the pyinstaller-hooks-contrib hooks of webview, clr and clr_loader): started with a
+#     double-click the launcher hides the console, while --smoke-test / --ocr-selftest keep printing into the terminal
+#     or the build log, and programs the app starts inherit the hidden console instead of flashing their own;
 #   - no models inside: PaddleOCR, the memory model (MiniLM) and the optional LaMa are downloaded on first use into the
 #     user's folders, as from the source;
 #   - the metadata of every installed package is copied: PaddleX checks its dependencies with importlib.metadata and

@@ -1520,8 +1520,8 @@ async function setAutoErase(on) {
  * Google Translate in the browser with the bubble's source text filled in - a second opinion the user asked for.
  * Only a link: no key, nothing comes back into the app (embedding the site is blocked by Google, the free web
  * endpoint is not an API). Languages = Settings source_lang / target_lang.
- * Packaging note: in a browser this is a new tab. If the app ever gets its own window (pywebview / Electron), this
- * link and every target="_blank" / window.open must be sent to the system browser instead.
+ * In a browser this is a new tab; in the app's own window (backend/app_window.py) every link to another site -
+ * this one, target="_blank", window.open - is sent to the system browser.
  */
 function openGoogleTranslate(text) {
     const { source, target } = state.langs || { source: "en", target: "pl" };

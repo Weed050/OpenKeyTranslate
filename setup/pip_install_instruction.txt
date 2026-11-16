@@ -44,7 +44,7 @@ Only ONE OpenCV package may be installed. If both are there (older requirement f
 Start
 -----
 
-    python launcher.py             # server + the browser at http://127.0.0.1:8000/app/
+    python launcher.py             # server + the app in its own window (--browser: the browser at http://127.0.0.1:8000/app/)
     or: python main.py             # server only; pages at http://127.0.0.1:8000/app/
     (a separate local web server such as VS Code Live Server on port 5500 still works too)
 
