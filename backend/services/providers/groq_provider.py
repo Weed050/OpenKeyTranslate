@@ -99,6 +99,8 @@ def call(entry: dict, system_prompt: str, user_message: str, schema: type[BaseMo
                              _header_int(raw_response.headers, "x-ratelimit-remaining-requests"))
     except Exception:                                           # noqa: BLE001 - display data only
         pass
+    from .base import note_served_model
+    note_served_model(getattr(response, "model", None))
     raw = response.choices[0].message.content.strip()
     return schema.model_validate(normalise_batch(json.loads(raw), schema))
 

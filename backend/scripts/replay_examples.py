@@ -3,7 +3,7 @@
 
 """
 Offline replay for the thesis experiment, part A: which examples from the user's corrections help the model?
-cm
+
 Why a separate script: the app's live A/B only fires when memory has a hit (1.8% of bubbles in the logs), so it can
 not answer "would examples given MORE often still help?". This script translates already REVIEWED pages again in
 several variants that differ ONLY in the examples sent with each bubble, and compares every output with the user's
@@ -34,7 +34,8 @@ Usage (from backend/, with the app's venv):
   python scripts/replay_examples.py run --project "Nihonkoku Shoukan" --limit 5 --variants A0,A0b,A1,A2   # pilot
   python scripts/replay_examples.py run --project "Nihonkoku Shoukan"                       # all reviewed pages
   python scripts/replay_examples.py score --project "Nihonkoku Shoukan"                     # needs sacrebleu
-A run can be stopped and started again: finished (page, variant) requests are skipped. Rate limits wait and retry.
+A run can be stopped and started again: finished (page, variant) requests are skipped. Rate limits wait and retry;
+a spent daily quota or spent prepaid credits (402 Payment Required) stop the run.
 """
 
 import argparse
@@ -366,7 +367,22 @@ def _rate_limit_wait(pool, error: str) -> int | None:
     return None if wait > MAX_WAIT else max(3, wait)
 
 
+def _out_of_credits(error: str) -> bool:
+    """
+    402 Payment Required = the prepaid balance behind the key(s) is spent (Gemini Prepay, OpenRouter). Every further
+    request would fail the same way - with Gemini EVERY key of that billing account at once - so the run stops instead
+    of writing a failed row for each remaining page. The pool's text carries base.NO_CREDITS; the raw "Payment Required"
+    is a fallback for a provider that does not classify 402.
+    """
+    from services.providers.base import NO_CREDITS
+    low = error.lower()
+    return NO_CREDITS.lower() in low or "payment required" in low
+
+
 def _send_all(todo, pool, model, args, req_path, bub_path):
+    # imported late like in cmd_run (needs the backend on sys.path); cmd_run's local imports are not visible here
+    from services.page_export import bubble_reviewed
+    from services.translation_service import match_case
     sent = 0
     for p, plan, v in todo:
         payload = payload_for(plan, v)
@@ -385,6 +401,9 @@ def _send_all(todo, pool, model, args, req_path, bub_path):
                 break
             except Exception as e:                      # keys are scrubbed from these messages by the pool
                 error = f"{type(e).__name__}: {e}"
+                if _out_of_credits(error):              # waiting does not bring credits back
+                    result = None
+                    break
                 limited = any(s in error.lower() for s in ("rate", "cooling", "quota", "429", "no translation key"))
                 wait = _rate_limit_wait(pool, error) if limited else None
                 if limited and wait is not None and attempt < MAX_RETRIES:
@@ -399,6 +418,12 @@ def _send_all(todo, pool, model, args, req_path, bub_path):
             _append(req_path, {"page_id": p["id"], "variant": v, "at": now, "ok": False, "error": error[:500],
                                "model": model, "temperature": args.temperature})
             print(f"  FAILED ch {p['chapter']} {p['file_name']} {v}: {error[:200]}")
+            if _out_of_credits(error):
+                print(f"[REPLAY] stopping after {sent} request(s) - no credits left (402 Payment Required): the prepaid "
+                      f"balance behind the key(s) is used up, every further request would fail. Add credits (AI Studio "
+                      f"> Billing / the provider's credits page) and run the same command - finished requests are kept, "
+                      f"it continues where it stopped.")
+                return
             if "limit" in error.lower() or "quota" in error.lower():
                 daily = "daily quota" in error or (pool._seconds_until_any_key() or 0) > MAX_WAIT
                 print(f"[REPLAY] stopping after {sent} request(s) - "
@@ -407,6 +432,17 @@ def _send_all(todo, pool, model, args, req_path, bub_path):
                       + " Finished requests are kept, it continues where it stopped.")
                 return
             continue
+        served = pool.current_served_model
+        from services.providers.base import same_model
+        if not same_model(model, served):
+            # the server answered with ANOTHER model (Google re-routes shut-down ids, gemini-2.5-flash after
+            # 01.12.2026): these outputs would mix models inside the variants - not kept, the run stops
+            _append(req_path, {"page_id": p["id"], "variant": v, "at": now, "ok": False, "model": model,
+                               "served_model": served, "error": f"served by {served}, not {model} - outputs not kept",
+                               "temperature": args.temperature})
+            print(f"[REPLAY] stopping after {sent} request(s) - asked for {model} but {served} answered (the provider "
+                  f"re-routes this model id). The answer was NOT kept; the variants must stay on one model.")
+            return
         for e in plan["bubbles"]:
             b = e["bubble"]
             raw = result.get(b["bubble_id"], "")
@@ -421,7 +457,7 @@ def _send_all(todo, pool, model, args, req_path, bub_path):
                 "glossary": len(e["glossary"]),
             })
         _append(req_path, {"page_id": p["id"], "variant": v, "at": now, "ok": True, "model": pool.current_model,
-                           "key_label": pool.current_key_label, "temperature": args.temperature, "seconds": seconds,
+                           "served_model": served, "key_label": pool.current_key_label, "temperature": args.temperature, "seconds": seconds,
                            "items": len(payload), "payload_chars": len(json.dumps(payload, ensure_ascii=False)),
                            "examples": sum(len(i.get("examples", [])) for i in payload),
                            "missing": sum(1 for i in payload if not result.get(i["id"]))})

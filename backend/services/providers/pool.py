@@ -12,6 +12,7 @@ along the list when a key is rate-limited, rejected or its server is unreachable
 - RateLimited  -> the key cools down for the wait the server asked (Gemini: retryDelay), else 65 s; a spent DAILY
                   quota (Gemini quotaId ...PerDay...) 1 hour - next key.
 - KeyRejected  -> the key is parked 10 min (wrong key / unknown model does not heal by retrying), next key.
+                  OutOfCredits (402, prepaid balance spent) is a KeyRejected - the same, with its own message.
 - Transient    -> the same key is retried twice with a short backoff, then the next key.
 - Unreachable  -> retried twice; then keys on the SAME host are skipped (no internet = every Groq key fails),
                   keys on other hosts (a local Ollama, another service) are still tried.
@@ -30,8 +31,10 @@ import time
 
 from pydantic import BaseModel
 
+from services import run_progress
 from . import key_usage
-from .base import TranslationProvider, RateLimited, KeyRejected, Unreachable, Transient
+from .base import (TranslationProvider, RateLimited, KeyRejected, OutOfCredits, NO_CREDITS, Unreachable, Transient,
+                   take_served_model, same_model)
 
 RETRIES = 2
 BACKOFF_SECONDS = 2
@@ -61,8 +64,8 @@ def rate_limit_cooldown(e: RateLimited) -> float:
     return min(max(retry + 1.0, 5.0), 120.0) if retry else RATE_LIMIT_COOLDOWN
 
 
-_KIND = {RateLimited: "limit / quota reached", KeyRejected: "rejected", Unreachable: "server unreachable",
-         Transient: "server error"}
+_KIND = {RateLimited: "limit / quota reached", KeyRejected: "rejected", OutOfCredits: NO_CREDITS.lower() + " (402)",
+         Unreachable: "server unreachable", Transient: "server error"}
 
 
 def summarize(failures: list[tuple[str, Exception]]) -> str:
@@ -85,6 +88,9 @@ def summarize(failures: list[tuple[str, Exception]]) -> str:
                 f"Settings > Translation & API keys.")
     if kinds == {Unreachable}:
         return f"No translation server could be reached ({labels}) - check the internet connection (or the local server)."
+    if kinds == {OutOfCredits}:
+        return (f"{NO_CREDITS} on any translation key ({labels}): 402 Payment Required - the prepaid balance is used up. "
+                f"Add credits on the provider's billing page, or switch on another key in Settings > Translation & API keys.")
     parts = []
     for label, e in failures:
         kind = _KIND.get(type(e), "failed")
@@ -137,6 +143,11 @@ class KeyPool(TranslationProvider):
                 continue
             client = self._clients[entry["provider"]]
             for attempt in range(RETRIES + 1):
+                take_served_model()                    # clear what an earlier call in this thread left
+                # the editor's progress panel while a page runs (services/run_progress.py; no-op otherwise)
+                run_progress.note(f"waiting for the answer - key \"{entry.get('label') or entry['provider']}\", "
+                                  f"{entry.get('model') or entry['provider']}"
+                                  + (f" (after {', '.join(label for label, _ in errors)} could not)" if errors else ""))
                 try:
                     result = client.call(entry, system_prompt, user_message, schema, self._temperature, self._max_tokens)
                 except RateLimited as e:
@@ -155,6 +166,8 @@ class KeyPool(TranslationProvider):
                     if attempt < RETRIES:
                         wait = BACKOFF_SECONDS * (attempt + 1)
                         print(f"[KEYS] '{entry['id']}' {type(e).__name__} - retry {attempt + 1}/{RETRIES} in {wait}s")
+                        run_progress.note(f"no answer from key \"{entry.get('label') or entry['provider']}\" - "
+                                          f"trying again in {wait} s")
                         time.sleep(wait)
                         continue
                     if isinstance(e, Unreachable) and host:
@@ -166,6 +179,11 @@ class KeyPool(TranslationProvider):
                 self.current_key_label = entry["label"]
                 self.current_model = entry["model"]
                 self.current_key_id = entry["id"]
+                self.current_served_model = take_served_model()
+                if not same_model(entry["model"], self.current_served_model):
+                    from utils.log_once import print_once
+                    print_once(f"[KEYS] '{entry['id']}' asked for {entry['model']} but {self.current_served_model} "
+                               f"answered (the provider routes this id to another model)")
                 return result
 
         raise RuntimeError(summarize(errors))

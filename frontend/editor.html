@@ -118,22 +118,33 @@
                 </div>
             </div>
  
-            <div class="image-state" id="processPrompt" style="margin:auto; max-width:420px;">
-                <div id="processPromptInfo"></div>
-                <p id="processPromptMsg">This page hasn't been processed yet.</p>
-                <button id="processBtn" class="primary">Run OCR + translation</button>
-                <p class="text-muted" id="processStatus"></p>
-                <p class="text-muted text-mono hidden" id="processPromptError" style="white-space:pre-wrap; text-align:left;"></p>
-                <div style="display:flex; gap:8px; justify-content:center; margin-top:8px;">
-                    <button id="showRawBtn" title="Reveal the raw image file in the file explorer">Show file</button>
-                    <button id="excludePromptBtn" class="danger" title="Remove this page from the list (file stays on disk, 'Show excluded' restores it)">Exclude page</button>
+            <!-- a page without an OCR result yet: a card with the page itself, the one main button and, while it runs,
+                 what the backend is doing (js/editor-progress.js) -->
+            <div class="process-card" id="processPrompt">
+                <div class="process-thumb" id="processThumbBox" title="The page as imported (top part)">
+                    <img id="processThumb" alt="">
+                </div>
+                <div class="process-main">
+                    <div id="processPromptInfo"></div>
+                    <p id="processPromptMsg" class="process-msg">This page hasn't been processed yet.</p>
+                    <button id="processBtn" class="primary process-run">Run OCR + translation</button>
+                    <p class="text-muted process-hint" id="processHint">Reads the text, translates it with your key and erases the
+                        original letters. On a processor about 10-60 s for a manga page and a few minutes for a long webtoon
+                        strip; on a graphics card a few seconds.</p>
+                    <div class="run-progress hidden" id="processProgress" aria-live="polite"></div>
+                    <p class="text-muted" id="processStatus"></p>
+                    <p class="text-muted text-mono hidden process-error" id="processPromptError"></p>
+                    <div class="process-actions">
+                        <button id="showRawBtn" title="Reveal the raw image file in the file explorer">Show file</button>
+                        <button id="excludePromptBtn" class="danger-quiet" title="Remove this page from the list (file stays on disk, 'Show excluded' restores it)">Exclude page</button>
+                    </div>
                 </div>
                 <!-- next to an unprocessed page without a detour through the page list (also Ctrl+arrow keys) -->
                 <div class="process-nav">
                     <button id="promptPrevBtn" title="Previous page">&larr; Previous page</button>
+                    <a id="backToPagesLink" href="#">Back to page list</a>
                     <button id="promptNextBtn" title="Next page">Next page &rarr;</button>
                 </div>
-                <p style="margin-top:12px;"><a id="backToPagesLink" href="#">&larr; Back to page list</a></p>
             </div>
  
             <div class="hidden" id="pagePicker">

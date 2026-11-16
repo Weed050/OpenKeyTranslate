@@ -237,6 +237,65 @@ def compute_vertical_streams(enriched_items, window=_STREAM_WINDOW):
     return {idx: (root if sizes[root] >= 2 else None) for idx, root in enumerate(roots)}
 
 
+# Two confirmed streams that are really ONE block of text (2026-11-13). Short words at the end (or start) of two
+# consecutive lines - "...THAT MY" over "...BE A", "THE | DREAM WAS" over "SO | WORN OUT," - are stacked on their own
+# and became a "column" of their own: the guard rail then cut every one of those lines between the two columns, "MY" /
+# "THE SO" became bubbles of their own and "A", alone on its line, was dropped as noise (Eternally Regressing Knight
+# Chapter_0 pages 6 and 7). Two columns are one text when EVERY word of the smaller one sits on a row of the other one,
+# at most a word space away, in letters of the same height. Two bubbles side by side have a wide gap on at least one
+# row (the "AN ORDER" example above: only its last row is tight), so they stay apart.
+_INTERLOCK_MAX_GAP = 0.3         # widest gap between the two words of a row, in letter (box) heights: a word space
+_INTERLOCK_MIN_H_RATIO = 0.7     # the two words of a row: smaller / larger box height (the same lettering)
+
+
+def _row_gap(a, b) -> float:
+    """Horizontal gap between two boxes on one row, in px (negative = they overlap)."""
+    return max(b["x1"] - a["x2"], a["x1"] - b["x2"])
+
+
+def _tight_row_partner(item, others) -> bool:
+    """`item` (stats) has a word of `others` on its own row, at most a word space away, with letters of its height."""
+    for o in others:
+        if not same_line(item, o):
+            continue
+        if min(item["h"], o["h"]) / max(item["h"], o["h"]) < _INTERLOCK_MIN_H_RATIO:
+            continue
+        if _row_gap(item, o) <= _INTERLOCK_MAX_GAP * min(item["h"], o["h"]):
+            return True
+    return False
+
+
+def join_interlocked_streams(enriched_items, stream_ids):
+    """
+    Merges confirmed streams that interlock row by row into one text block (see _INTERLOCK_MAX_GAP above) and returns
+    the new index -> stream_id map. Streams that do not touch on any row are never compared.
+    """
+    members = {}
+    for idx, sid in stream_ids.items():
+        if sid is not None:
+            members.setdefault(sid, []).append(enriched_items[idx]["stats"])
+    sids = sorted(members)
+    if len(sids) < 2:
+        return stream_ids
+    span = {sid: (min(s["y1"] for s in members[sid]), max(s["y2"] for s in members[sid])) for sid in sids}
+    parent = {sid: sid for sid in sids}
+
+    def find(s):
+        while parent[s] != s:
+            parent[s] = parent[parent[s]]
+            s = parent[s]
+        return s
+
+    for i, a in enumerate(sids):
+        for b in sids[i + 1:]:
+            if span[a][1] < span[b][0] or span[b][1] < span[a][0] or find(a) == find(b):
+                continue
+            small, big = (a, b) if len(members[a]) <= len(members[b]) else (b, a)
+            if all(_tight_row_partner(s, members[big]) for s in members[small]):
+                parent[find(small)] = find(big)
+    return {idx: (find(sid) if sid is not None else None) for idx, sid in stream_ids.items()}
+
+
 def split_line_by_gap(line_items, gap_multiplier=3.0, image_width=None):
     """
     Splits a line into separate fragments if the horizontal gap between items is too large.
@@ -336,7 +395,7 @@ def build_text_lines(items, image_width=None):
 
     # 3b. Detect vertical streams (text columns) - an independent geometric signal
     #     used later as a guard rail in split_line_by_gap (see compute_vertical_streams).
-    stream_ids = compute_vertical_streams(enriched)
+    stream_ids = join_interlocked_streams(enriched, compute_vertical_streams(enriched))
     for idx, item in enumerate(enriched):
         item["stream_id"] = stream_ids.get(idx)
 

@@ -8,6 +8,7 @@ The library's exceptions are mapped to the shared classes of base.py:
 - ClientError 429 / RESOURCE_EXHAUSTED          -> RateLimited
 - ClientError 400 API_KEY_INVALID / 401 / 403   -> KeyRejected
 - ClientError 404 (unknown model)               -> KeyRejected
+- ClientError 402 (prepaid credits used up)     -> OutOfCredits (a KeyRejected)
 - httpx.TransportError / OSError (DNS, offline) -> Unreachable
 - ServerError (5xx, overloaded)                 -> Transient
 Any other client error propagates unchanged.
@@ -29,7 +30,7 @@ from google.genai import types
 from google.genai import errors as genai_errors
 
 from core.config import get_setting
-from .base import RateLimited, KeyRejected, Unreachable, Transient
+from .base import RateLimited, KeyRejected, OutOfCredits, NO_CREDITS, Unreachable, Transient, note_served_model
 
 HOST = "generativelanguage.googleapis.com"
 
@@ -70,6 +71,11 @@ def _classify(e: genai_errors.ClientError, model: str) -> Exception:
     text = str(e)
     if code == 429:
         return rate_limit_from(text)
+    if code == 402:
+        # Prepay billing: balance 0 (or negative after the ~10 min billing delay) -> 402 until credits are added
+        return OutOfCredits(f"{NO_CREDITS} (402 Payment Required) - the prepaid Gemini credits of this key's billing "
+                            f"account are used up; every key of that account stops at once. Add credits in AI Studio "
+                            f"> Billing, or switch the key off.")
     if code in (401, 403) or "API_KEY_INVALID" in text or "API key not valid" in text:
         return KeyRejected("Key rejected - wrong or revoked key. Copy it again from aistudio.google.com/apikey.")
     if code == 404 and "no longer available" in f"{text} {getattr(e, 'message', '') or ''}":
@@ -111,6 +117,8 @@ def call(entry: dict, system_prompt: str, user_message: str, schema: type[BaseMo
     except (httpx.TransportError, OSError) as e:
         # DNS failure ("[Errno 11001] getaddrinfo failed"), no internet, VPN/firewall, timeout
         raise Unreachable(f"Can't reach {HOST} ({type(e).__name__}: {e}) - internet / DNS / VPN / firewall?") from e
+    # the model that really answered: after a shutdown Google routes the old id to a newer model without an error
+    note_served_model(getattr(response, "model_version", None))
     parsed = response.parsed
     if parsed is None:
         finish = ""

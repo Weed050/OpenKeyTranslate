@@ -34,6 +34,11 @@
         <rect width="120" height="90" fill="url(#hx-tone)"/>`;
     const dashed = (x, y, w, h, colour = "#2f7de1") =>
         `<rect x="${x}" y="${y}" width="${w}" height="${h}" fill="none" stroke="${colour}" stroke-width="1.4" stroke-dasharray="3 2"/>`;
+    /** lettering over a busy background: a white rim keeps it readable (as on real pages) */
+    const txtRim = (x, y, s, size = 10, fill = INK, rim = "#fff") =>
+        `<text x="${x}" y="${y}" font-size="${size}" font-family="Arial, sans-serif" font-weight="700" fill="${fill}" stroke="${rim}" stroke-width="2.4" paint-order="stroke" text-anchor="middle">${s}</text>`;
+    const speedLines = `<defs><pattern id="hx-speed" width="5" height="90" patternUnits="userSpaceOnUse" patternTransform="rotate(28)"><rect width="1.2" height="90" fill="#555"/></pattern></defs>
+        <rect width="120" height="90" fill="url(#hx-speed)"/>`;
     /** panels: [{label, svg}] side by side; arrow = "before -> after" (else a plain comparison) */
     const example = (caption, panels, arrow = false) => `
         <figure class="help-example">
@@ -75,6 +80,29 @@
             { label: "Off", svg: svg(oval(60, 45, 50, 36) + txt(60, 35, "NIE SĄDZIŁEM,", 7) + txt(60, 44, "ŻE JESZCZE", 7) + txt(60, 53, "WRÓCISZ!", 7)) },
             { label: "On", svg: svg(oval(60, 45, 50, 36) + txt(60, 33, "NIE", 9.5) + txt(60, 46, "SĄDZIŁEM, ŻE", 9.5) + txt(60, 59, "WRÓCISZ!", 9.5)) },
         ]),
+        // How to fix > text not erased well: which clean tool for which background
+        whichCleanTool: example("What is under the letters decides the tool. <b>Plain bubble</b>: the automatic erase almost always works; leftovers - <b>Clean area</b>. <b>Screentone</b> (dots) or the <b>edge of a black area</b>: <b>Erase text</b> - it continues the dots / the edge under the letters. <b>Speed lines, a drawing</b>: <b>Redraw (AI)</b> over the whole area (optional add-on).", [
+            { label: "Plain bubble &rarr; automatic / Clean area", svg: svg(oval() + txt(60, 42, "HEY, YOU!", 10) + txt(60, 55, "WAIT!", 10)) },
+            { label: "Screentone &rarr; Erase text", svg: svg(tone + txtRim(60, 42, "SUDDENLY,") + txtRim(60, 55, "SILENCE...")) },
+            { label: "Black area edge &rarr; Erase text", svg: svg(`<rect x="0" y="0" width="58" height="90" fill="${INK}"/>`
+                + txtRim(60, 42, "THE NEXT", 10, "#fff", INK) + txtRim(60, 55, "MORNING", 10, "#fff", INK)) },
+            { label: "Speed lines, drawing &rarr; Redraw (AI)", svg: svg(speedLines + txtRim(60, 42, "PHASE 01", 11) + txtRim(60, 56, "LANDING", 11)) },
+        ]),
+        // How to fix > bubbles in pieces: two outlines over one text -> Shift+click + Merge
+        mergePieces: example("One text read as two bubbles (two outlines, two numbers). Click one piece, <b>Shift</b>+click the other on the page or in the list, then <b>Merge...</b>: the preview shows the joined text in reading order before anything changes.", [
+            { label: "Read in two pieces", svg: svg(txt(28, 42, "THE", 10) + txt(76, 42, "DREAM WAS", 10) + txt(28, 56, "SO", 10) + txt(76, 56, "WORN OUT,", 10)
+                + dashed(12, 31, 32, 30) + dashed(46, 31, 62, 30)
+                + `<text x="14" y="29" font-size="7" font-family="Arial" fill="#2f7de1">2</text><text x="48" y="29" font-size="7" font-family="Arial" fill="#2f7de1">1</text>`) },
+            { label: "After Merge", svg: svg(txt(28, 42, "THE", 10) + txt(76, 42, "DREAM WAS", 10) + txt(28, 56, "SO", 10) + txt(76, 56, "WORN OUT,", 10)
+                + dashed(10, 31, 100, 30, "#2f9e5a") + `<text x="12" y="29" font-size="7" font-family="Arial" fill="#2f9e5a">1</text>`) },
+        ], true),
+        // How to fix > tall pages: the same strip fitted to the height and to the width
+        fitWidth: example("A webtoon strip in the editor. <b>Fit height</b> (the default) shows all of it - a ribbon too narrow to read. <b>Fit width</b> makes it as wide as the view; scroll down with the mouse wheel.", [
+            { label: "Fit height", svg: svg(`<rect width="120" height="90" fill="#e9e9ee"/><rect x="56" y="4" width="8" height="82" fill="#fff" stroke="#999" stroke-width="0.6"/>`
+                + [12, 30, 52, 70].map((y) => `<rect x="57.5" y="${y}" width="5" height="1.6" fill="${INK}"/>`).join("")) },
+            { label: "Fit width", svg: svg(`<rect width="120" height="90" fill="#e9e9ee"/><rect x="12" y="0" width="96" height="90" fill="#fff" stroke="#999" stroke-width="0.6"/>`
+                + oval(60, 30, 34, 16) + txt(60, 33, "WHERE AM I?", 8) + oval(60, 70, 30, 14) + txt(60, 73, "...A DREAM?", 8)) },
+        ], true),
         // Settings > correction memory: the similarity threshold as a scale
         threshold: `<figure class="help-example">${svg(`
             <line x1="10" y1="40" x2="230" y2="40" stroke="#999" stroke-width="2"/>
@@ -90,6 +118,7 @@
     /* Topic groups = the parts of the app, in the list on the left (a group folds; the group of the open topic is open) */
     const GROUPS = [
         { title: "Start", topics: ["start", "keys"] },
+        { title: "How to fix...", topics: ["fix-erase", "fix-bubbles", "fix-missed", "fix-fit", "fix-translation", "fix-tall"] },
         { title: "Projects & pages", topics: ["pages", "stages"] },
         { title: "Editor", topics: ["markers", "bubble", "toolbar", "lettering", "saving"] },
         { title: "Memory & glossary", topics: ["memory", "glossary"] },
@@ -111,7 +140,136 @@
                     <li><b>Export pages</b> from the pages list when a chapter is done (or <b>Export page</b> in the editor).</li>
                 </ol>
                 <p>Hover any button for a short tooltip. Press ${key("?")} anywhere (outside a text field) to open this help;
-                ${key("Esc")}, the &times; button or a click outside closes it and leaves everything as it was.</p>`,
+                ${key("Esc")}, the &times; button or a click outside closes it and leaves everything as it was.</p>
+                <p>Something did not come out right (text not erased, a bubble in pieces, a line missing, the translation
+                does not fit)? The group <b>How to fix...</b> on the left has a recipe for each, step by step.</p>`,
+        },
+        {
+            id: "fix-erase", title: "Text not erased well",
+            html: `
+                <p>Leftovers of the English letters, a white patch on a pattern, a smeared drawing. The cleaning tools sit in
+                the toolbar after Re-OCR: the button shows the tool used last, the arrow next to it lists all of them. Each
+                one works on an area you drag over the page.</p>
+                ${EXAMPLES.whichCleanTool}
+                <ol class="help-steps">
+                    <li>Press <b>Original</b> to see what was under the text, then <b>Original</b> again to come back.</li>
+                    <li>Was the drawing smeared by the automatic erase (text over artwork or a pattern)? Select that bubble and
+                        press <b>Erase: auto</b> - it becomes <b>Erase: off</b> and the original pixels come back. The bubble
+                        is still translated and lettered.</li>
+                    <li>Pick the tool by what is under the letters (the pictures above):
+                        <span class="help-if">plain bubble, leftovers or ghosts &rarr; <b>Clean area</b>;</span>
+                        <span class="help-if">screentone (dots), the edge of a black or white area &rarr; <b>Erase text</b>;</span>
+                        <span class="help-if">speed lines, a detailed drawing, a photo-like background &rarr; <b>Redraw (AI)</b> (install it once in Settings &rsaquo; Add-ons, 196 MB).</span></li>
+                    <li>Drag the area a bit larger than the letters. In an oval bubble choose <b>Shape: Ellipse</b> first (top
+                        of the tool list), so the corners of the area do not touch the bubble's outline.</li>
+                    <li>Look at the result (zoom in). Not good? <b>Undo clean</b> takes the last area back (with several, a
+                        list: point at one to see it, click to undo just that one). Then try the next tool from step 3.
+                        <span class="help-if">Erase text left white spots on speed lines &rarr; Undo clean, then Redraw (AI) over the same area.</span>
+                        <span class="help-if">Redraw (AI) made a fine screentone a smooth grey patch &rarr; Undo clean, then Erase text.</span></li>
+                    <li>Still a small trace? <b>Fill with background</b> paints the area in the colour around it - fine on a
+                        plain background, visible on a pattern.</li>
+                </ol>
+                <p class="text-muted">Your areas are kept by Rebuild image and Re-OCR; Export uses the cleaned page. All of
+                this happens on your computer - the image is never sent anywhere.</p>`,
+        },
+        {
+            id: "fix-bubbles", title: "Bubbles in pieces or glued together",
+            html: `
+                <p class="help-symptom">One text read as two or more bubbles</p>
+                ${EXAMPLES.mergePieces}
+                <ol class="help-steps">
+                    <li>Click the first piece (on the page or in the list).</li>
+                    <li>${key("Shift")}+click the other pieces - they get an orange stripe.</li>
+                    <li><b>Merge...</b> (in the bar that appears) &rarr; check the joined text and its order in the preview &rarr; Merge.
+                        <span class="help-if">Two neighbours in the list: <b>Merge with &uarr;</b> / <b>&darr;</b> in the bubble panel does it in one click.</span>
+                        <span class="help-if">The merged text is translated again when the box in the dialog is ticked (default: Settings &rsaquo; Editor).</span></li>
+                </ol>
+                <p class="help-symptom">Two bubbles read as one</p>
+                <ol class="help-steps">
+                    <li>Select the bubble, press <b>Split...</b>.</li>
+                    <li>Click the lines that belong to the OTHER bubble (or drag a box around them).</li>
+                    <li>Choose what happens to the translation: divide it automatically, choose the cut yourself, or translate both parts again.</li>
+                </ol>
+                <p class="help-symptom">A line in the wrong bubble</p>
+                <ol class="help-steps">
+                    <li><b>Split...</b> on the bubble that has it, click that line.</li>
+                    <li><b>Move the picked lines to</b> &rarr; the bubble it belongs to. Its part of the translation goes with it.</li>
+                </ol>
+                <p class="help-symptom">Bubbles in the wrong order</p>
+                <p><b>Move up / Move down</b> in the bubble panel, or <b>Order</b> in the toolbar for the whole page (right to
+                left for Japanese manga). The order is what the AI reads, so it matters for the translation.</p>`,
+        },
+        {
+            id: "fix-missed", title: "Text missing or read wrong",
+            html: `
+                <p class="help-symptom">A line of a bubble is missing (tag ${tag("check text", true)} or you see it on the page)</p>
+                <ol class="help-steps">
+                    <li>Select the bubble, press <b>Re-OCR bubble</b> - the whole bubble is read again as one piece.</li>
+                    <li>Still missing? <b>Set area &amp; re-OCR</b> and drag over the whole bubble: exactly that area is read.</li>
+                    <li>The dialog shows the text before and now: <b>Keep the translation</b> or <b>Translate again</b>
+                        (<b>Put the old text back</b> undoes the re-read).</li>
+                </ol>
+                <p class="help-symptom">A whole bubble or caption was not found</p>
+                <ol class="help-steps">
+                    <li><b>Add bubble</b> in the toolbar, drag a rectangle around the text. It is read and translated.</li>
+                </ol>
+                <p class="help-symptom">Sound effects and drawn lettering (BANG, DOKI...)</p>
+                <p>Big hand-drawn letters, rotated or broken by the artwork, are not text for the OCR - it does not see them,
+                and that is normal. Many translations leave them as they are or put a small translation next to them. To
+                translate one anyway: <b>Add bubble</b> around it; when nothing is read you are asked to type the text. The
+                bubble is translated and lettered, nothing is erased for it - remove the drawn letters with
+                <b>Redraw (AI)</b> if you want them gone (see <b>Text not erased well</b>).</p>
+                <p class="help-symptom">A word read wrong (L/I, 0/O, a missing letter)</p>
+                <p><b>Edit</b> next to the original text, fix it, then <b>Keep the translation</b> or <b>Translate again</b>.</p>`,
+        },
+        {
+            id: "fix-fit", title: "The translation does not fit",
+            html: `
+                <ol class="help-steps">
+                    <li>Switch to <b>Lettering</b> (the switch under the image) and click the bubble's text box.</li>
+                    <li>A <b>red box</b> = the text does not fit. Try first <b>Fit to bubble</b>: the box becomes the whole
+                        inside of the bubble.</li>
+                    <li>Still red? Drag the box's corners or sides bigger, or pick a smaller fixed size.
+                        <span class="help-if">Box to the text (in the message in the panel) = the box as big as the text needs.</span></li>
+                    <li>Lines break badly? Put your own breaks in <b>Lines</b> (Enter where a new line should start).</li>
+                    <li>Nothing helps: go back to <b>Translate</b> and shorten the Polish text - a bubble is not a book.</li>
+                </ol>`,
+        },
+        {
+            id: "fix-translation", title: "Translation failed, empty or slow",
+            html: `
+                ${items([
+                    [`<span class="help-danger">(no AI translation)</span>`, `The model answered nothing for this bubble or the
+                        request failed. <b>Retranslate</b> in the bubble panel (one bubble) or in the toolbar (the whole page;
+                        your edits are kept).`],
+                    ["\"No key could translate...\"", `Settings &rsaquo; Translation &amp; API keys &rsaquo; <b>Test</b> next to each key.
+                        <i>limit reached</i>: wait (free keys have a limit per minute and per day - Google's day ends at 09:00
+                        in Poland) or add a second key: Groq and Gemini keys can be mixed and take over from each other.
+                        <i>rejected</i>: the key was deleted or mistyped - paste it again.`],
+                    ["A page takes long", `While it runs, the page shows what is going on: reading the text (with how far down
+                        the page), translating (which key it waits for), erasing. A free key that hit its per-minute limit
+                        rests about a minute - the next key switched on is used meanwhile. OCR on a processor takes 10-60 s
+                        for a manga page and a few minutes for a long webtoon strip (Settings &rsaquo; OCR engine: the
+                        mobile detection model is about 3x faster); the first page after a start can take longer.`],
+                    ["The translation is wrong", `Fix it and save: the fix goes into the correction memory and the AI sees it
+                        as an example on similar lines later. A name or term that must always be the same: the
+                        <b>Glossary</b>.`],
+                ])}`,
+        },
+        {
+            id: "fix-tall", title: "Webtoon: very tall pages",
+            html: `
+                ${EXAMPLES.fitWidth}
+                <ol class="help-steps">
+                    <li><b>More &#9662;</b> &rsaquo; <b>Fit width</b> (or the button in the tip the editor shows on the first
+                        tall page). The editor keeps fitting the width on every page of this project until you choose
+                        <b>Fit height</b> or zoom yourself.</li>
+                    <li>Mouse wheel = scroll down the page; ${key("Ctrl")}+wheel = zoom at the mouse pointer; hold the
+                        middle button and drag = move the page.</li>
+                    <li>Picking a bubble in the list scrolls the page to it.</li>
+                </ol>
+                <p class="text-muted">The OCR reads a tall page in parts (the progress while it runs says which part); the
+                OCR debug view (Settings &rsaquo; Editor) shows where it was cut.</p>`,
         },
         {
             id: "markers", title: "Bubble list markers",
@@ -207,9 +365,10 @@
                     <b>Erase text</b> finds the letters in the area (the OCR lines there, or it reads the area) and erases only them, with their light outline. Each hole is filled the best way found: a plain colour is painted; where the letters cross the edge of a black (or white) area, that edge is carried on straight under them; a regular screentone is continued dot by dot (the lines of a drawing in it too); what is left (a drawing) is redrawn by the AI model when installed, else filled from around. The message says what was used. Over a raster sky this keeps the raster - Redraw (AI) on the whole area makes it a smooth grey patch. At a high zoom a fine screentone may show faint seams where the letters were.<br>
                     <b>Erase text (AI)</b> (only with the optional model): the same letters, but the AI redraws under all of them - try it when Erase text left a visible pattern; a fine screentone becomes a smoother grey there. You normally do not need to choose: Erase text already uses the model where nothing better fits.<br>
                     <b>Clean area</b> removes the marks inside (letter remains, ghosts) - box borders and drawing crossing its edge stay; <b>Fill with background</b> paints the whole area with the colour around it; <b>Redraw (AI)</b> (only after installing the optional model in Settings &gt; Add-ons) redraws everything under the area - for marks the OCR cannot read on artwork; a few seconds, never used by itself.<br>
-                    Kept by Rebuild image and Re-OCR. Undo clean removes it; with several, a list opens - point at an entry to see its area on the page, click to undo just that one (${key("Shift")}+click: all).`],
+                    Kept by Rebuild image and Re-OCR. Undo clean removes it; with several, a list opens - point at an entry to see its area on the page, click to undo just that one (${key("Shift")}+click: all).
+                    Which tool for which background, step by step: <b>How to fix... &rsaquo; Text not erased well</b>.`],
                 ["&minus; / +", `Zoom at the middle of the view. ${key("Ctrl")}+scroll zooms at the mouse pointer (the spot under it stays there). Zoomed in: hold the middle mouse button (the wheel) and drag to move the page around - also to its left edge.`],
-                ["More &#9662;", "Fit width / Fit height, Reset layout, and the page tools: copy the JSON path, open the folder, delete (exclude) the page."],
+                ["More &#9662;", "Fit width / Fit height, Reset layout, and the page tools: copy the JSON path, open the folder, delete (exclude) the page. Fit width is kept for the next pages of the project (webtoon strips) until you zoom yourself or pick Fit height."],
                 ["Reset layout", "Puts the panel sizes back to default."],
                 ["Messages", "Short messages appear at the top, under this toolbar. They stay while the mouse is over them; &times; closes one."],
             ]) + `<h4>Example: the clean tools</h4>${EXAMPLES.cleanTools}`,

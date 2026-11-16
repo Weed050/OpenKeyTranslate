@@ -62,13 +62,32 @@ def _norm_words(text: str) -> list[str]:
 
 # ------------------------------------------------------------------ reading a region as ONE bubble
 
-def read_region(image, bbox, ocr_region_fn) -> dict | None:
+SAME_LINE_SHARE = 0.5          # a reading covering this much of an existing line IS that line (same pixels read again)
+
+
+def overlap_share(a, b) -> float:
+    """Share (0..1) of the SMALLER of two boxes (4-point polygons) that the other one covers."""
+    ax1, ay1, ax2, ay2 = bbox_of(a)
+    bx1, by1, bx2, by2 = bbox_of(b)
+    w, h = min(ax2, bx2) - max(ax1, bx1), min(ay2, by2) - max(ay1, by1)
+    if w <= 0 or h <= 0:
+        return 0.0
+    smaller = min((ax2 - ax1) * (ay2 - ay1), (bx2 - bx1) * (by2 - by1))
+    return (w * h) / smaller if smaller > 0 else 0.0
+
+
+def read_region(image, bbox, ocr_region_fn, exclude=()) -> dict | None:
     """
     OCR a rectangle and treat everything found there as the lines of a single bubble.
+    :param exclude: boxes of lines that belong to OTHER bubbles. The rectangle can graze the neighbour's text (a white
+        area shared by two bubbles, page 12 "BUT THE"); a reading that sits on such a line is that line read a second
+        time and is dropped, otherwise the same words end up in two bubbles and are translated and typeset twice.
     :return: None when nothing was read, else
              {"text", "box" (union of lines), "avg_score", "lines": [{"box", "text", "score"}], "items": [...]}
     """
     items = ocr_region_fn(image, bbox) or []
+    if exclude:
+        items = [it for it in items if not any(overlap_share(it["box"], e) >= SAME_LINE_SHARE for e in exclude)]
     if not items:
         return None
     for i, it in enumerate(items):
@@ -444,7 +463,7 @@ def find_orphan_bubbles(image, result: dict, ocr_region_fn, max_candidates: int 
         candidates.append((len(glyphs), (x + gx1 - 10, y + gy1 - 10, x + gx2 + 10, y + gy2 + 10)))
     added = 0
     for _, region in sorted(candidates, reverse=True)[:max_candidates]:
-        reading = read_region(image, region, ocr_region_fn)
+        reading = read_region(image, region, ocr_region_fn, exclude=[l["box"] for l in result["lines"]])
         if reading is None or reading["avg_score"] < 0.85 or not _is_plausible_text(reading["text"]):
             continue
         base = _next_line_number(result)
@@ -479,7 +498,8 @@ def refine_missed_text(image, result: dict, ocr_region_fn) -> int:
         if any(it.encloses(bbox_of(l["box"])) for l in result["lines"] if l["line_id"] not in own):
             continue
         region = expand(it.bbox, 0.02, iw, ih)
-        reading = read_region(image, region, ocr_region_fn)
+        others = [l["box"] for l in result["lines"] if l["line_id"] not in own]
+        reading = read_region(image, region, ocr_region_fn, exclude=others)
         if reading is None or not _more_complete(bubble["text"], reading["text"]):
             continue
 

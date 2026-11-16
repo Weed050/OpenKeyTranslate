@@ -1,0 +1,4 @@
+# Build tools of the Windows app (packaging/okt.spec), on top of setup/requirements_cpu_only.txt.
+# Pinned: a new PyInstaller / hooks release can change what gets bundled - update on purpose, then check the smoke test.
+pyinstaller==6.22.3
+pyinstaller-hooks-contrib==2026.10

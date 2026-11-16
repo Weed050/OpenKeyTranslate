@@ -2,6 +2,7 @@
 # backend/core/config.py
 
 import os
+import sys
 import json
 import copy
 import shutil
@@ -18,13 +19,21 @@ system paths, and pipeline constants.
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 ROOT_DIR = os.path.dirname(BASE_DIR)
 
+# The packaged Windows app (PyInstaller, packaging/okt.spec) keeps the code in <app folder>/_internal (sys._MEIPASS)
+# with frontend/, CHANGELOG.md and LICENSE copied next to it; from the source they are in the repository root.
+FROZEN = bool(getattr(sys, "frozen", False))
+PROGRAM_DIR = getattr(sys, "_MEIPASS", ROOT_DIR) if FROZEN else os.path.dirname(ROOT_DIR)
+"""@private Folder of the program files (repository root / the packaged app's _internal) - a path on this machine."""
+FRONTEND_DIR = os.path.join(PROGRAM_DIR, "frontend")
+"""@private The frontend pages, served by the backend at /app (main.py)."""
+
 # Set by scripts/build_docs.py. pdoc prints the VALUE of every module-level variable into the HTML, and the docs are
 # public (GitHub Pages) - a docs build once published a Groq key this way. In this mode settings.json is never read.
 _DOCS_BUILD = bool(os.environ.get("OKT_DOCS_BUILD"))
 
 # Bump manually on release. Stamped into every log file header (see
 # core/app_logging.py) so a bug report's log always says which version produced it.
-APP_VERSION = "0.5.0"
+APP_VERSION = "0.6.0"
 
 
 def get_default_app_root():
@@ -102,7 +111,9 @@ DEFAULT_SETTINGS = {
             "keys": [{"label": "default", "api_key": ""}],
         },
         "gemini": {
-            "model": "gemini-2.5-flash",
+            # new installs only (_deep_fill never overwrites a stored value): 2.5 models are closed to new Google
+            # projects (404) and re-routed from 01.12.2026; the thesis keys keep their stored gemini-2.5-flash
+            "model": "gemini-3.6-flash",
             "keys": [{"label": "default", "api_key": ""}],
         },
         # any OpenAI-compatible chat API (OpenRouter, Mistral, DeepSeek, Ollama, LM Studio); key may be empty locally.

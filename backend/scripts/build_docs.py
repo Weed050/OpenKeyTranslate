@@ -31,7 +31,7 @@ import tempfile
 BACKEND_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PROJECT_DIR = os.path.dirname(BACKEND_DIR)
 DOCS_DIR = os.path.join(PROJECT_DIR, "docs")
-DEFAULT_MODULES = ["main", "test_main", "core", "models", "routers", "services", "utils"]
+DEFAULT_MODULES = ["main", "launcher", "test_main", "core", "models", "routers", "services", "utils"]
 
 # Same patterns as .githooks/pre-commit
 KEY_PATTERN = re.compile(

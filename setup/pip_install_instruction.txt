@@ -44,8 +44,9 @@ Only ONE OpenCV package may be installed. If both are there (older requirement f
 Start
 -----
 
-    python main.py                 # API on http://127.0.0.1:8000
-    then open frontend/index.html through a local web server (e.g. VS Code Live Server)
+    python launcher.py             # server + the browser at http://127.0.0.1:8000/app/
+    or: python main.py             # server only; pages at http://127.0.0.1:8000/app/
+    (a separate local web server such as VS Code Live Server on port 5500 still works too)
 
 
 The OCR crashes / the backend disappears ("exit code -1073741819", "0xC0000005")

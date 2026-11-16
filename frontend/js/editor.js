@@ -22,7 +22,8 @@ import { initReview, renderReviewControls, reviewBeforeNextPage, offerUndoFromPr
 import { initOcrDebug, renderOcrDebug, invalidateOcrDebug } from "./editor-ocrdebug.js";
 import { openReplaceDialog } from "./replace-dialog.js";
 import { choose, wordDiff, askOk, notify } from "./dialogs.js";
- 
+import { watchRun, progressHtml, shortLabel, formatElapsed } from "./editor-progress.js";
+
 const enterAt = params.get("enterAt"); // "first" | "last" | null - set when arriving via cross-page nav
 const resumeBubbleIndex = params.get("bubble"); // set by the dashboard's "Resume where I left off" link
  
@@ -327,6 +328,12 @@ async function showProcessPrompt(error) {
     el.processPrompt.classList.remove("hidden");
     el.processBtn.disabled = false;
     el.processStatus.textContent = "";
+    showRunProgress(null);
+    const thumb = document.getElementById("processThumb");          // the page itself, top part (a webtoon strip)
+    const thumbBox = document.getElementById("processThumbBox");
+    thumb.onerror = () => thumbBox.classList.add("no-image");
+    thumb.onload = () => thumbBox.classList.remove("no-image");
+    if (pageId && !thumb.src.endsWith(api.pages.originalUrl(pageId))) thumb.src = api.pages.originalUrl(pageId);
  
     const backLink = document.getElementById("backToPagesLink");
     if (backLink) backLink.href = state.projectId ? `editor.html?project=${state.projectId}` : "index.html";
@@ -351,7 +358,9 @@ async function showProcessPrompt(error) {
         const { status, error: lastError, raw_path } = await api.pages.status(pageId);
         state.rawPath = raw_path;
         if (status === "queued" || status === "processing") {
-            msgEl.textContent = "This page is already processing in the background - it'll load automatically...";
+            msgEl.textContent = status === "queued"
+                ? "This page is waiting in the background queue - it opens by itself when it is done."
+                : "This page is being processed in the background - it opens by itself when it is done.";
             el.processBtn.disabled = true;
             pollUntilProcessed();
             return;
@@ -379,11 +388,13 @@ function renderProcessPromptInfo() {
     const chapterPages = state.flatPageList.filter((p) => p.chapter === current.chapter);
     const idxInChapter = chapterPages.findIndex((p) => String(p.page_id) === String(pageId));
  
+    const stage = shownStage(current.stage || current.status, current.layout);
+    const [stageLabel, stageWhat] = PAGE_BADGES[stage] || [current.status, ""];
     infoEl.innerHTML = `
         <div class="process-prompt-meta">
-            <div><span class="field-label">Chapter</span> ${escapeHtml(current.chapter)}</div>
-            <div><span class="field-label">Page</span> ${escapeHtml(current.file_name)} (${idxInChapter + 1} / ${chapterPages.length} in chapter)</div>
-            <div><span class="field-label">Status</span> <span class="badge" data-status="${escapeHtml(current.status)}">${escapeHtml(current.status)}</span></div>
+            <span class="field-label">Chapter</span><span>${escapeHtml(current.chapter)}</span>
+            <span class="field-label">Page</span><span>${escapeHtml(current.file_name)} <span class="text-muted">(${idxInChapter + 1} of ${chapterPages.length} in the chapter)</span></span>
+            <span class="field-label">Stage</span><span><span class="badge stage-badge" data-status="${escapeHtml(stage)}" title="${escapeHtml(stageWhat)}">${escapeHtml(stageLabel)}</span></span>
         </div>
     `;
 }
@@ -392,19 +403,32 @@ function pollUntilProcessed() {
     clearTimeout(pollUntilProcessed._t);
     pollUntilProcessed._t = setTimeout(async () => {
         try {
-            const { status } = await api.pages.status(pageId);
+            const { status, progress } = await api.pages.status(pageId);
             if (status === "processed") {
+                showRunProgress(null);
                 await loadPage();
             } else if (status === "failed") {
+                showRunProgress(null);
                 document.getElementById("processPromptMsg").textContent = "Background processing failed - try running it manually.";
                 el.processBtn.disabled = false;
             } else {
+                showRunProgress(progress);         // the background run's steps, like a run started here
                 pollUntilProcessed();
             }
         } catch {
             pollUntilProcessed();
         }
-    }, 2000);
+    }, 1000);
+}
+
+/** The step list of a page run on the process card (js/editor-progress.js); null hides it and shows the hint again. */
+function showRunProgress(progress) {
+    const box = document.getElementById("processProgress");
+    const hint = document.getElementById("processHint");
+    if (!box) return;
+    box.classList.toggle("hidden", !progress);
+    hint?.classList.toggle("hidden", !!progress);
+    if (progress) box.innerHTML = progressHtml(progress);
 }
  
 function renderPageTools() {
@@ -476,13 +500,19 @@ async function excludeCurrentPage() {
  
 async function runProcess() {
     el.processBtn.disabled = true;
-    el.processStatus.textContent = "Processing — this can take a while, don't close the tab...";
+    el.processStatus.textContent = "";
+    // until the backend's first answer: the first step, so something moves at once
+    showRunProgress({ step: "load", steps: ["load", "ocr", "translate", "clean", "save"], elapsed: 0, step_elapsed: 0 });
+    const stop = watchRun(pageId, (p) => { if (p) showRunProgress(p); });
     try {
         const result = await api.pages.process(pageId);
-        el.processStatus.textContent = "Done — loading page...";
+        stop();
+        el.processStatus.textContent = "Done - opening the page...";
         await loadPage();
         if (result.translation_error) showToast(result.message, 7000);
     } catch (e) {
+        stop();
+        showRunProgress(null);
         console.error("[EDITOR] Processing failed:", e);
         el.processStatus.textContent = `Failed: ${e.message}`;
         el.processBtn.disabled = false;
@@ -545,8 +575,15 @@ async function runReocr() {
     if (!options) return;
     const btn = document.getElementById("reocrBtn");
     const originalText = btn.textContent;
+    const originalTitle = btn.title;
     btn.disabled = true;
     btn.textContent = "Re-OCR...";
+    // what the run does, on the button itself ("Re-OCR: reading 40%") - the page stays visible meanwhile
+    const stop = watchRun(pageId, (p) => {
+        if (!p) return;
+        btn.textContent = `Re-OCR: ${shortLabel(p)}`;
+        btn.title = `${p.detail || ""}${p.detail ? " - " : ""}running for ${formatElapsed(p.elapsed)}`;
+    });
     try {
         const result = await api.pages.reocr(pageId, options.detectRotation);
         showToast(result.message, 5000);
@@ -554,8 +591,10 @@ async function runReocr() {
     } catch (e) {
         notify(`Re-OCR failed: ${e.message}\n(The previous result is untouched.)`);
     } finally {
+        stop();
         btn.disabled = false;
         btn.textContent = originalText;
+        btn.title = originalTitle;
     }
 }
 
@@ -683,14 +722,18 @@ function loadImage() {
         state.naturalH = img.naturalHeight;
         state.baseScale = el.imageViewport.clientHeight / state.naturalH;
  
-        const remembered = parseFloat(localStorage.getItem(zoomStorageKey()));
-        state.zoomFactor = Number.isFinite(remembered) ? remembered : 1;
- 
+        // "width" = Fit width was the last choice in this project: every page fits the width (webtoon strips of
+        // different heights got different widths from one remembered factor); a number = a zoom of its own
+        const stored = localStorage.getItem(zoomStorageKey());
+        const remembered = parseFloat(stored);
+        state.zoomFactor = stored === "width" ? widthFactor() : Number.isFinite(remembered) ? remembered : 1;
+
         el.imageState.classList.add("hidden");
         el.imageCanvas.classList.remove("hidden");
         applyZoom();
         state.imageReady = true;
         flushPendingScroll();           // the bubble the page was opened at (set in loadPage)
+        offerFitWidthTip(stored === "width");
     };
     img.onerror = () => {
         el.imageState.innerHTML = `
@@ -734,11 +777,67 @@ function zoomBy(factor) {
     setZoom(state.zoomFactor * factor, { persist: true });
 }
  
+/** Zoom factor at which the page is ~80% of the view wide. */
+function widthFactor() {
+    return (el.imageViewport.clientWidth * 0.8) / (state.naturalW * state.baseScale);
+}
+
+/** Fit width - and keep fitting the width on the next pages of this project until a zoom of its own is chosen. */
 function fitToWidth() {
     if (!state.naturalW) return;
-    const targetTotalWidth = el.imageViewport.clientWidth * 0.8;
-    const currentUnzoomedWidth = state.naturalW * state.baseScale;
-    setZoom(targetTotalWidth / currentUnzoomedWidth, { persist: true });
+    setZoom(widthFactor());
+    localStorage.setItem(zoomStorageKey(), "width");
+    closeFitWidthTip();
+}
+
+/* ---- tall page tip: a webtoon strip fitted to the height is a narrow ribbon; Fit width is hidden in More ---- */
+const TALL_TIP_KEY = "okt-tip-tall-page";            // "off" = "Don't show this again" was ticked
+
+function closeFitWidthTip(dontShowAgain = false) {
+    const tip = document.getElementById("tallPageTip");
+    if (!tip) return;
+    if (dontShowAgain || tip.querySelector("#tallTipNever")?.checked) {
+        try { localStorage.setItem(TALL_TIP_KEY, "off"); } catch { /* not critical */ }
+    }
+    tip.remove();
+}
+
+/**
+ * A page at least 2.5x taller than wide shown at less than half the view's width: say once per project and browser
+ * session that Fit width exists and where. Not when the project already fits the width or the tip was switched off.
+ */
+function offerFitWidthTip(widthMode) {
+    if (widthMode || state.naturalH < 2.5 * state.naturalW) return;
+    if (state.naturalW * state.baseScale * state.zoomFactor >= 0.5 * el.imageViewport.clientWidth) return;
+    try {
+        if (localStorage.getItem(TALL_TIP_KEY) === "off") return;
+        const seen = `okt-tip-tall-page-${state.projectId}`;
+        if (sessionStorage.getItem(seen)) return;
+        sessionStorage.setItem(seen, "1");
+    } catch { return; }
+    if (document.getElementById("tallPageTip")) return;
+    const tip = document.createElement("div");
+    tip.id = "tallPageTip";
+    tip.className = "editor-tip";
+    tip.setAttribute("role", "dialog");
+    tip.setAttribute("aria-label", "Tip: tall page");
+    tip.innerHTML = `
+        <button type="button" class="editor-tip-close" title="Close" aria-label="Close">&times;</button>
+        <b>Tall page (webtoon strip)</b>
+        <p>Fitted to the height, this page is a narrow strip. <b>Fit width</b> makes it as wide as the view, and the
+        editor keeps that for every page of this project. Then scroll with the mouse wheel to go down the page;
+        Ctrl + wheel zooms. The button is also in <b>More &#9662;</b> &rsaquo; <b>Fit width</b> (Fit height goes back).</p>
+        <div class="editor-tip-actions">
+            <label class="checkbox-label"><input type="checkbox" id="tallTipNever"> Don't show this again</label>
+            <span class="editor-tip-buttons">
+                <button type="button" data-act="ok">OK</button>
+                <button type="button" class="primary" data-act="fit">Fit width</button>
+            </span>
+        </div>`;
+    tip.querySelector(".editor-tip-close").addEventListener("click", () => closeFitWidthTip());
+    tip.querySelector('[data-act="ok"]').addEventListener("click", () => closeFitWidthTip());
+    tip.querySelector('[data-act="fit"]').addEventListener("click", fitToWidth);   // closes the tip, reads the box
+    document.querySelector(".image-pane")?.appendChild(tip);
 }
  
 /** at: {x, y} client coordinates of the point to keep in place (the mouse pointer); default = the middle of the view. */
@@ -757,7 +856,9 @@ function setZoom(factor, { persist = false, at = null } = {}) {
         cx = (vp.scrollLeft + ax - off.x) / before;
         cy = (vp.scrollTop + ay - off.y) / before;
     }
-    state.zoomFactor = Math.min(20, Math.max(0.3, factor));
+    // the factor is relative to "fit height": a webtoon strip 15x taller than wide needs more than 20x to fill the width
+    const most = state.naturalW ? Math.max(20, widthFactor() * 3) : 20;
+    state.zoomFactor = Math.min(most, Math.max(0.3, factor));
     applyZoom();
     if (keep) {
         const scale = state.baseScale * state.zoomFactor;

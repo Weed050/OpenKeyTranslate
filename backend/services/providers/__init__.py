@@ -37,7 +37,10 @@ PROVIDERS_INFO = {
     },
     "gemini": {
         "label": "Gemini", "key_url": "https://aistudio.google.com/apikey", "needs_key": True,
-        "models": ["gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-2.5-pro", "gemini-2.0-flash"],
+        # free tier on 13.11.2026 (aistudio.google.com/docs/pricing); 2.5-flash / 2.5-pro / 2.0 left out: closed to new
+        # projects or shut down. Daily limits per model are shown in AI Studio, not in the docs.
+        "models": ["gemini-3.6-flash", "gemini-3.8-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite",
+                   "gemini-2.5-flash-lite"],
     },
     "openai_compat": {
         "label": "OpenAI-compatible", "beta": True, "needs_key": False,
@@ -157,7 +160,7 @@ def find_entry(kid: str) -> dict | None:
 def test_key(kid: str) -> dict:
     """
     One tiny translation through ONE key, switched on or not (Settings: "Test" per key).
-    -> {"ok", "kind" (ok / RateLimited / KeyRejected / Unreachable / Transient / error / unusable), "message",
+    -> {"ok", "kind" (ok / RateLimited / KeyRejected / OutOfCredits / Unreachable / Transient / error / unusable), "message",
         "model", "ms", "sample"}. Never contains the key.
     """
     entry = find_entry(kid)

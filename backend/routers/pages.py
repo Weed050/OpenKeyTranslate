@@ -37,7 +37,7 @@ from services.ocr_pipeline import process_image, ocr_region, page_rotation, to_o
 from services.translation_service import translate_bubbles
 from services.page_export import save_ocr_json, page_paths, load_page_json, write_page_json, record_manual_op
 from services.inpaint_service import reinpaint_from_json, targets_from_result, apply_info
-from services import bubble_edit, project_prefs
+from services import bubble_edit, project_prefs, run_progress
 from services.glossary_service import load_glossary
 from utils.bubble_post import carry_over
 import threading
@@ -833,6 +833,13 @@ def _release(page_id: int) -> None:
 
 
 def _process_page_pipeline(page_id: int, reocr: bool = False, translate: bool = True, detect_rotation: bool | None = None) -> dict:
+    """The page run below, with its progress shown in the editor while it runs (services/run_progress.py)."""
+    with run_progress.track(page_id, kind="reocr" if reocr else "process",
+                            translate=translate and bool(get_setting("translation_on", True))):
+        return _run_page_pipeline(page_id, reocr, translate, detect_rotation)
+
+
+def _run_page_pipeline(page_id: int, reocr: bool = False, translate: bool = True, detect_rotation: bool | None = None) -> dict:
     """
     Runs the full OCR -> translate -> inpaint pipeline for one page and persists results. Opens its OWN DB session -
     required to be safe from a background thread. Sets page.status along the way ("processing" -> "processed",
@@ -870,7 +877,9 @@ def _process_page_pipeline(page_id: int, reocr: bool = False, translate: bool = 
         if detect_rotation is None and "detect_rotation" in old_data:
             detect_rotation = bool(old_data["detect_rotation"])
 
+        run_progress.step("ocr", "waiting for the OCR to finish another page" if OCR_LOCK.locked() else "")
         with OCR_LOCK:   # never two PaddleOCR runs at once (sync /process vs background worker)
+            run_progress.note("")
             ocr_result = process_image(image, protected, detect_rotation=detect_rotation)
         # the page's own order survives Re-OCR; a new page takes the project's order ("Use this order for the whole
         # project", services/project_prefs.py) - before, prefetched pages fell back to the global setting
@@ -888,6 +897,8 @@ def _process_page_pipeline(page_id: int, reocr: bool = False, translate: bool = 
         pending = False
         to_translate = [b for b in ocr_result["bubbles"] if b["bubble_id"] not in carried]
         if get_setting("translation_on", True) and translate:
+            sent = sum(1 for b in to_translate if not b.get("skip") and (b.get("text") or "").strip())
+            run_progress.step("translate", f"{sent} bubble(s)" if sent else "nothing new to translate")
             try:
                 translate_bubbles(to_translate, project_id=project_id, page_id=page.id, db=db)
             except Exception as e:
@@ -905,6 +916,7 @@ def _process_page_pipeline(page_id: int, reocr: bool = False, translate: bool = 
         # verified white bubbles - dark pixels no OCR box explained. Built BEFORE the JSON is saved because the analysis also
         # yields each bubble's interior_box / missed_text flag (shown in the editor). It is fail-safe: on any error the
         # plain box mask is used.
+        run_progress.step("clean")
         boxes, bubble_targets = targets_from_result(ocr_result, to_original_coords)
         cleanups = old_data.get("cleanups") or []             # manual "Clean area" rectangles survive a Re-OCR
         try:
@@ -920,6 +932,7 @@ def _process_page_pipeline(page_id: int, reocr: bool = False, translate: bool = 
         if reocr and old_data:
             record_manual_op(ops_holder, "reocr_page", detect_rotation=detect_rotation)
 
+        run_progress.step("save")
         os.makedirs(paths["out_dir"], exist_ok=True)
         save_ocr_json(paths["out_dir"], paths["file_base_name"], ocr_result, pending_translation=pending,
                       detect_rotation=detect_rotation, cleanups=cleanups, bubble_order=page_order,
@@ -1275,4 +1288,5 @@ async def get_page_status(page_id: int, db: Session = Depends(get_db)):
         "status": page.status,
         "error": LAST_ERRORS.get(page_id) if page.status == "failed" else None,
         "raw_path": page_paths(page)["raw"],   # editor: "Show file" button on the failed-page screen
+        "progress": run_progress.snapshot(page_id),   # step / counter / elapsed of a run going on now, else None
     }

@@ -8,7 +8,7 @@
  * activity (newest page change), name, progress or creation date; the choice is remembered.
  */
 
-import { api } from "./api.js";
+import { api, backendDownHint } from "./api.js";
 import { renderSidebar } from "./nav.js";
 import { countGroups, doneScore, exportedDraftNote, stageBarHtml, stageLegendHtml } from "./stages.js";
 import { askOk, notify } from "./dialogs.js";
@@ -48,7 +48,7 @@ async function loadProjects() {
         projects = await api.projects.list();
     } catch (e) {
         list.innerHTML = `<div class="card dash-empty"><p>Couldn't load projects: ${esc(e.message)}</p>
-            <p class="text-muted">Is the backend running? Start it with <code>python main.py</code> in the backend folder, then reload this page.</p></div>`;
+            <p class="text-muted">${backendDownHint()}</p></div>`;
         return;
     }
 

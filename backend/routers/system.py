@@ -176,11 +176,18 @@ def lama_cancel():
     return cancel_install()
 
 
+@router.get("/about")
+async def about():
+    """Who answers on this port - launcher.py checks it before opening a second copy of the app."""
+    from core.config import APP_VERSION, FROZEN
+    return {"app": "OpenKeyTranslate", "version": APP_VERSION, "packaged": FROZEN}
+
+
 @router.get("/changelog")
 async def changelog():
     """CHANGELOG.md of the program folder (Settings > About > What's new). Public text - it is in the repository."""
-    from core.config import APP_VERSION, ROOT_DIR
-    path = os.path.join(os.path.dirname(ROOT_DIR), "CHANGELOG.md")
+    from core.config import APP_VERSION, PROGRAM_DIR
+    path = os.path.join(PROGRAM_DIR, "CHANGELOG.md")
     try:
         with open(path, encoding="utf-8") as f:
             return {"version": APP_VERSION, "text": f.read()}

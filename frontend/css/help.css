@@ -109,6 +109,10 @@
 .help-ex-svg { width: 150px; height: auto; border: 1px solid var(--border-strong); border-radius: 4px; display: block; }
 .help-example > .help-ex-svg { width: min(100%, 420px); margin: 0 auto; }
 .help-ex-arrow { font-size: 18px; color: var(--text-muted); }
+.help-ex-panel > span { max-width: 150px; text-align: center; line-height: 1.35; }
+/* How to fix: a recipe = numbered steps, "if not" branches under a step */
+.help-steps .help-if { display: block; margin-top: 2px; color: var(--text-muted); font-size: 12.5px; }
+.help-symptom { margin: var(--space-md) 0 4px; font-weight: 600; color: var(--text-primary); }
 .help-example figcaption { margin-top: 6px; font-size: 12.5px; color: var(--text-secondary); line-height: 1.5; text-align: center; }
 .help-list dt:last-of-type, .help-list dd:last-of-type { border-bottom: none; }
 

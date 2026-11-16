@@ -309,14 +309,115 @@
   width: 100%;
 }
  
+/* A page without an OCR result: one card - the page (top part) on the left, what to do on the right, the page
+   navigation under both. While it runs, the step list (js/editor-progress.js) replaces the hint. */
+.process-card{
+  margin: auto;
+  width: min(680px, calc(100% - 32px));
+  display: grid;
+  grid-template-columns: 170px 1fr;
+  gap: 22px;
+  padding: 22px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 8px 28px rgba(0,0,0,.18);
+}
+.process-thumb{
+  height: 250px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--bg-panel-2);
+  overflow: hidden;
+}
+/* a webtoon strip is 10-20x taller than wide: its top part, not a hair-thin whole */
+.process-thumb img{ width: 100%; height: 100%; object-fit: cover; object-position: top center; display: block; }
+.process-thumb.no-image img{ display: none; }
+.process-main{ display: flex; flex-direction: column; align-items: flex-start; gap: 10px; min-width: 0; }
 .process-prompt-meta{
-  text-align: left;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  margin-bottom: 16px;
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 4px 10px;
   font-size: 13px;
   color: var(--text-secondary);
+}
+.process-prompt-meta .field-label{ color: var(--text-muted); }
+.process-msg{ margin: 6px 0 0; font-size: 15px; color: var(--text-primary); }
+button.process-run{ padding: 10px 22px; font-size: 14px; }
+.process-hint{ margin: 0; font-size: 12.5px; max-width: 46ch; }
+.process-error{ white-space: pre-wrap; margin: 0; }
+.process-actions{ display: flex; gap: 8px; margin-top: auto; padding-top: 6px; }
+button.danger-quiet{ background: transparent; color: var(--text-secondary); border-color: var(--border); }
+button.danger-quiet:hover{ color: var(--danger); border-color: var(--danger); background: var(--danger-soft); }
+.process-card .process-nav{
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 0;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+  font-size: 13px;
+}
+@media (max-width: 620px){
+  .process-card{ grid-template-columns: 1fr; }
+  .process-thumb{ height: 140px; }
+}
+
+/* a one-time tip over the page (tall webtoon page -> Fit width, js/editor.js offerFitWidthTip) */
+.editor-tip{
+  position: absolute;
+  left: 16px;
+  bottom: 64px;
+  z-index: 30;
+  width: min(400px, calc(100% - 32px));
+  padding: 12px 14px 12px 14px;
+  background: var(--bg-panel-2);
+  border: 1px solid var(--border-strong);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--radius-sm);
+  box-shadow: 0 8px 24px rgba(0,0,0,.28);
+  font-size: 13px;
+  color: var(--text-primary);
+}
+.editor-tip p{ margin: 6px 0 10px; font-size: 12.5px; }
+.editor-tip-close{ position: absolute; top: 4px; right: 4px; border: none; background: transparent; color: var(--text-muted);
+  font-size: 17px; line-height: 1; padding: 4px 7px; }
+.editor-tip-close:hover{ color: var(--text-primary); background: var(--bg-hover); }
+.editor-tip-actions{ display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.editor-tip-actions .checkbox-label{ margin: 0; display: flex; align-items: center; gap: 6px; font-size: 12px; }
+.editor-tip-buttons{ display: flex; gap: 6px; }
+
+/* progress of a page run: bar + steps (done / now / to come) */
+.run-progress{ width: 100%; display: flex; flex-direction: column; gap: 8px; }
+.run-bar{ height: 6px; border-radius: 3px; background: var(--bg-panel-2); overflow: hidden; }
+.run-bar > span{
+  display: block; height: 100%; border-radius: 3px; background: var(--accent);
+  background-image: linear-gradient(90deg, transparent 0, rgba(255,255,255,.28) 50%, transparent 100%);
+  background-size: 120px 100%; background-repeat: no-repeat;
+  animation: run-shine 1.6s linear infinite;
+  transition: width .6s ease;
+}
+@keyframes run-shine{ from{ background-position: -120px 0; } to{ background-position: 400px 0; } }
+.run-steps{ list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 5px; font-size: 13px; }
+.run-steps li{ display: flex; align-items: flex-start; gap: 9px; color: var(--text-muted); }
+.run-steps li.done{ color: var(--text-secondary); }
+.run-steps li.now{ color: var(--text-primary); font-weight: 500; }
+.run-label{ flex: 1; min-width: 0; }
+.run-dot{
+  width: 10px; height: 10px; margin-top: 5px; flex-shrink: 0; border-radius: 50%;
+  border: 1.5px solid var(--border-strong);
+}
+.run-steps li.done .run-dot{ background: var(--success); border-color: var(--success); }
+.run-steps li.now .run-dot{ border-color: var(--accent); border-top-color: transparent; animation: run-spin .8s linear infinite; }
+@keyframes run-spin{ to{ transform: rotate(360deg); } }
+.run-count{ color: var(--text-secondary); font-weight: 400; margin-left: 4px; }
+.run-detail{ font-size: 12px; font-weight: 400; color: var(--text-secondary); margin-top: 1px; overflow-wrap: anywhere; }
+.run-time{ font-size: 12px; font-weight: 400; color: var(--text-muted); font-variant-numeric: tabular-nums; }
+.run-foot{ font-size: 12px; }
+@media (prefers-reduced-motion: reduce){
+  .run-bar > span, .run-steps li.now .run-dot{ animation: none; }
 }
  
 .panel-resizer-x{
@@ -687,7 +788,6 @@ body.lettering-mode .bubble-outline { display: none; }
 .lettering-size button { padding: 2px 9px; }
 
 /* arrows on an unprocessed page (process prompt) */
-.process-nav{ display: flex; gap: 8px; justify-content: center; margin-top: 14px; }
 
 /* Lettering panel: font picker (button + search popover, js/editor-lettering.js openFontPicker) + B / I toggles */
 .lettering-font{ display: flex; gap: 4px; align-items: center; flex: 1; min-width: 0; }

@@ -71,6 +71,7 @@ from utils.merge_boxes import build_text_lines, group_lines_into_bubbles, \
 from utils.ignore_filter import filter_ignored_bubbles
 from utils.bubble_post import apply_bubble_postprocess
 from services.bubble_refine import refine_bubbles
+from services import run_progress
 from core.config import get_setting
 from utils.marker import (
     inject_marker, resolve_marker_state, detect_rotation,
@@ -408,6 +409,8 @@ def run_ocr_sliced(image: np.ndarray, debug: dict | None = None) -> tuple[list[d
                 y_end = band[1]                          # at its top: they overlap only in blank rows
         slices.append((y, y_end))
 
+        # the editor's progress panel: how far down the page the reading is (services/run_progress.py)
+        run_progress.advance(y, h, f"part {slice_id + 1}" if slice_h < h else "")
         # Crop current slice from the image
         crop_original = image[y:y_end, :].copy()
         content_w = crop_original.shape[1]
@@ -538,6 +541,7 @@ def _process_image(image_bgr: np.ndarray, protected_terms=()) -> dict:
     # what the OCR saw but did not use, for the editor's OCR debug view (cheap: the raw results are already there)
     debug = {"rejected": [], "cut": []}
     items, slices, marker_records = run_ocr_sliced(image_scaled, debug)
+    run_progress.advance(1, 1, "grouping the lines into bubbles")
     dropped = [{"text": it["text"], "score": float(it["score"]), "box": it["box"],
                 "why": "cut by a slice edge (read whole in the next slice)"} for it in debug["cut"]]
 
@@ -571,6 +575,7 @@ def _process_image(image_bgr: np.ndarray, protected_terms=()) -> dict:
     # Bubble geometry fixes (merge bubbles OCR cut into pieces, re-read half-detected ones). Optional and fail-safe:
     # whatever goes wrong here must not cost the user the OCR result.
     if get_setting("ocr_refine", True):
+        run_progress.note("checking the bubbles: pieces to join, lines to read again")
         partial = {"items": items, "lines": grouped_lines, "bubbles": bubbles}
         try:
             stats = refine_bubbles(image_scaled, partial, ocr_region, scan=get_setting("ocr_scan_missed_bubbles", False))

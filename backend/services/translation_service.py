@@ -55,6 +55,7 @@ from services.memory_service import find_top_matches, is_short_phrase, entry_kin
 from services.glossary_service import load_glossary, match_glossary
 from services.terminology import missing_terms, postedit_missing_terms
 from services.providers import get_provider
+from services import run_progress
 
 
 def is_caps_line(text: str) -> bool:
@@ -165,6 +166,7 @@ def translate_bubbles(
     glossary_by_bubble: dict[str, list[dict]] = {}
     memory_failed = False
     if memory_enabled:
+        run_progress.note("looking for similar lines in your corrections and glossary")   # editor progress panel
         glossary_terms = load_glossary(project_id, db)
         tm_entries = db.query(Correction).filter(Correction.project_id == project_id).all()
         for b in bubbles:
@@ -205,6 +207,9 @@ def translate_bubbles(
     shown_key_label = provider.current_key_label
     shown_key_id = provider.current_key_id                         # "provider/label" - the A/B pair is pinned to it
     shown_model = provider.current_model or ACTIVE_MODEL_NAME     # a key can have its own model (Settings)
+    # what the SERVER said answered (since 2026-11-13; None = not reported). model_used keeps its meaning (the id the
+    # key asks for); this one shows a silent re-route, e.g. gemini-2.5-flash -> its successor after the shutdown
+    shown_served = getattr(provider, "current_served_model", None)
     temperature = getattr(provider, "temperature", None)          # same pool = same temperature for the A/B pair
 
     # 2b. Bubbles the model answered nothing for. Seen 2026-11-11 (gemini-2.5-flash): one bubble sent with four
@@ -278,6 +283,7 @@ def translate_bubbles(
     zero_shot_raw: dict[str, str] = {}
     zero_shot_key_label = None
     zero_shot_model = None
+    zero_shot_served = None
     ab_sampled = MEMORY_AB_TEST_LOGGING and logging_enabled and bool(matches) and random.random() < AB_SAMPLE_RATE
     if ab_sampled:
         counterfactual_payload = context_items + [
@@ -293,6 +299,7 @@ def translate_bubbles(
             zero_shot_raw = provider.translate(counterfactual_payload, pin=shown_key_id)
             zero_shot_key_label = provider.current_key_label
             zero_shot_model = provider.current_model or ACTIVE_MODEL_NAME   # != shown_model = pair not comparable
+            zero_shot_served = getattr(provider, "current_served_model", None)
         except Exception as e:
             # the shown translation is already paid for - a failed experiment call must not fail the page
             print(f"[TRANSLATION] A/B counterfactual failed, skipped: {type(e).__name__}: {e}")
@@ -327,6 +334,8 @@ def translate_bubbles(
             "case_normalized": cased != translation,
             "temperature": temperature,
         }
+        if shown_served:
+            injection["served_model"] = shown_served
         if bid in terms_info:
             injection["terms"] = terms_info[bid]
         if bid in retried:
@@ -368,7 +377,8 @@ def translate_bubbles(
                     injection_json=json.dumps({"lane": None, "counterfactual_of": lane,
                                                "glossary": glossary_by_bubble.get(bid, []),
                                                "batch_size": len(bubbles), "context_bubbles": len(context_items),
-                                               "model_output": zs_raw, "temperature": temperature},
+                                               "model_output": zs_raw, "temperature": temperature,
+                                               **({"served_model": zero_shot_served} if zero_shot_served else {})},
                                               ensure_ascii=False),
                 ))
         else:

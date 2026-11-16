@@ -5,7 +5,23 @@
  * endpoint path ever changes, this is the one file to edit.
  */
  
-export const API_BASE = "http://127.0.0.1:8000";
+// Pages served by the backend itself (/app/... - the packaged app, or http://127.0.0.1:8000/app/ from the source) call
+// the API on their own origin, whatever port the launcher picked. Opened from another local server (VS Code Live
+// Server :5500): the backend's usual address.
+export const SERVED_BY_APP = location.protocol.startsWith("http") && location.pathname.startsWith("/app/");
+export const API_BASE = SERVED_BY_APP ? location.origin : "http://127.0.0.1:8000";
+
+/**
+ * What to tell the user when the backend does not answer. Served from /app/ (the packaged exe, `python launcher.py` or
+ * `python main.py`) the program itself is gone - its window was closed - and "python main.py" would be wrong advice for
+ * the exe; from another local server (Live Server :5500) the backend is a separate thing to start.
+ */
+export function backendDownHint() {
+    return SERVED_BY_APP
+        ? `OpenKeyTranslate is not running any more - was its window (the black console) closed? Start the app again `
+          + `(OpenKeyTranslate.exe, or <code>python launcher.py</code> from the source), then reload this page.`
+        : `Is the backend running? Start it with <code>python main.py</code> in the backend folder, then reload this page.`;
+}
  
 async function request(path, options = {}) {
     const hasBody = options.body !== undefined;

@@ -2,6 +2,58 @@
 
 All notable changes to OpenKeyTranslate. Versions follow `APP_VERSION` in `backend/core/config.py`.
 
+## [Unreleased]
+
+## [0.6.0] - 2026-11-13
+
+### Added
+- **The model that really answered is logged.** Gemini, Groq and OpenAI-compatible servers report which model
+  produced the reply; it goes to the translation log as `served_model` (in `injection_json`). Google re-routes requests
+  for a shut-down model to a newer one without any error (gemini-2.5-flash from 01.12.2026) - before, the log would
+  name the old model for text written by another. The backend log says it once when the two differ.
+- Replay script: an answer from another model than the one asked for is not kept and the run stops.
+- **No credits left (402).** Prepaid keys with a spent balance (Gemini Prepay, OpenRouter) say so instead of a
+  generic rejection; the replay script stops on it.
+- `backend/scripts/work_metrics.py` (thesis, part B - how much work the tool leaves): from the reviewed pages only,
+  no API: bubbles accepted unchanged / edited, character and word edit rate and HTER of the AI draft against the final
+  text, characters saved, the user's manual operations per page by kind. Numbers only, written outside the repository.
+
+- **Windows app.** `OpenKeyTranslate.exe` in a folder (no Python needed): starts the server, opens the browser, the
+  console window shows the log and closing it stops the app. Built only by GitHub Actions from the public source
+  (`.github/workflows/build-windows.yml`, `packaging/okt.spec`), started by hand (Run workflow; a push never builds),
+  checked by a smoke test inside the built app, with a signed build provenance attestation and SHA-256 checksums.
+  CPU only; models are downloaded on the first start.
+- **What a page run is doing.** "Run OCR + translation" shows its steps while it runs - opening the image, reading
+  the text (how far down a tall page), translating (which key it waits for, a retry, a key resting after its limit),
+  erasing, saving - with a bar and the time. The same for a page processing in the background; Re-OCR shows its step
+  on its button. The screen of a page not processed yet is a card with the page itself.
+- **Help: How to fix...** Step-by-step recipes with pictures: text not erased well (which clean tool for which
+  background), bubbles in pieces or glued together, text missing or read wrong (also sound effects), the translation
+  does not fit, translation failed or slow, very tall pages.
+- **Tall pages (webtoon strips):** a one-time tip shows Fit width (with "Don't show this again"); Fit width is kept for
+  the next pages of the project, and the zoom limit grows with the page's height.
+- **No second web server needed.** The backend serves the pages itself at `http://127.0.0.1:8000/app/`;
+  `python launcher.py` starts it and opens the browser (another port when 8000 is taken by a different program;
+  a second start only opens the browser). VS Code Live Server keeps working.
+- OCR self-test inside the Windows app: `OpenKeyTranslate.exe --ocr-selftest`.
+
+### Changed
+- Gemini: default model for NEW installs is gemini-3.6-flash; suggested models are the current free-tier ones
+  (3.6 / 3.8 Flash, 3.5 / 3.1 Flash-Lite, 2.5 Flash-Lite). Existing settings and keys keep their model.
+
+### Fixed
+- **OCR: short words at the line ends split off.** A short word at the end (or start) of two lines in a row
+  ("...THAT MY" over "...BE A", "THE DREAM WAS" over "SO WORN OUT,") was taken for a column of its own: "MY" became a
+  bubble of its own and a lone "A" was dropped as noise. Two such columns now stay one text when every word of the
+  smaller one sits on a row of the other, a word space away. Checked on all 240 processed pages: only these two pages
+  change.
+- **OCR: a line of the neighbouring bubble read twice.** When a half-detected bubble was read again, the rectangle
+  could graze the text of the bubble next to it (a white area shared by two bubbles) and that line was added to the
+  first bubble as well: "BUT THE" stood in two bubbles, was translated twice and the first bubble's area grew over
+  the second. A reading that sits on a line of another bubble is now dropped.
+- The "Couldn't load projects" / "Settings could not be loaded" notes no longer tell the Windows app's user to run
+  `python main.py`: opened from the app (`/app/`) they say the app is not running and how to start it again.
+
 ## [0.5.0] - 2026-11-11
 
 ### Added

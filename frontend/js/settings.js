@@ -5,7 +5,7 @@
  * (an API key typed in but never saved was easy to lose).
  */
  
-import { api, API_BASE } from "./api.js";
+import { api, API_BASE, backendDownHint } from "./api.js";
 import { renderSidebar } from "./nav.js";
 import { askOk, notify, choose } from "./dialogs.js";
 import { ACTIONS, SCOPES, currentBindings, loadOverrides, saveOverrides, validateBinding, comboFromEvent,
@@ -283,7 +283,7 @@ function settingsNotLoaded(message) {
         const note = document.createElement("div");
         note.id = "settingsOffline";
         note.className = "settings-offline";
-        note.innerHTML = `<strong>Settings could not be loaded</strong> - ${message}. Is the backend running? The cards
+        note.innerHTML = `<strong>Settings could not be loaded</strong> - ${message}. ${backendDownHint()} The cards
             that are saved there are locked until it answers (nothing typed into them could be saved); this page reloads
             by itself then. Appearance and keyboard shortcuts work without it.`;
         document.querySelector(".settings-cards .page-header")?.after(note);
@@ -1312,6 +1312,7 @@ async function savedForServer() {
 const RESULT_KIND = {
     RateLimited: ["Rate limit", "The key works, but its limit is used up for now - wait a minute, or add another key below it."],
     KeyRejected: ["Rejected", "Check the key (copy it again), the model name (Models lists what this key can use) and the server address."],
+    OutOfCredits: ["No credits left", "The key itself is fine, but the prepaid balance of its account is used up - add credits on the provider's billing page."],
     Unreachable: ["No connection", "The server did not answer."],
     Transient: ["Server error", "The provider has a problem right now - try again in a moment."],
     unusable: ["Not ready", ""],
@@ -1856,7 +1857,7 @@ async function loadLama() {
         lamaFailedPolls = 0;
     } catch (e) {
         const info = document.getElementById("lamaState");
-        if (info) info.textContent = `State unknown - is the backend running? (${e.message})`;
+        if (info) info.textContent = `State unknown - is the app still running? (${e.message})`;
         if (++lamaFailedPolls < 30) lamaPoll = setTimeout(loadLama, 2000);   // a backend restart: pick the state up again
     }
 }
