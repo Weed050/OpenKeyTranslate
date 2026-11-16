@@ -14,8 +14,9 @@ mentioning response_format) are asked again without it - the prompts already dem
 base URL is remembered for the rest of the run. The reply is parsed tolerantly (code fences, text around the JSON),
 because a local model does not always obey.
 
-Errors are mapped to the shared classes of base.py (429 -> RateLimited, 401/403/404 -> KeyRejected, no connection ->
-Unreachable, 5xx -> Transient), so the pool rotates the same way as for Groq / Gemini.
+Errors are mapped to the shared classes of base.py (429 -> RateLimited, 401/403/404 -> KeyRejected, 402 = prepaid
+credits used up (OpenRouter, DeepSeek) -> OutOfCredits, no connection -> Unreachable, 5xx -> Transient), so the pool
+rotates the same way as for Groq / Gemini.
 """
 
 import json
@@ -25,7 +26,7 @@ from urllib.parse import urlparse
 import httpx
 from pydantic import BaseModel
 
-from .base import RateLimited, KeyRejected, Unreachable, Transient
+from .base import RateLimited, KeyRejected, OutOfCredits, NO_CREDITS, Unreachable, Transient
 from .groq_provider import normalise_batch
 
 # local models can need minutes for a dense page; connecting must still fail fast when nothing listens
@@ -76,6 +77,9 @@ def _raise_for_status(entry: dict, response: httpx.Response) -> None:
     detail = response.text[:300]
     if code == 429:
         raise RateLimited(f"Rate limit or quota reached (429): {detail}")
+    if code == 402:
+        raise OutOfCredits(f"{NO_CREDITS} (402 Payment Required) - the prepaid balance of this key's account at "
+                           f"{host_of(entry) or base_url_of(entry)} is used up; add credits there: {detail}")
     if code in (401, 403):
         raise KeyRejected(f"Key rejected ({code}) - wrong key, or this service needs one: {detail}")
     if code == 404:
@@ -130,9 +134,12 @@ def call(entry: dict, system_prompt: str, user_message: str, schema: type[BaseMo
         _raise_for_status(entry, response)
         break
     try:
-        content = response.json()["choices"][0]["message"]["content"]
+        reply = response.json()
+        content = reply["choices"][0]["message"]["content"]
     except (ValueError, KeyError, IndexError, TypeError) as e:
         raise RuntimeError(f"Unexpected reply from {base}: {response.text[:300]!r}") from e
+    from .base import note_served_model
+    note_served_model(reply.get("model") if isinstance(reply.get("model"), str) else None)  # OpenRouter: the routed model
     return schema.model_validate(normalise_batch(parse_json_reply(content), schema))
 
 

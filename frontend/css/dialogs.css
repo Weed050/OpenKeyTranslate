@@ -35,3 +35,33 @@
 .export-options input[type="number"]{ padding: 3px 6px; }
 .split-target{ display: flex; align-items: center; gap: 8px; font-size: 13px; }
 .split-target select{ max-width: 340px; }
+
+/* find & replace in translations (js/replace-dialog.js) */
+.replace-dialog{ width: min(900px, 94vw); }
+.replace-form{ display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.replace-form input[type="text"]{ flex: 1 1 200px; width: auto; }
+.replace-form select{ width: auto; }
+.replace-body{ min-height: 40px; }
+.rp-head{ display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin-bottom: 6px; }
+.rp-list{ overflow: auto; max-height: 48vh; border: 1px solid var(--border); border-radius: var(--radius-sm); }
+.rp-row{ display: grid; grid-template-columns: 20px 190px 1fr; gap: 4px 8px; align-items: start; padding: 6px 8px;
+  border-top: 1px solid var(--border); font-size: 12.5px; margin: 0; color: var(--text-primary); cursor: pointer; }
+.rp-row:first-child{ border-top: none; }
+.rp-row:hover{ background: var(--bg-hover); }
+.rp-row input{ width: 15px; height: 15px; margin: 2px 0 0; accent-color: var(--accent); }
+.rp-where{ color: var(--text-secondary); font-variant-numeric: tabular-nums; }
+.rp-text{ overflow-wrap: anywhere; }
+
+/* the app's own question dialog (js/dialogs.js choose): title + x, body, optional "remember", answer buttons */
+.choice-head{ display: flex; align-items: center; gap: 8px; }
+.choice-head h2{ margin: 0; font-size: 17px; flex: 1; }
+.choice-body{ display: flex; flex-direction: column; gap: 8px; font-size: 13px; overflow: auto; }
+.choice-body p{ margin: 0; }
+.choice-footer{ flex-wrap: wrap; align-items: center; }
+.choice-left{ display: flex; gap: 8px; margin-right: auto; }
+/* before / after of a bubble source (editor: source edited, bubble re-read) */
+.text-change{ display: grid; grid-template-columns: max-content 1fr; gap: 6px 10px; align-items: baseline; }
+.text-change > span{ color: var(--text-muted); font-size: 12px; }
+.text-change > div{ padding: 6px 8px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg-well); overflow-wrap: anywhere; }
+.text-change del{ color: var(--danger); background: var(--danger-soft); text-decoration: line-through; border-radius: 2px; }
+.text-change ins{ color: var(--success); background: var(--success-soft); text-decoration: none; border-radius: 2px; }

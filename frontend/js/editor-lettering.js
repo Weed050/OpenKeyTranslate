@@ -8,6 +8,11 @@
  *   (drag), resized (corners - also when it is rotated) and turned (the knob above it). On release the change is
  *   stored in the bubble's "layout" (PATCH .../layout) and the page is rendered again.
  * - The side panel sets font size (auto or fixed), alignment, rotation and the white outline, or resets everything.
+ * - Font, bold / italic, letters and outline can be made the PROJECT's style ("Use in whole project", stored in the
+ *   project folder - services/project_prefs.py): every bubble without a style of its own uses it, also on pages
+ *   processed later and in exports. (Before 2026-11-05 the style "carried over" in the browser only to bubbles the
+ *   user opened, so the rest of the project kept the default font.)
+ * - Letters are white by default on a dark text area (auto_color from GET /layout).
  * - Moving to another page in Lettering mode: a page whose bubbles are not all reviewed (edited / accepted marker)
  *   switches to Translate - reviewing comes first; in Translate mode nothing switches by itself.
  * editor.js wires its own functions in through initLettering().
@@ -16,11 +21,12 @@
 import { api, API_BASE } from "./api.js";
 import { pageId, state, el, escapeHtml, showToast } from "./editor-shared.js";
 
+import { askOk } from "./dialogs.js";
 const MODE_KEY = "okt-editor-mode";
 const EXPORT_KEY = "okt-export-options";
 
-/** Callbacks from editor.js: select(i), rerender(), refreshImage(), saveIfChanged(), status(bubble), navigate(dir),
- *  shortcutLabel(actionId), renderReview(slot) (page review controls, js/editor-review.js). */
+/** Callbacks from editor.js: select(i), rerender(), refreshImage(), saveIfChanged(), acceptOpen(), status(bubble),
+ *  navigate(dir), shortcutLabel(actionId), renderReview(slot) (page review controls, js/editor-review.js). */
 let hooks = {};
 
 export function initLettering(editorHooks) {
@@ -46,16 +52,32 @@ export function letteringBlocker() {
     if (!open.length) return null;
     const untranslated = open.filter((b) => !(b.translation || "").trim()).length;
     const n = open.length;
+    const current = state.selectedIndex === null ? null : state.bubbles[state.selectedIndex];
     return {
         message: `${n} bubble${n > 1 ? "s" : ""} not reviewed yet${untranslated ? ` (${untranslated} without a translation)` : ""} - accept or edit ${n > 1 ? "them" : "it"} first.`,
         first: state.bubbles.indexOf(open[0]),
+        // only the bubble that is open in the panel is left (the user read it and switches - like moving on with ->)
+        onlyOpen: n === 1 && open[0] === current && !!(current.translation || "").trim(),
     };
 }
 
 export async function setMode(mode, { quiet = false } = {}) {
     if (mode === state.mode) return;
     if (mode === "lettering") {
-        const blocked = letteringBlocker();
+        // typed text first: it used to be checked BEFORE saving, so an edited last bubble blocked the switch
+        if (!(await hooks.saveIfChanged())) return;
+        let blocked = letteringBlocker();
+        if (blocked?.onlyOpen) {
+            // the last bubble is open and unchanged: switching modes = moving on from it, as the arrow does
+            const n = state.selectedIndex + 1;
+            if (await hooks.acceptOpen()) {
+                blocked = letteringBlocker();
+                if (!blocked) {
+                    showToast(`Bubble ${n} accepted - Lettering`, 2200);
+                    quiet = true;
+                }
+            }
+        }
         if (blocked) {
             // stay in Translate (the view does not change); offer a jump to the first bubble that needs the review
             showToast(`Lettering: ${blocked.message}`, 5000, blocked.first >= 0 && blocked.first !== undefined
@@ -63,8 +85,6 @@ export async function setMode(mode, { quiet = false } = {}) {
             renderModeBar();
             return;
         }
-        if (!(await hooks.saveIfChanged())) return;
-        if (letteringBlocker()) return setMode(mode, { quiet });   // the save changed a status: show the message
     }
     state.mode = mode;
     try { localStorage.setItem(MODE_KEY, mode); } catch { /* this page only */ }
@@ -81,7 +101,7 @@ export async function enterCurrentMode() {
     document.body.classList.toggle("lettering-mode", isLettering());
     if (isLettering()) {
         if (state.previewBeforeLettering === undefined) state.previewBeforeLettering = !!state.preview;
-        state.preview = true;
+        state.preview = !state.letteringTextHidden;     // Preview text off in Lettering = the clean page under the boxes
         await loadLayout();
     } else {
         if (state.previewBeforeLettering !== undefined) state.preview = state.previewBeforeLettering;
@@ -109,6 +129,12 @@ export async function checkReviewedOnLoad() {
 }
 
 async function loadLayout() {
+    if (state.projectId && state.projectStyleFor !== state.projectId) {
+        try {
+            state.projectStyle = (await api.projects.prefs(state.projectId)).lettering_style || {};
+            state.projectStyleFor = state.projectId;
+        } catch { state.projectStyle = state.projectStyle || {}; }
+    }
     try {
         const { bubbles } = await api.pages.layout(pageId);
         state.layout = Object.fromEntries(bubbles.map((p) => [p.bubble_id, p]));
@@ -137,9 +163,8 @@ export function renderModeBar() {
     const exportKey = hooks.shortcutLabel("exportPage");
     // the switch is used most: on the right, next to the side panel it changes; rarely used things on the left
     bar.innerHTML = `
-        <button type="button" id="exportPageBtn" title="Write this page into the project's exported folder (${what}, ${opts.format.toUpperCase()}) - the options are those of the last export on the project page${exportKey ? ` (${exportKey})` : ""}">Export page</button>
-        ${isLettering() ? '<span class="text-muted mode-hint">Drag a box to move it, corners resize (Alt: evenly from the centre), the knob turns it</span>' : ""}
-        <a class="btn" id="viewExportBtn" href="${API_BASE}/pages/${pageId}/exported" target="_blank" rel="noopener" title="Open the last exported image of this page in a new tab">View export</a>
+        <span class="tool-split"><button type="button" id="exportPageBtn" title="Write this page into the project's exported folder (${what}, ${opts.format.toUpperCase()}) - the options are those of the last export on the project page${exportKey ? ` (${exportKey})` : ""}. The arrow: another folder.">Export page</button><button type="button" id="exportPageMenuBtn" class="tool-split-arrow" title="Export this page into another folder" aria-haspopup="menu">&#9662;</button></span>
+        <button type="button" class="link-btn" id="viewExportBtn" title="Open the last exported image of this page in a new tab">View export</button>
         <span class="review-slot" id="reviewSlot"></span>
         <span class="mode-bar-spacer"></span>
         ${toggleKey ? `<span class="text-muted mode-hint"><kbd>${escapeHtml(toggleKey)}</kbd> switches</span>` : ""}
@@ -148,13 +173,76 @@ export function renderModeBar() {
             <button type="button" data-mode="lettering" class="${isLettering() ? "selected" : ""}" role="radio" aria-checked="${isLettering()}">Lettering</button>
         </div>`;
     bar.querySelectorAll("[data-mode]").forEach((b) => b.addEventListener("click", () => setMode(b.dataset.mode)));
-    bar.querySelector("#exportPageBtn").addEventListener("click", exportPage);
+    bar.querySelector("#exportPageBtn").addEventListener("click", () => exportPage());
+    bar.querySelector("#exportPageMenuBtn").addEventListener("click", (e) => openExportMenu(e.currentTarget));
+    bar.querySelector("#viewExportBtn").addEventListener("click", viewExport);
     hooks.renderReview?.(bar.querySelector("#reviewSlot"));
 }
 
-export async function exportPage() {
+/** "View export": the page's last export in a new tab - or a message when there is none yet (it opened an empty
+ *  tab with a JSON error before). The check is quick, so the new tab still counts as opened by the click. */
+async function viewExport() {
+    const url = `${API_BASE}/pages/${pageId}/exported`;
+    try {
+        const r = await fetch(url, { cache: "no-store" });
+        if (r.status === 404) {
+            showToast("This page has not been exported yet - Export page writes it (into the project's exported folder)", 5000,
+                { label: "Export now", run: exportPage });
+            return;
+        }
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        const w = window.open(URL.createObjectURL(await r.blob()), "_blank");
+        if (!w) showToast("The browser blocked the new tab - allow pop-ups for this page", 5000);
+    } catch (e) {
+        showToast(`View export: ${e.message}`, 5000);
+    }
+}
+
+const EXPORT_FOLDER_KEY = "okt-export-page-folder";   // the last folder picked with the arrow next to Export page
+
+/**
+ * The arrow next to "Export page": the project's exported folder (as the button), the last folder picked here, or
+ * another one (the system folder dialog). A picked folder gets <project>/<chapter>/ inside, as Export pages does.
+ */
+function openExportMenu(anchor) {
+    document.getElementById("exportPageMenu")?.remove();
+    let last = "";
+    try { last = localStorage.getItem(EXPORT_FOLDER_KEY) || ""; } catch { /* private mode */ }
+    const menu = document.createElement("div");
+    menu.id = "exportPageMenu";
+    menu.className = "cleanup-menu";
+    menu.setAttribute("role", "menu");
+    menu.innerHTML = `<div class="cleanup-menu-head">Export this page into</div>
+        <button type="button" role="menuitem" data-where="project">Project folder &rsaquo; exported <span class="text-muted">(the button)</span></button>
+        ${last ? `<button type="button" role="menuitem" data-where="last" title="${escapeHtml(last)}">${escapeHtml(last)} <span class="text-muted">&rsaquo; project &rsaquo; chapter</span></button>` : ""}
+        <button type="button" role="menuitem" data-where="pick">Another folder...</button>`;
+    document.body.appendChild(menu);
+    const r = anchor.getBoundingClientRect();
+    Object.assign(menu.style, { left: `${r.left}px`, top: `${Math.max(4, r.top - menu.offsetHeight - 4)}px` });  // the bar is at the bottom
+    const close = () => { menu.remove(); document.removeEventListener("mousedown", outside, true); };
+    const outside = (e) => { if (!menu.contains(e.target) && e.target !== anchor) close(); };
+    menu.querySelectorAll("button[data-where]").forEach((b) => b.addEventListener("click", async () => {
+        close();
+        if (b.dataset.where === "project") return exportPage();
+        if (b.dataset.where === "last") return exportPage(last);
+        let folder = "";
+        try {
+            folder = (await api.projects.selectFolder()).path || "";
+        } catch (e) {
+            showToast(`Couldn't open the folder dialog: ${e.message}`, 5000);
+            return;
+        }
+        if (!folder) return;                                    // dialog cancelled
+        try { localStorage.setItem(EXPORT_FOLDER_KEY, folder); } catch { /* private mode */ }
+        exportPage(folder);
+    }));
+    document.addEventListener("mousedown", outside, true);
+}
+
+/** folder: another folder than the project's exported one ("" = the project folder). */
+export async function exportPage(folder = "") {
     if (!(await hooks.saveIfChanged())) return;
-    const opts = exportOptions();
+    const opts = { ...exportOptions(), path: folder || "" };
     try {
         const r = await api.pages.exportPage(pageId, opts);
         // the file is selected in Explorer: the exported folder lives in the project folder (AppData by default)
@@ -183,7 +271,9 @@ export function renderLetteringOverlay(scale) {
         box.title = `Bubble ${index + 1}${p.overflow ? " - the text does not fit" : ""}`;
         box.innerHTML = `<span class="letter-index">${index + 1}</span>`;
         if (selected) {
-            box.insertAdjacentHTML("beforeend", ["nw", "ne", "sw", "se"].map((h) => `<i class="lh lh-${h}" data-h="${h}"></i>`).join("")
+            // corners: both sides at once; edges (the whole side can be grabbed): that side only
+            box.insertAdjacentHTML("beforeend", ["n", "s", "e", "w"].map((h) => `<i class="le le-${h}" data-h="${h}" title="Drag: move this side (Alt: both opposite sides)"></i>`).join("")
+                + ["nw", "ne", "sw", "se"].map((h) => `<i class="lh lh-${h}" data-h="${h}"></i>`).join("")
                 + '<i class="lrot" data-h="rotate" title="Turn (Shift: free, otherwise snaps to 5°)"></i>');
             box.addEventListener("mousedown", (e) => startDrag(e, bubble.bubble_id, box, scale));
         } else {
@@ -227,21 +317,22 @@ function startDrag(e, bubbleId, node, scale) {
             angle = (Math.atan2(mx, -my) * 180) / Math.PI;
             if (!ev.shiftKey) angle = Math.round(angle / 5) * 5;
         } else {
-            // resize in the box's own (rotated) frame; the opposite corner stays where it is
+            // resize in the box's own (rotated) frame; the opposite corner / side stays where it is. A side handle
+            // (n / s / e / w) changes one direction only (sx or sy = 0)
             const a = rad(start.angle);
             const lx = dx * Math.cos(a) + dy * Math.sin(a);
             const ly = -dx * Math.sin(a) + dy * Math.cos(a);
-            const sx = kind.includes("e") ? 1 : -1;
-            const sy = kind.includes("s") ? 1 : -1;
+            const sx = kind.includes("e") ? 1 : kind.includes("w") ? -1 : 0;
+            const sy = kind.includes("s") ? 1 : kind.includes("n") ? -1 : 0;
             if (ev.altKey) {                         // Alt: grow / shrink evenly in every direction, the centre stays
-                const w = Math.max(12, start.w + 2 * sx * lx);
-                const h = Math.max(12, start.h + 2 * sy * ly);
+                const w = sx ? Math.max(12, start.w + 2 * sx * lx) : start.w;
+                const h = sy ? Math.max(12, start.h + 2 * sy * ly) : start.h;
                 box = [start.cx - w / 2, start.cy - h / 2, start.cx + w / 2, start.cy + h / 2];
                 placeBox(node, box, angle, scale);
                 return;
             }
-            const w = Math.max(12, start.w + sx * lx);
-            const h = Math.max(12, start.h + sy * ly);
+            const w = sx ? Math.max(12, start.w + sx * lx) : start.w;
+            const h = sy ? Math.max(12, start.h + sy * ly) : start.h;
             const ax = -sx * start.w / 2, ay = -sy * start.h / 2;              // anchor in local coordinates
             const gx = start.cx + ax * Math.cos(a) - ay * Math.sin(a);         // ... and on the page
             const gy = start.cy + ax * Math.sin(a) + ay * Math.cos(a);
@@ -265,42 +356,65 @@ function startDrag(e, bubbleId, node, scale) {
 
 /* ------------------------------------------------------------------ changes */
 
-/* ------------------------------------------------------------------ style that carries over to the next bubbles */
+/* ------------------------------------------------------------------ style of the whole project */
 
-// font, B / I, outline and colour chosen on one bubble go with the user to the next ones (a series uses one font);
-// the area, size, alignment and angle belong to each bubble and never carry over.
+// font, B / I, outline and colour can be the PROJECT's style (a series uses one font); the area, size, alignment and
+// angle belong to each bubble. A bubble's own choice wins over the project style (the server keeps only differences).
 const STYLE_DEFAULTS = { font: null, bold: false, italic: false, stroke: "none", color: "black" };
-const CARRY_KEY = "okt-letter-carry";
-const carriedTo = new Set();         // bubbles already given the carried style in this visit (not again after a Reset)
-
-const styleKey = () => `okt-letter-style-${state.projectId || "x"}`;
-
-function carryOn() {
-    try { return localStorage.getItem(CARRY_KEY) !== "0"; } catch { return true; }
-}
-
-function lastStyle() {
-    try { return JSON.parse(localStorage.getItem(styleKey()) || "null"); } catch { return null; }
-}
 
 /** The style of a bubble's placement (GET layout) - every key, defaults included. */
 function styleOfPlacement(p) {
     return { font: p.font || null, bold: !!p.bold, italic: !!p.italic, stroke: p.stroke || "none", color: p.color || "black" };
 }
 
-const isDefaultStyle = (st) => Object.keys(STYLE_DEFAULTS).every((k) => (st[k] ?? STYLE_DEFAULTS[k]) === STYLE_DEFAULTS[k]);
-const ownStyle = (bubble) => Object.keys(STYLE_DEFAULTS).some((k) => bubble.layout && k in bubble.layout);
+function describeStyle(st) {
+    const parts = [st.font || "Settings font", st.bold && "bold", st.italic && "italic",
+                   st.color === "white" && "white letters", st.stroke && st.stroke !== "none" && `${st.stroke} outline`];
+    return parts.filter(Boolean).join(", ");
+}
 
-/** A bubble shown for the first time, with no style of its own: give it the last style the user chose. */
-async function carryStyle(b) {
-    if (carriedTo.has(b.bubble_id)) return;
-    carriedTo.add(b.bubble_id);
-    const st = lastStyle();
-    if (!carryOn() || !st || isDefaultStyle(st) || ownStyle(b) || b.skip) return;
-    await patchLayout(b.bubble_id, st, { remember: false });
-    const what = [st.font || "default font", st.bold && "bold", st.italic && "italic", st.stroke !== "none" && `${st.stroke} outline`,
-                  st.color === "white" && "white letters"].filter(Boolean).join(", ");
-    showToast(`Style carried over: ${what}`, 4000, { label: "Undo", run: () => patchLayout(b.bubble_id, { ...STYLE_DEFAULTS }, { remember: false }) });
+const isDefaultStyle = (st) => Object.keys(STYLE_DEFAULTS).every((k) => (st[k] ?? STYLE_DEFAULTS[k]) === STYLE_DEFAULTS[k]);
+
+/** "Use in whole project": this bubble's font / B / I / letters / outline for every bubble without its own style. */
+async function styleToProject(b) {
+    const p = state.layout[b.bubble_id];
+    const st = styleOfPlacement(p);
+    if (p.auto_color) st.color = "black";       // white only because THIS area is dark - not a project choice
+    const what = describeStyle(st);
+    if (!(await askOk(`Project style: ${what}\n\nUsed by every bubble of the project that has no style of its own - also on pages processed later and in exports. Bubbles you styled yourself keep their style (Reset bubble = project style).`, { ok: "Use in whole project" }))) return;
+    try {
+        const prefs = await api.projects.setPrefs(state.projectId, { lettering_style: isDefaultStyle(st) ? null : st });
+        state.projectStyle = prefs.lettering_style || {};
+        // this page's bubbles that only repeat the new project style: drop the copies, so they follow later changes
+        for (const x of state.bubbles) {
+            const own = x.layout || {};
+            const same = Object.keys(STYLE_DEFAULTS).filter((k) => k in own && (own[k] || STYLE_DEFAULTS[k]) === (st[k] ?? STYLE_DEFAULTS[k]));
+            if (same.length) {
+                // bulk: one click, many requests - the page's manual_ops count it once (routers/pages.py set_bubble_layout)
+                const r = await api.pages.setLayout(pageId, x.bubble_id, { ...Object.fromEntries(same.map((k) => [k, st[k] ?? STYLE_DEFAULTS[k]])), bulk: "project_style" });
+                if (Object.keys(r.layout).length) x.layout = r.layout; else delete x.layout;
+            }
+        }
+        await loadLayout();
+        showToast(`Project style: ${what}`, 3000);
+    } catch (e) {
+        showToast(`Project style: ${e.message}`, 5000);
+    }
+    hooks.refreshImage();
+    hooks.rerender();
+}
+
+async function clearProjectStyle() {
+    if (!(await askOk("Remove the project style? Bubbles without a style of their own go back to the Settings font and plain black letters.", { ok: "Remove", danger: true }))) return;
+    try {
+        state.projectStyle = (await api.projects.setPrefs(state.projectId, { lettering_style: null })).lettering_style || {};
+        await loadLayout();
+        showToast("Project style removed", 2500);
+    } catch (e) {
+        showToast(`Project style: ${e.message}`, 5000);
+    }
+    hooks.refreshImage();
+    hooks.rerender();
 }
 
 /** This bubble's style on every other translated bubble of the page. */
@@ -310,10 +424,9 @@ async function styleToPage(b) {
     if (!others.length) return;
     try {
         for (const x of others) {
-            const r = await api.pages.setLayout(pageId, x.bubble_id, st);
+            const r = await api.pages.setLayout(pageId, x.bubble_id, { ...st, bulk: "page_style" });
             if (Object.keys(r.layout).length) x.layout = r.layout; else delete x.layout;
             if (r.placement) state.layout[x.bubble_id] = r.placement;
-            carriedTo.add(x.bubble_id);
         }
         showToast(`Style used on ${others.length} more bubble${others.length > 1 ? "s" : ""}`, 2500);
     } catch (e) {
@@ -323,12 +436,9 @@ async function styleToPage(b) {
     hooks.rerender();
 }
 
-export async function patchLayout(bubbleId, changes, { remember = true } = {}) {
+export async function patchLayout(bubbleId, changes) {
     try {
         const r = await api.pages.setLayout(pageId, bubbleId, changes);
-        if (remember && r.placement && Object.keys(changes).some((k) => k in STYLE_DEFAULTS)) {
-            try { localStorage.setItem(styleKey(), JSON.stringify(styleOfPlacement(r.placement))); } catch { /* this page only */ }
-        }
         const bubble = state.bubbles.find((b) => b.bubble_id === bubbleId);
         if (bubble) {
             if (Object.keys(r.layout).length) bubble.layout = r.layout;
@@ -384,20 +494,82 @@ function rememberFont(family) {
     try { localStorage.setItem(RECENT_FONTS_KEY, JSON.stringify(list)); } catch { /* this page only */ }
 }
 
-function fontOptions(current) {
+/** Groups of the font list: [label, [{family, polish, source}]] - recently used, your fonts, system fonts. */
+function fontGroups() {
     const fonts = fontList || [];
     const known = new Set(fonts.map((f) => f.family));
-    const opt = (f) => `<option value="${escapeHtml(f.family)}" ${f.family === current ? "selected" : ""}>${escapeHtml(f.family)}${f.polish ? "" : " (no Polish!)"}</option>`;
     const recent = recentFonts().filter((r) => known.has(r)).map((r) => fonts.find((f) => f.family === r));
-    const mine = fonts.filter((f) => f.source === "user");
-    const polish = fonts.filter((f) => f.source === "system" && f.polish);
-    const other = fonts.filter((f) => f.source === "system" && !f.polish);
-    return `<option value="" ${current ? "" : "selected"}>Default (Settings)</option>`
-        + (current && !known.has(current) ? `<option value="${escapeHtml(current)}" selected>${escapeHtml(current)} (not found)</option>` : "")
-        + (recent.length ? `<optgroup label="Recently used">${recent.map(opt).join("")}</optgroup>` : "")
-        + (mine.length ? `<optgroup label="Your fonts">${mine.map(opt).join("")}</optgroup>` : "")
-        + `<optgroup label="System fonts with Polish letters">${polish.map(opt).join("")}</optgroup>`
-        + (other.length ? `<optgroup label="Other system fonts">${other.map(opt).join("")}</optgroup>` : "");
+    return [
+        ["Recently used", recent],
+        ["Your fonts", fonts.filter((f) => f.source === "user")],
+        ["System fonts with Polish letters", fonts.filter((f) => f.source === "system" && f.polish)],
+        ["Other system fonts (no Polish letters)", fonts.filter((f) => f.source === "system" && !f.polish)],
+    ].filter(([, list]) => list.length);
+}
+
+/**
+ * Font picker with a search box (a plain select with ~200 system fonts was a long scroll): click the button, type a
+ * part of the name, arrows + Enter or a click picks. System fonts are shown in their own face (the browser has them);
+ * fonts you added are in the app's folder only, so they show in the normal face. onPick(family | "" = Settings font).
+ */
+function openFontPicker(anchor, current, onPick) {
+    document.getElementById("fontPicker")?.remove();
+    const pop = document.createElement("div");
+    pop.id = "fontPicker";
+    pop.className = "font-picker-pop";
+    pop.innerHTML = `<input type="search" class="font-picker-search" placeholder="Search fonts..." spellcheck="false" aria-label="Search fonts">
+        <div class="font-picker-list" role="listbox"></div>`;
+    document.body.appendChild(pop);
+    const r = anchor.getBoundingClientRect();
+    const below = window.innerHeight - r.bottom - 12;
+    const height = Math.min(360, Math.max(below, r.top - 12));
+    Object.assign(pop.style, { left: `${Math.max(8, Math.min(r.left, window.innerWidth - 300))}px`, width: `${Math.max(r.width, 280)}px`,
+                               maxHeight: `${height}px` });
+    if (below >= Math.min(360, r.top - 12)) pop.style.top = `${r.bottom + 4}px`;
+    else pop.style.bottom = `${window.innerHeight - r.top + 4}px`;
+    const input = pop.querySelector("input");
+    const list = pop.querySelector(".font-picker-list");
+    let active = 0;
+
+    const options = () => [...list.querySelectorAll(".font-opt")];
+    const mark = (i) => {
+        const all = options();
+        if (!all.length) return;
+        active = (i + all.length) % all.length;
+        all.forEach((o, k) => o.classList.toggle("active", k === active));
+        all[active].scrollIntoView({ block: "nearest" });
+    };
+    const render = () => {
+        const q = input.value.trim().toLowerCase();
+        const opt = (f) => `<div class="font-opt${f.family === current ? " current" : ""}" role="option" data-family="${escapeHtml(f.family)}"
+            ${f.source === "system" ? `style="font-family:'${escapeHtml(f.family.replace(/'/g, ""))}', sans-serif"` : ""}>${escapeHtml(f.family)}${f.polish ? "" : ' <span class="text-muted">(no Polish!)</span>'}</div>`;
+        let html = q && !"default (settings)".includes(q) ? "" : `<div class="font-opt${current ? "" : " current"}" role="option" data-family="">Default (Settings)</div>`;
+        const seen = new Set();
+        for (const [label, fonts] of fontGroups()) {
+            const hits = fonts.filter((f) => (!q || f.family.toLowerCase().includes(q)) && !(q && seen.has(f.family)));
+            hits.forEach((f) => seen.add(f.family));
+            if (hits.length) html += `<div class="font-group">${escapeHtml(label)}</div>${hits.map(opt).join("")}`;
+        }
+        list.innerHTML = html || '<div class="font-empty text-muted">No font with that name - add fonts in Settings &gt; Text &amp; fonts</div>';
+        mark(q ? 0 : Math.max(0, options().findIndex((o) => o.classList.contains("current"))));
+    };
+    const close = () => {
+        pop.remove();
+        document.removeEventListener("mousedown", outside, true);
+    };
+    const pick = (o) => { close(); if (o) onPick(o.dataset.family); };
+    const outside = (e) => { if (!pop.contains(e.target) && e.target !== anchor) close(); };
+    list.addEventListener("mousedown", (e) => { e.preventDefault(); pick(e.target.closest(".font-opt")); });
+    input.addEventListener("input", render);
+    input.addEventListener("keydown", (e) => {
+        if (e.key === "ArrowDown") { e.preventDefault(); mark(active + 1); }
+        else if (e.key === "ArrowUp") { e.preventDefault(); mark(active - 1); }
+        else if (e.key === "Enter") { e.preventDefault(); pick(options()[active]); }
+        else if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); close(); anchor.focus(); }
+    });
+    document.addEventListener("mousedown", outside, true);
+    render();
+    input.focus();
 }
 
 /* ------------------------------------------------------------------ side panel */
@@ -423,17 +595,28 @@ export function renderLetteringPanel() {
         wireNav(panel);
         return;
     }
-    if (!carriedTo.has(b.bubble_id)) {
-        carryStyle(b);               // re-renders the panel when it changes something
-    }
+    // the lines as drawn - unless the automatic wrap had to cut a word (hyphens added): then the plain text
+    const squash = (t) => (t || "").replace(/\s+/g, "").toLowerCase();
+    const drawn = (p.line_texts || []).join("\n");
+    const linesText = squash(drawn) === squash(b.translation) ? drawn : (b.translation || "");
     const seg = (name, options, current) => `<div class="segmented" data-field="${name}">${options.map(([v, label, title]) =>
         `<button type="button" data-value="${v}" class="${String(v) === String(current) ? "selected" : ""}" title="${title || label}">${label}</button>`).join("")}</div>`;
     panel.innerHTML = `
         <div class="lettering-panel">
             <div class="field-label">Bubble ${index + 1}</div>
             <div class="lettering-text">${escapeHtml(b.translation || "")}</div>
-            <p class="text-muted lettering-note">Edit the words in Translate - here only where and how they are drawn.</p>
-            ${p.overflow ? '<p class="import-error">The text does not fit this area - make the box bigger or the font smaller.</p>' : ""}
+            <p class="text-muted lettering-note">Edit the words in Translate - here only where and how they are drawn. On the page: drag the box to move it, corners and sides resize (Alt: evenly from the centre), the knob above turns it.</p>
+            <div class="lettering-row lettering-lines-row"><span>Lines</span>
+                <span class="lettering-lines">
+                    <textarea id="letterLines" rows="${Math.min(8, Math.max(2, linesText.split("\n").length))}" spellcheck="false"
+                        title="The text as it is drawn, line by line. Enter = your own line break (also inside a word: a sound effect one letter per line). Only the breaks can change here.">${escapeHtml(linesText)}</textarea>
+                    <span class="lettering-lines-btns">
+                        <button type="button" data-act="linesVertical" title="One letter per line, an empty line between words - for a tall narrow bubble or a sound effect written downwards">Vertical</button>
+                        ${p.manual_lines ? '<button type="button" data-act="linesAuto" title="Your line breaks off - the automatic wrap again">Reset</button>' : '<span class="text-muted" title="Line breaks chosen automatically">auto</span>'}
+                    </span>
+                </span></div>
+            ${p.overflow ? `<p class="import-error">The text does not fit this area - make the box bigger or the font smaller.
+                ${p.text_size ? '<button type="button" data-act="boxToText" title="Make the box as big as the text needs at this font size (the middle stays; within the page)">Box to the text</button>' : ""}</p>` : ""}
             <div class="lettering-row"><span>Area</span>
                 <span>${p.manual_box ? "drawn by you" : "automatic (bubble inside)"}</span>
                 ${p.manual_box ? '<button type="button" data-act="areaAuto" title="Back to the automatic area">Automatic</button>' : ""}</div>
@@ -446,7 +629,8 @@ export function renderLetteringPanel() {
                 </span></div>
             <div class="lettering-row"><span>Font</span>
                 <span class="lettering-font">
-                    <select id="letterFont" title="Font of this bubble (fonts: Settings > Text &amp; fonts)">${fontOptions(p.font || "")}</select>
+                    <button type="button" id="letterFont" class="font-picker-btn" title="Font of this bubble - click and type to search (fonts: Settings > Text &amp; fonts)"
+                        ${p.font ? `style="font-family:'${escapeHtml(p.font.replace(/'/g, ""))}', inherit"` : ""}>${escapeHtml(p.font || "Default (Settings)")}<span class="chev">&#9662;</span></button>
                     <button type="button" data-act="bold" class="${p.bold ? "selected" : ""}" title="Bold (imitated when the font has no bold file)"><b>B</b></button>
                     <button type="button" data-act="italic" class="${p.italic ? "selected" : ""}" title="Italic (imitated when the font has no italic file)"><i>I</i></button>
                 </span></div>
@@ -460,14 +644,16 @@ export function renderLetteringPanel() {
                     ${p.angle ? '<button type="button" data-act="rotZero">0°</button>' : ""}
                     ${p.angle && !p.manual_angle ? '<span class="text-muted" title="The original text is tilted - the translation follows it">auto</span>' : ""}
                 </span></div>
-            <div class="lettering-row"><span>Letters</span>${seg("color", [["black", "Black", "Black letters (outline: white)"], ["white", "White", "White letters (outline: black) - text on dark artwork"]], p.color || "black")}</div>
+            <div class="lettering-row"><span>Letters</span>${seg("color", [["black", "Black", "Black letters (outline: white)"], ["white", "White", "White letters (outline: black) - text on dark artwork"]], p.color || "black")}
+                ${p.auto_color ? '<span class="text-muted" title="The text area is dark, so the letters are white unless you choose">auto</span>' : ""}</div>
             <div class="lettering-row"><span>Outline</span>${seg("stroke", [["none", "None"], ["thin", "Thin", "Thin outline in the other colour"], ["thick", "Thick", "Thick outline in the other colour"]], p.stroke)}</div>
             ${p.stroke !== "none" && (p.color || "black") === "black" ? '<p class="text-muted lettering-note">The outline is white: in a white bubble it is invisible - it shows where the text lies over artwork.</p>' : ""}
             <div class="lettering-row lettering-style-row">
-                <label class="checkbox-label" title="Font, bold / italic, letters and outline chosen here are given to the next bubbles you open (that have no style of their own)">
-                    <input type="checkbox" id="letterCarry" ${carryOn() ? "checked" : ""}> Next bubbles get this style</label>
-                <button type="button" data-act="styleToPage" title="Font, bold / italic, letters and outline of this bubble on every bubble of this page">Use on whole page</button>
+                <button type="button" data-act="styleToProject" title="Font, bold / italic, letters and outline of this bubble for EVERY bubble of the project without a style of its own - also pages processed later and exports">Use in whole project</button>
+                <button type="button" data-act="styleToPage" title="Font, bold / italic, letters and outline of this bubble on every bubble of this page (as their own style)">Use on whole page</button>
             </div>
+            ${Object.keys(state.projectStyle || {}).length ? `<p class="text-muted lettering-note">Project style: ${escapeHtml(describeStyle(state.projectStyle))}
+                <button type="button" class="link-btn" data-act="clearProjectStyle" title="Back to the Settings font and plain black letters for bubbles without their own style">remove</button></p>` : ""}
             <div class="detail-actions detail-bottom">
                 <button type="button" data-act="fit" title="Text area = the inside of the bubble, centred both ways, largest size that fits (font, outline and angle stay)">Fit to bubble</button>
                 <button type="button" data-act="reset" title="Everything of this bubble back to automatic">Reset bubble</button>
@@ -475,8 +661,11 @@ export function renderLetteringPanel() {
             </div>
         </div>`;
     const id = b.bubble_id;
-    panel.querySelectorAll(".segmented[data-field] button").forEach((btn) => btn.addEventListener("click", () =>
-        patchLayout(id, { [btn.parentElement.dataset.field]: btn.dataset.value })));
+    panel.querySelectorAll(".segmented[data-field] button").forEach((btn) => btn.addEventListener("click", () => {
+        const field = btn.parentElement.dataset.field;
+        // black on an area that made the letters white automatically: stored on purpose (it is the default otherwise)
+        patchLayout(id, { [field]: btn.dataset.value, ...(field === "color" && p.auto_color ? { color_explicit: true } : {}) });
+    }));
     const act = (name, fn) => panel.querySelector(`[data-act="${name}"]`)?.addEventListener("click", fn);
     act("areaAuto", () => patchLayout(id, { box: null }));
     act("smaller", () => patchLayout(id, { font_size: Math.max(6, p.font_size - 2) }));
@@ -487,19 +676,44 @@ export function renderLetteringPanel() {
     act("rotZero", () => patchLayout(id, { angle: 0 }));
     act("reset", () => patchLayout(id, { reset: true }));
     act("fit", () => patchLayout(id, { box: null, font_size: null, align: "center", valign: "middle" }));
+    act("linesAuto", () => patchLayout(id, { lines: null }));
+    // every word letter by letter, words apart by an empty line (the field accepted that typed by hand already)
+    act("linesVertical", () => {
+        const words = (b.translation || "").split(/\s+/).filter(Boolean);
+        if (!words.length) return;
+        patchLayout(id, { lines: words.flatMap((w, i) => [...(i ? [""] : []), ...Array.from(w)]) });
+    });
+    // "Box to the text": at least as big as the text needs (+ a small margin), around the same middle
+    act("boxToText", () => {
+        const [x1, y1, x2, y2] = p.box;
+        const [tw, th] = p.text_size;
+        const w = Math.max(x2 - x1, tw + 8), h = Math.max(y2 - y1, th + 8);
+        const cx = (x1 + x2) / 2, cy = (y1 + y2) / 2;
+        const W = state.naturalW || Infinity, H = state.naturalH || Infinity;
+        let nx1 = cx - w / 2, ny1 = cy - h / 2;
+        nx1 = Math.max(0, Math.min(nx1, W - w));            // within the page: shifted rather than cut
+        ny1 = Math.max(0, Math.min(ny1, H - h));
+        patchLayout(id, { box: [nx1, ny1, nx1 + w, ny1 + h].map((v) => Math.round(v)) });
+    });
+    panel.querySelector("#letterLines").addEventListener("change", (e) => {
+        const typed = e.target.value;
+        if (squash(typed) !== squash(b.translation)) {
+            showToast("Only the line breaks can be changed here - edit the words in Translate", 4500);
+            e.target.value = linesText;
+            return;
+        }
+        if (typed.trim() !== linesText.trim()) patchLayout(id, { lines: typed.split("\n") });
+    });
     act("bold", () => patchLayout(id, { bold: !p.bold }));
     act("italic", () => patchLayout(id, { italic: !p.italic }));
     act("styleToPage", () => styleToPage(b));
-    panel.querySelector("#letterCarry").addEventListener("change", (e) => {
-        try { localStorage.setItem(CARRY_KEY, e.target.checked ? "1" : "0"); } catch { /* this page only */ }
-        if (e.target.checked) {      // what is on this bubble now is what carries over
-            try { localStorage.setItem(styleKey(), JSON.stringify(styleOfPlacement(p))); } catch { /* ignore */ }
-        }
-    });
-    panel.querySelector("#letterFont").addEventListener("change", (e) => {
-        rememberFont(e.target.value);
-        patchLayout(id, { font: e.target.value || null });
-    });
+    act("styleToProject", () => styleToProject(b));
+    act("clearProjectStyle", clearProjectStyle);
+    const fontBtn = panel.querySelector("#letterFont");
+    fontBtn.addEventListener("click", () => openFontPicker(fontBtn, p.font || "", (family) => {
+        rememberFont(family);
+        patchLayout(id, { font: family || null });
+    }));
     panel.querySelector("#letterSize").addEventListener("change", (e) => patchLayout(id, { font_size: parseInt(e.target.value, 10) || null }));
     panel.querySelector("#letterAngle").addEventListener("change", (e) => patchLayout(id, { angle: parseFloat(e.target.value) || 0 }));
     wireNav(panel);

@@ -9,7 +9,9 @@
  * "Translation reviewed" = the text of every bubble was accepted or edited by the user; "Fully reviewed" = that AND
  * the bubbles themselves (boxes, reading order, cleaning, lettering) marked as checked in the editor.
  * "Exported" is optional (off by default): an export can go to any folder or a ZIP and is not part of the review, so
- * by default an exported page counts as reviewed. The legend / status filter turns it on.
+ * by default an exported page counts as reviewed. The legend / status filter turns it on. A page exported BEFORE its
+ * review stays in its stage; with "Exported" on its tile says "exported" and the project card counts it
+ * (exportedDraftNote). An export whose file was deleted no longer counts (services/page_progress.py).
  * Colours: css/tokens.css --stage-* (fixed muted hues, one per stage - see the comment there).
  */
 
@@ -100,7 +102,7 @@ export function countGroups(stageCounts) {
         return out;
     }
     for (const [stage, n] of Object.entries(stageCounts)) {
-        if (stage === "exported_checked") continue;      // extra count, not a stage (services/page_progress.py)
+        if (stage === "exported_checked" || stage === "exported_draft") continue;   // extra counts, not stages (services/page_progress.py)
         const g = stageGroup(stage);
         if (g) out[g] += n;
     }
@@ -146,6 +148,13 @@ export function stageChipsHtml(counts, esc) {
         .map((g) => `<span class="stage-chip" title="${esc(`${counts[g.id]} ${g.label}: ${g.tip}`)}"><i class="dot stage-${g.id}"></i>${counts[g.id]}</span>`);
     if (counts.todo) chips.push(`<span class="stage-chip muted" title="${esc(BY_ID.todo.tip)}">${counts.todo} not started</span>`);
     return chips.join("");
+}
+
+/** Project card: "n exported before the review" (AI drafts exported as they were) - only while "Exported" is shown. */
+export function exportedDraftNote(stageCounts, esc) {
+    const n = (stageCounts && stageCounts.exported_draft) || 0;
+    if (!n || !trackExported()) return "";
+    return `<span class="legend-note" title="${esc("Exported with AI text nobody has reviewed yet - they stay in their stage (Translated (AI) etc.) until you review them")}">${n} exported before the review</span>`;
 }
 
 /** Legend chips with dots, names and counts (project card; the page list builds a clickable one from this list). */

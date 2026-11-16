@@ -62,13 +62,32 @@ def _norm_words(text: str) -> list[str]:
 
 # ------------------------------------------------------------------ reading a region as ONE bubble
 
-def read_region(image, bbox, ocr_region_fn) -> dict | None:
+SAME_LINE_SHARE = 0.5          # a reading covering this much of an existing line IS that line (same pixels read again)
+
+
+def overlap_share(a, b) -> float:
+    """Share (0..1) of the SMALLER of two boxes (4-point polygons) that the other one covers."""
+    ax1, ay1, ax2, ay2 = bbox_of(a)
+    bx1, by1, bx2, by2 = bbox_of(b)
+    w, h = min(ax2, bx2) - max(ax1, bx1), min(ay2, by2) - max(ay1, by1)
+    if w <= 0 or h <= 0:
+        return 0.0
+    smaller = min((ax2 - ax1) * (ay2 - ay1), (bx2 - bx1) * (by2 - by1))
+    return (w * h) / smaller if smaller > 0 else 0.0
+
+
+def read_region(image, bbox, ocr_region_fn, exclude=()) -> dict | None:
     """
     OCR a rectangle and treat everything found there as the lines of a single bubble.
+    :param exclude: boxes of lines that belong to OTHER bubbles. The rectangle can graze the neighbour's text (a white
+        area shared by two bubbles, page 12 "BUT THE"); a reading that sits on such a line is that line read a second
+        time and is dropped, otherwise the same words end up in two bubbles and are translated and typeset twice.
     :return: None when nothing was read, else
              {"text", "box" (union of lines), "avg_score", "lines": [{"box", "text", "score"}], "items": [...]}
     """
     items = ocr_region_fn(image, bbox) or []
+    if exclude:
+        items = [it for it in items if not any(overlap_share(it["box"], e) >= SAME_LINE_SHARE for e in exclude)]
     if not items:
         return None
     for i, it in enumerate(items):
@@ -112,8 +131,18 @@ def _bubble_target(result: dict, bubble: dict) -> dict:
             "boxes": [by_id[i]["box"] for i in bubble.get("line_ids", []) if i in by_id]}
 
 
+MERGE_MAX_GAP_LINES = 3.5      # text blocks further apart than this many line heights are never merged
+
+
 def merge_split_bubbles(image, result: dict) -> int:
-    """Merge bubbles whose texts lie in one and the same outlined white area. Returns how many bubbles disappeared."""
+    """
+    Merge bubbles whose texts lie in one and the same outlined white area. Returns how many bubbles disappeared.
+    Distance limit (2026-11-05): besides the gap relative to the BLOCK size, the vertical gap must stay within
+    MERGE_MAX_GAP_LINES line heights. A piece cut off by a missed line or two is 1-2 lines away; two text blocks in
+    the two lobes of a connected balloon (Chapter_3/page_018: 7 line heights apart) or two labels in one frame
+    (Chapter_4/page_005: 6) are separate bubbles - merged, their texts were typeset into the middle of the balloon.
+    Of the 44 merges stored in the test project it undoes 2 (Chapter_4/page_005 at 6.0, Chapter_3/page_009 at 4.5).
+    """
     bubbles = result["bubbles"]
     n = len(bubbles)
     if n < 2:
@@ -129,11 +158,14 @@ def merge_split_bubbles(image, result: dict) -> int:
 
     for i in range(n):
         for j in range(i + 1, n):
+            if bubbles[i].get("diagram_part") or bubbles[j].get("diagram_part"):
+                continue                                          # split on purpose (split_at_operator_lines)
             a, b = boxes[i], boxes[j]
             gap_x = max(0.0, max(a[0], b[0]) - min(a[2], b[2]))
             gap_y = max(0.0, max(a[1], b[1]) - min(a[3], b[3]))
             wa, wb, ha, hb = a[2] - a[0], b[2] - b[0], a[3] - a[1], b[3] - b[1]
-            if gap_x > 0.5 * min(wa, wb) or gap_y > 2.5 * max(ha, hb):
+            line_h = max(ha / max(1, bubbles[i].get("line_count") or 1), hb / max(1, bubbles[j].get("line_count") or 1))
+            if gap_x > 0.5 * min(wa, wb) or gap_y > 2.5 * max(ha, hb) or gap_y > MERGE_MAX_GAP_LINES * line_h:
                 continue                                          # too far apart to be pieces of one bubble
             if find(i) == find(j):
                 continue
@@ -248,30 +280,125 @@ def split_distant_numbers(result: dict) -> int:
     return extra
 
 
+# ------------------------------------------------------------------ a diagram / a sum: "A + B + C = TOTAL"
+
+_OPERATOR_CHARS = set("+=＋＝‖↓↑→←⇒⇓⇑⇐⬇⬆➡⬅")
+# a vertical "=" (||) the OCR reads as letters - an operator only inside a diagram that already has a sure one
+_WEAK_OPERATORS = {"||", "|", "II", "ll", "Il", "lI"}
+SPLIT_OPERATORS = True
+
+
+def _is_operator_line(text: str) -> bool:
+    """Only +, =, ‖ or arrows. "II" / "||" alone are not enough: a misread "I" or a roman numeral look the same."""
+    t = text.replace(" ", "")
+    return bool(t) and all(c in _OPERATOR_CHARS for c in t)
+
+
+def split_at_operator_lines(result: dict) -> int:
+    """
+    A line made only of +, =, ‖ or an arrow between other lines is not speech but a diagram or a sum (Black Jack
+    Chapter_1/page_023: "FIRST VISIT CHARGE 250 POINTS + COMING AT NIGHT 480 POINTS + ... || TOTAL"). Read as one
+    bubble, its translation was typeset as one block over the whole drawing. Every part between the signs becomes its
+    own bubble, and every sign too (the symbols filter skips those - they stay on the page as drawn). In such a diagram
+    a line read as "II" / "ll" is the vertical "=" (||): it is written as "||" and splits too.
+    The user split this diagram the same way by hand on both Black Jack projects (only the signs were kept with an item).
+    Returns how many extra bubbles appeared.
+    """
+    if not SPLIT_OPERATORS:
+        return 0
+    by_line = {l["line_id"]: l for l in result["lines"]}
+    out, extra = [], 0
+    for b in result["bubbles"]:
+        ids = sorted((i for i in b.get("line_ids", []) if i in by_line),
+                     key=lambda i: (bbox_of(by_line[i]["box"])[1], bbox_of(by_line[i]["box"])[0]))
+        ops = {i for i in ids if _is_operator_line(by_line[i]["text"])}
+        if len(ids) < 3 or not ops or len(ops) == len(ids):
+            out.append(b)
+            continue
+        for i in ids:
+            if i not in ops and by_line[i]["text"].replace(" ", "") in _WEAK_OPERATORS:
+                by_line[i]["text"] = "||"                     # the symbols filter skips it, it stays drawn
+                ops.add(i)
+        blocks, current = [], []
+        for i in ids:
+            if i in ops:
+                if current:
+                    blocks.append(current)
+                    current = []
+                blocks.append([i])
+            else:
+                current.append(i)
+        if current:
+            blocks.append(current)
+        extra += len(blocks) - 1
+        for block in blocks:
+            nb = _bubble_from_lines([by_line[i] for i in block], b["bubble_id"])
+            nb["split_from"] = b["bubble_id"]
+            nb["diagram_part"] = True                  # merge_split_bubbles must not glue the parts back together
+            out.append(nb)
+    if extra:
+        result["bubbles"] = out
+        _renumber_by_position(result)
+    return extra
+
+
+# Lines stacked this close (gap in line heights; boxes usually touch or overlap) are lines of ONE text block: two
+# separate bubbles always have two outlines and their white margins between their texts. None = rule off.
+TIGHT_GAP_LINES = 0.35
+
+
+def _tight_pair(a, b) -> bool:
+    """Box b right above / below box a with (almost) no gap, overlapping it horizontally by half the narrower one."""
+    lh = min(a[3] - a[1], b[3] - b[1])
+    gap = max(b[1] - a[3], a[1] - b[3])                        # negative = the boxes overlap vertically
+    if TIGHT_GAP_LINES is None or gap > TIGHT_GAP_LINES * lh or gap < -0.5 * lh:   # < -0.5: same row, not stacked
+        return False
+    return min(a[2], b[2]) - max(a[0], b[0]) >= 0.5 * min(a[2] - a[0], b[2] - b[0])
+
+
+def _with_tight_lines(inside: list, remaining: list, box_of) -> list:
+    """inside + every remaining line chained to it by _tight_pair (the line under a wall line, the one under that...)."""
+    inside = list(inside)
+    grew = True
+    while grew:
+        grew = False
+        for i in remaining:
+            if i not in inside and any(_tight_pair(box_of(i), box_of(j)) for j in inside):
+                inside.append(i)
+                grew = True
+    return inside
+
+
 def split_bubbles_by_interior(image, result: dict) -> int:
     """
     The OCR groups text LINES into bubbles by their positions only, so lines that are close but belong to different
     outlined bubbles (two bubbles in one column, a bubble above a caption in the next panel) end up together.
     A line whose interior (flood fill) does not contain the bubble's other lines starts a new bubble. If no interior can
     be found for a line (text over artwork, open outline) nothing is split - no evidence, no change.
+
+    Lines stacked tightly on a line that stays (_tight_pair) stay too (2026-11-10). Large lettering touches the outline
+    on BOTH sides (Black Jack: "ACCIDENTS", "USHIDA!"); its letters then wall the interior off, and the line plus
+    everything under it used to become a separate bubble - 6 of 7 bubbles on Chapter_1/page_024 were cut in two.
     Returns how many extra bubbles appeared.
     """
     by_line = {l["line_id"]: l for l in result["lines"]}
+    box_of = lambda i: bbox_of(by_line[i]["box"])   # noqa: E731
     out, extra = [], 0
     for b in result["bubbles"]:
         ids = [i for i in b.get("line_ids", []) if i in by_line]
         if len(ids) < 2:
             out.append(b)
             continue
-        remaining = sorted(ids, key=lambda i: (bbox_of(by_line[i]["box"])[1], bbox_of(by_line[i]["box"])[0]))
+        remaining = sorted(ids, key=lambda i: (box_of(i)[1], box_of(i)[0]))
         groups = []
         while remaining:
-            first_box = bbox_of(by_line[remaining[0]]["box"])
+            first_box = box_of(remaining[0])
             it = find_interior(image, center(first_box), first_box)
             if it is None:
                 groups.append(remaining)                       # cannot tell: keep the rest together
                 break
-            inside = [i for i in remaining if it.encloses(bbox_of(by_line[i]["box"]))] or [remaining[0]]
+            inside = [i for i in remaining if it.encloses(box_of(i))] or [remaining[0]]
+            inside = _with_tight_lines(inside, remaining, box_of)
             groups.append(inside)
             remaining = [i for i in remaining if i not in inside]
         if len(groups) == 1:
@@ -336,7 +463,7 @@ def find_orphan_bubbles(image, result: dict, ocr_region_fn, max_candidates: int 
         candidates.append((len(glyphs), (x + gx1 - 10, y + gy1 - 10, x + gx2 + 10, y + gy2 + 10)))
     added = 0
     for _, region in sorted(candidates, reverse=True)[:max_candidates]:
-        reading = read_region(image, region, ocr_region_fn)
+        reading = read_region(image, region, ocr_region_fn, exclude=[l["box"] for l in result["lines"]])
         if reading is None or reading["avg_score"] < 0.85 or not _is_plausible_text(reading["text"]):
             continue
         base = _next_line_number(result)
@@ -371,7 +498,8 @@ def refine_missed_text(image, result: dict, ocr_region_fn) -> int:
         if any(it.encloses(bbox_of(l["box"])) for l in result["lines"] if l["line_id"] not in own):
             continue
         region = expand(it.bbox, 0.02, iw, ih)
-        reading = read_region(image, region, ocr_region_fn)
+        others = [l["box"] for l in result["lines"] if l["line_id"] not in own]
+        reading = read_region(image, region, ocr_region_fn, exclude=others)
         if reading is None or not _more_complete(bubble["text"], reading["text"]):
             continue
 
@@ -396,8 +524,9 @@ def refine_missed_text(image, result: dict, ocr_region_fn) -> int:
 
 def refine_bubbles(image, result: dict, ocr_region_fn, merge: bool = True, reread: bool = True, split: bool = True,
                    scan: bool = False) -> dict:
-    stats = {"numbers": 0, "split": 0, "merged": 0, "refined": 0, "found": 0}
+    stats = {"numbers": 0, "operators": 0, "split": 0, "merged": 0, "refined": 0, "found": 0}
     stats["numbers"] = split_distant_numbers(result)
+    stats["operators"] = split_at_operator_lines(result)
     if split:
         stats["split"] = split_bubbles_by_interior(image, result)
     if merge:

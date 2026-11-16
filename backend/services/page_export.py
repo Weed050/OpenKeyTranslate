@@ -23,7 +23,7 @@ OCR_DEBUG_MAX = 400          # entries per list in a page's ocr_debug (a junk-he
 
 def save_ocr_json(out_dir: str, file_base_name: str, ocr_result: dict, pending_translation: bool = False,
                   detect_rotation: bool | None = None, cleanups: list | None = None,
-                  bubble_order: str | None = None) -> str:
+                  bubble_order: str | None = None, manual_ops: list | None = None) -> str:
     """
     Save OCR results (items, lines, bubbles with translations) to JSON.
 
@@ -62,7 +62,7 @@ def save_ocr_json(out_dir: str, file_base_name: str, ocr_result: dict, pending_t
         }
         if b.get("text_raw"):
             entry["text_raw"] = b["text_raw"]          # raw OCR string when ocr_textfix changed the text
-        for flag in ("interior_box", "missed_text", "refined", "merged_from", "layout"):   # layout: carried by Re-OCR
+        for flag in ("interior_box", "missed_text", "refined", "merged_from", "layout", "bulk_edits"):   # layout / bulk_edits: carried by Re-OCR
             if b.get(flag) is not None and b.get(flag) is not False:
                 entry[flag] = b[flag]
         if b.get("confirmed_at") and not b.get("skip"):   # review stamp carried over by Re-OCR (utils.bubble_post.carry_over)
@@ -101,6 +101,8 @@ def save_ocr_json(out_dir: str, file_base_name: str, ocr_result: dict, pending_t
         payload["cleanups"] = cleanups                       # manual "Clean area" rectangles (routers/pages.py add_cleanup)
     if bubble_order:
         payload["bubble_order"] = bubble_order               # reading order chosen in the editor (ttb / rtl / ltr)
+    if manual_ops:
+        payload["manual_ops"] = manual_ops                   # user's manual fixes so far, survive a Re-OCR (record_manual_op)
     dbg = ocr_result.get("debug") or {}
     if "rejected" in dbg:
         # what the OCR saw but did not use - the editor's OCR debug view (GET /pages/{id}/ocr-debug). Display only.
@@ -222,6 +224,7 @@ def page_paths(page) -> dict:
         "image": os.path.join(out_dir, f"ocr_{file_base_name}_inpainted.png"),
         "out_dir": out_dir,
         "file_base_name": file_base_name,
+        "project_dir": project.workspace_path,     # project-wide prefs (services/project_prefs.py)
     }
 
 
@@ -241,6 +244,51 @@ def write_page_json(json_path: str, data: dict) -> None:
         if os.path.exists(tmp):
             os.remove(tmp)
         raise
+
+
+MANUAL_OPS_MAX = 2000                 # events kept per page; past that only manual_ops_truncated is set
+MANUAL_OPS_COALESCE = {"layout": 60, "layout_bulk": 60}   # op -> seconds: repeated calls count as one adjustment
+
+
+def record_manual_op(data: dict, op: str, bubble: str | None = None, **detail) -> None:
+    """
+    Append one manual operation to the page JSON's `manual_ops` list: {"op", "at", "bubble"?, ...detail}.
+
+    Why: the evaluation of "how much work the tool saves" counts what the user had to fix by hand per page - merges,
+    splits, re-reads, source-text fixes, added / deleted bubbles, clean-ups, lettering adjustments, Re-OCR. Translation
+    edits are NOT listed here (they are measured as edit distance between ai_translation and the final text), nor are
+    review clicks (Accept page / Layout checked) or retranslations of a whole page (the editor runs those by itself for
+    prefetched pages). Only the endpoints a user action reaches call this, so the list is a record of user actions.
+
+    Lettering sends one request per drag or font change, so a "layout" call on the same bubble within 60 s of the last
+    one only bumps that event's `n` and `last_at` (n = requests merged into one adjustment). "layout_bulk" = the
+    requests of ONE click that styles many bubbles ("use on the whole page", dropping copies of a new project style):
+    merged the same way while `how` stays the same. Detail values that are None are left out. Mutates `data`; the
+    caller writes the JSON as usual.
+    """
+    now = datetime.now(timezone.utc)
+    ops = data.setdefault("manual_ops", [])
+    window = MANUAL_OPS_COALESCE.get(op)
+    if window and ops:
+        last = ops[-1]
+        same_detail = all(last.get(k) == v for k, v in detail.items() if v is not None)
+        if last.get("op") == op and last.get("bubble") == bubble and same_detail:
+            try:
+                age = (now - datetime.fromisoformat(last.get("last_at") or last["at"])).total_seconds()
+            except (KeyError, TypeError, ValueError):
+                age = None
+            if age is not None and 0 <= age <= window:
+                last["n"] = int(last.get("n", 1)) + 1
+                last["last_at"] = now.isoformat(timespec="seconds")
+                return
+    if len(ops) >= MANUAL_OPS_MAX:
+        data["manual_ops_truncated"] = True
+        return
+    event = {"op": op, "at": now.isoformat(timespec="seconds")}
+    if bubble is not None:
+        event["bubble"] = bubble
+    event.update({k: v for k, v in detail.items() if v is not None})
+    ops.append(event)
 
 
 def update_bubble_translation(json_path: str, bubble_id: str, new_translation: str) -> bool:

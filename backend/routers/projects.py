@@ -48,6 +48,62 @@ def project_progress(project_id: int, db: Session = Depends(get_db)):
     return project_progress(project)
 
 
+@router.get("/{project_id}/prefs")
+def get_project_prefs(project_id: int, db: Session = Depends(get_db)):
+    """Project-wide choices (services/project_prefs.py): {"bubble_order": "rtl" | null, "lettering_style": {...}}."""
+    from services import project_prefs
+    project = db.query(Project).filter(Project.id == project_id).first()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    return {"bubble_order": project_prefs.bubble_order(project.workspace_path),
+            "lettering_style": project_prefs.lettering_style(project.workspace_path)}
+
+
+@router.patch("/{project_id}/prefs")
+def set_project_prefs(project_id: int, payload: dict, db: Session = Depends(get_db)):
+    """
+    {"lettering_style": {font, bold, italic, stroke, color} | null} - Lettering "Use in whole project" (null = back to
+    the Settings font and plain black letters); {"bubble_order": "ttb" | "rtl" | "ltr" | null} - order of pages OCR'd
+    from now on. Bubbles with a style of their own and pages already sorted keep theirs.
+    """
+    from services import project_prefs
+    project = db.query(Project).filter(Project.id == project_id).first()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    patch = {}
+    if "lettering_style" in (payload or {}):
+        patch["lettering_style"] = project_prefs.clean_style(payload["lettering_style"]) or None
+    if "bubble_order" in (payload or {}):
+        order = payload["bubble_order"]
+        if order is not None and order not in project_prefs.ORDERS:
+            raise HTTPException(status_code=400, detail="bubble_order must be ttb, rtl or ltr")
+        patch["bubble_order"] = order
+    project_prefs.save(project.workspace_path, patch)
+    return get_project_prefs(project_id, db)
+
+
+@router.post("/{project_id}/replace-translations")
+def replace_translations(project_id: int, payload: dict, db: Session = Depends(get_db)):
+    """
+    Find & replace in the bubbles' translations of the whole project (services/translation_replace.py):
+    {"find", "replace", "mode": "word" | "prefix", "keys": ["page_id:bubble_id", ...] (optional), "apply": false}
+    -> {"applied", "count", "changes": [...]}; apply=false is a preview.
+    """
+    from services.translation_replace import replace_in_translations
+    project = db.query(Project).filter(Project.id == project_id).first()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    find = (payload or {}).get("find") or ""
+    if len(find.strip()) < 2:
+        raise HTTPException(status_code=422, detail="Search text must have at least 2 characters")
+    keys = payload.get("keys")
+    if keys is not None and not (isinstance(keys, list) and all(isinstance(k, str) for k in keys)):
+        raise HTTPException(status_code=400, detail="keys must be a list of 'page_id:bubble_id'")
+    mode = "prefix" if payload.get("mode") == "prefix" else "word"
+    changes = replace_in_translations(project, find, payload.get("replace") or "", mode, keys, bool(payload.get("apply")))
+    return {"applied": bool(payload.get("apply")), "count": len(changes), "changes": changes}
+
+
 @router.get("/select-folder")
 async def select_folder():
     """

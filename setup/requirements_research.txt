@@ -1,0 +1,4 @@
+# Extra packages for the thesis research scripts only - the app itself does not need them.
+# backend/scripts/replay_examples.py score -> chrF++ / TER (sacrebleu); numpy, scipy, rapidfuzz come with the app.
+# Install into the app's venv:  backend\.venv\Scripts\python.exe -m pip install -r setup\requirements_research.txt
+sacrebleu>=2.4,<3

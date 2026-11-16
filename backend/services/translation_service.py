@@ -32,6 +32,14 @@ Key Architectural Features:
        runs pay for that second call. Both sides are compared on the MODEL output (before post-editing / case
        normalization: TranslationLog.injection_json["model_output"]); output_text is what was shown.
     7. Full provenance per bubble in TranslationLog.injection_json (see _injection_record) and memory_lane.
+       Since 2026-11-05 also "memory_probe" on EVERY bubble (hit or not): size of the project memory at that moment,
+       the threshold settings, entries compared and the best similarity even below the threshold - the data for
+       "how does the hit rate grow with the memory, and which threshold would fire how often".
+       Since 2026-11-07 also "temperature" (shown and counterfactual rows alike): the sampling temperature of the
+       call. Older logs were filled in with 0.4 afterwards (scripts/backfill_log_temperature.py, marked
+       "temperature_backfilled").
+       Since 2026-11-11 "retry" on a bubble the first answer left empty: "alone" (asked once more without the other
+       bubbles, same key) or "other_id" (the only answer carried another id). Before, such a bubble stayed empty.
     8. Optional DB Context: project_id/page_id/db are optional. Without them translation still runs, just without
        memory, glossary or logging (e.g. test_main.py's test_ocr_from_path()).
 """
@@ -47,6 +55,7 @@ from services.memory_service import find_top_matches, is_short_phrase, entry_kin
 from services.glossary_service import load_glossary, match_glossary
 from services.terminology import missing_terms, postedit_missing_terms
 from services.providers import get_provider
+from services import run_progress
 
 
 def is_caps_line(text: str) -> bool:
@@ -138,7 +147,7 @@ def translate_bubbles(
 
     MEMORY_TOP_K = get_setting("memory_top_k", 3)
     MEMORY_SIMILARITY_THRESHOLD = get_setting("memory_similarity_threshold", 0.67)
-    MEMORY_AB_TEST_LOGGING = get_setting("memory_ab_test_logging", True)
+    MEMORY_AB_TEST_LOGGING = get_setting("memory_ab_test_logging", False)
     AB_SAMPLE_RATE = float(get_setting("memory_ab_sample_rate", 1.0))
     POSTEDIT = get_setting("glossary_postedit", True)
     MATCH_CASE = get_setting("translation_match_case", True)
@@ -153,15 +162,19 @@ def translate_bubbles(
     # 1. Memory + glossary lookups up front, before touching the LLM.
     #    bubble_id -> [(Correction, cosine), ...] best first.
     matches: dict[str, list[tuple]] = {}
+    probes: dict[str, dict] = {}
     glossary_by_bubble: dict[str, list[dict]] = {}
     memory_failed = False
     if memory_enabled:
+        run_progress.note("looking for similar lines in your corrections and glossary")   # editor progress panel
         glossary_terms = load_glossary(project_id, db)
         tm_entries = db.query(Correction).filter(Correction.project_id == project_id).all()
         for b in bubbles:
             text = b["text"].strip()
+            probe = {}
             try:
-                top = find_top_matches(text, project_id, db, top_k=MEMORY_TOP_K, corrections=tm_entries)
+                top = find_top_matches(text, project_id, db, top_k=MEMORY_TOP_K, corrections=tm_entries, probe=probe)
+                probes[b["bubble_id"]] = probe
             except Exception as e:
                 # embedder failed to load (offline first run, broken cache...): translate WITHOUT memory hints instead
                 # of failing the whole page. Reported once per page, health banner shows the cause.
@@ -194,6 +207,38 @@ def translate_bubbles(
     shown_key_label = provider.current_key_label
     shown_key_id = provider.current_key_id                         # "provider/label" - the A/B pair is pinned to it
     shown_model = provider.current_model or ACTIVE_MODEL_NAME     # a key can have its own model (Settings)
+    # what the SERVER said answered (since 2026-11-13; None = not reported). model_used keeps its meaning (the id the
+    # key asks for); this one shows a silent re-route, e.g. gemini-2.5-flash -> its successor after the shutdown
+    shown_served = getattr(provider, "current_served_model", None)
+    temperature = getattr(provider, "temperature", None)          # same pool = same temperature for the A/B pair
+
+    # 2b. Bubbles the model answered nothing for. Seen 2026-11-11 (gemini-2.5-flash): one bubble sent with four
+    #     context_only neighbours came back without its entry four times in a row, while the same sentence had been
+    #     translated in the page batch a minute earlier - so not a content filter (a blocked answer raises, it is not
+    #     an empty one). They are asked ONCE more, alone, through the same key (same model in the log); a single bubble
+    #     answered under another id is taken as it is. Logged per bubble as injection_json["retry"].
+    retried: dict[str, str] = {}
+    silent = [b for b in bubbles if not (model_output.get(b["bubble_id"]) or "").strip()]
+    if silent:
+        known = {b["bubble_id"] for b in bubbles} | {c["id"] for c in context_items}
+        stray = [v for k, v in model_output.items() if k not in known and (v or "").strip()]
+        print(f"[TRANSLATION] no translation for {[b['bubble_id'] for b in silent]} - the model returned ids "
+              f"{sorted(model_output)} for a batch of {len(bubbles)} (+{len(context_items)} context)")
+        if len(bubbles) == 1 and len(stray) == 1:
+            model_output[bubbles[0]["bubble_id"]] = stray[0]
+            retried[bubbles[0]["bubble_id"]] = "other_id"
+        else:
+            try:
+                again = provider.translate(
+                    [{"id": b["bubble_id"], "text": b["text"], **memory_fields[b["bubble_id"]],
+                      **glossary_field(b["bubble_id"])} for b in silent], pin=shown_key_id)
+            except Exception as e:
+                again = {}
+                print(f"[TRANSLATION] asking again for the empty bubbles failed: {type(e).__name__}: {e}")
+            for b in silent:
+                if (again.get(b["bubble_id"]) or "").strip():
+                    model_output[b["bubble_id"]] = again[b["bubble_id"]]
+                    retried[b["bubble_id"]] = "alone"
 
     # 3. Terminology check + constrained post-edit (one extra call, only for bubbles that missed a glossary term).
     terms_info: dict[str, dict] = {}
@@ -238,6 +283,7 @@ def translate_bubbles(
     zero_shot_raw: dict[str, str] = {}
     zero_shot_key_label = None
     zero_shot_model = None
+    zero_shot_served = None
     ab_sampled = MEMORY_AB_TEST_LOGGING and logging_enabled and bool(matches) and random.random() < AB_SAMPLE_RATE
     if ab_sampled:
         counterfactual_payload = context_items + [
@@ -253,6 +299,7 @@ def translate_bubbles(
             zero_shot_raw = provider.translate(counterfactual_payload, pin=shown_key_id)
             zero_shot_key_label = provider.current_key_label
             zero_shot_model = provider.current_model or ACTIVE_MODEL_NAME   # != shown_model = pair not comparable
+            zero_shot_served = getattr(provider, "current_served_model", None)
         except Exception as e:
             # the shown translation is already paid for - a failed experiment call must not fail the page
             print(f"[TRANSLATION] A/B counterfactual failed, skipped: {type(e).__name__}: {e}")
@@ -285,9 +332,21 @@ def translate_bubbles(
             "context_bubbles": len(context_items),
             "model_output": raw,
             "case_normalized": cased != translation,
+            "temperature": temperature,
         }
+        if shown_served:
+            injection["served_model"] = shown_served
         if bid in terms_info:
             injection["terms"] = terms_info[bid]
+        if bid in retried:
+            # the first answer had nothing for this bubble: "alone" = asked again without the other bubbles (so
+            # batch_size / context_bubbles describe the FIRST call only), "other_id" = answered under another id
+            injection["retry"] = retried[bid]
+        if bid in probes:
+            # hit-rate statistics (History > Research view): logged for every bubble, never sent to the model
+            injection["memory_probe"] = {**probes[bid], "size": len(tm_entries), "threshold": MEMORY_SIMILARITY_THRESHOLD,
+                                         "lexical_min": get_setting("memory_lexical_min", 25),
+                                         "strong": get_setting("memory_strong_similarity", 0.90), "hit": bool(found)}
         if found:
             injection["ab"] = "counterfactual" if bid in zero_shot_raw else ("not_sampled" if not ab_sampled else "failed")
             # log only (never sent to the model): which memory entries these were, in the order of "examples" / the
@@ -318,7 +377,9 @@ def translate_bubbles(
                     injection_json=json.dumps({"lane": None, "counterfactual_of": lane,
                                                "glossary": glossary_by_bubble.get(bid, []),
                                                "batch_size": len(bubbles), "context_bubbles": len(context_items),
-                                               "model_output": zs_raw}, ensure_ascii=False),
+                                               "model_output": zs_raw, "temperature": temperature,
+                                               **({"served_model": zero_shot_served} if zero_shot_served else {})},
+                                              ensure_ascii=False),
                 ))
         else:
             log_rows.append(TranslationLog(

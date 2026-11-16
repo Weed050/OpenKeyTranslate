@@ -195,8 +195,16 @@ def _child(args):
         print("@@RESULT " + json.dumps({"ok": False, "detail": f"{type(e).__name__}: {e}"}), flush=True)
 
 
+def _self_command() -> list[str]:
+    """This script as a new process. The packaged app has no python.exe to run a script with: its own exe does it
+    (launcher.py --ocr-selftest)."""
+    if getattr(sys, "frozen", False):
+        return [sys.executable, "--ocr-selftest"]
+    return [sys.executable, os.path.abspath(__file__)]
+
+
 def _run_step(name: str, args) -> dict:
-    cmd = [sys.executable, os.path.abspath(__file__), "--step", name, "--threads", str(args.threads)]
+    cmd = _self_command() + ["--step", name, "--threads", str(args.threads)]
     if args.det:
         cmd += ["--det", args.det]
     if args.image:
@@ -297,7 +305,7 @@ def _advice(info: dict, steps: list[dict]) -> list[str]:
     return tips
 
 
-def main():
+def main(argv: list[str] | None = None):
     p = argparse.ArgumentParser(description=__doc__.split("\n\n")[1], formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--step", choices=list(STEPS), help=argparse.SUPPRESS)
     p.add_argument("--threads", type=int, default=2, help="CPU threads for Paddle (0 = library default). Default 2.")
@@ -305,7 +313,7 @@ def main():
     p.add_argument("--det", default=None, help="detection model for the page step (default: what the app uses, see ocr_det_model)")
     p.add_argument("--cpu", action="store_true", help="force CPU even when CUDA is available")
     p.add_argument("--quick", action="store_true", help="only versions, OpenCV and Paddle (no OCR model)")
-    args = p.parse_args()
+    args = p.parse_args(argv)
     if args.step:
         return _child(args)
 

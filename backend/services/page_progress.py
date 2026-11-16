@@ -71,12 +71,33 @@ def record_exports(project, page_ids, dest: str) -> None:
         print(f"[EXPORT] couldn't update {EXPORT_LOG_NAME}: {e}")
 
 
+def _export_still_there(entry: dict, chapter, stem: str) -> bool:
+    """
+    Is the export a log entry points at still on disk? "dest" is the ZIP, the chapter folder ("Export page") or the
+    folder holding the chapter folders (Export pages). A dest that is not a folder or a ZIP (an entry without one) is
+    trusted. Since 2026-11-11 - before, an export deleted by hand still counted as exported.
+    """
+    dest = entry.get("dest")
+    if not isinstance(dest, str) or not dest:
+        return True
+    if dest.lower().endswith(".zip"):
+        return os.path.isfile(dest)
+    if not os.path.isdir(dest):
+        return False
+    return any(os.path.exists(os.path.join(folder, f"{stem}.{ext}"))
+               for folder in (dest, os.path.join(dest, chapter.number)) for ext in ("png", "jpg"))
+
+
 def _exported_at(page, chapter, project, export_log: dict) -> float | None:
-    """Last export time of a page: the export log, else an image in <project>/exported/<chapter>/ (old exports)."""
+    """
+    Last export time of a page: the export log (while its file is still there, _export_still_there), else an image
+    in <project>/exported/<chapter>/ (old exports).
+    """
     entry = export_log.get(str(page.id))
-    times = [entry["at"]] if isinstance(entry, dict) and isinstance(entry.get("at"), (int, float)) else []
-    folder = os.path.join(project.workspace_path, "exported", chapter.number)
     stem = os.path.splitext(page.file_name)[0]
+    times = ([entry["at"]] if isinstance(entry, dict) and isinstance(entry.get("at"), (int, float))
+             and _export_still_there(entry, chapter, stem) else [])
+    folder = os.path.join(project.workspace_path, "exported", chapter.number)
     for ext in ("png", "jpg"):
         f = os.path.join(folder, f"{stem}.{ext}")
         if os.path.exists(f):
@@ -115,6 +136,8 @@ def project_progress(project) -> dict:
     Stage counts of the project's pages (excluded ones left out) + the last activity:
     {"total", "stages": {stage: n}, "processed", "reviewed" (text reviewed: reviewed + checked + exported),
     "last_activity"}. "processed" / "reviewed" keep the old fields of GET /projects/{id}/progress.
+    Extra counts in "stages", not stages of their own: exported_checked (exported + fully reviewed) and
+    exported_draft (exported before the review, still in its stage - since 2026-11-11).
     """
     export_log = load_export_log(project)
     stages: dict[str, int] = {}
@@ -130,6 +153,9 @@ def project_progress(project) -> dict:
             if info["stage"] == "exported" and info.get("layout"):
                 # exported pages that were fully reviewed: the cards fold "exported" back into the review stage
                 stages["exported_checked"] = stages.get("exported_checked", 0) + 1
+            elif info.get("export") == "current" and info["stage"] not in REVIEWED_STAGES:
+                # exported before the review (AI text as it was): stays in its stage, counted for the card's note
+                stages["exported_draft"] = stages.get("exported_draft", 0) + 1
             if info.get("updated") and (last is None or info["updated"] > last):
                 last = info["updated"]
     return {

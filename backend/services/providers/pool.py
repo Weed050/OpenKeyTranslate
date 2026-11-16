@@ -9,8 +9,10 @@ could not back each other up, and every provider class carried its own copy of t
 orders the keys in Settings and switches each one on or off; a request goes to the first usable key and moves on
 along the list when a key is rate-limited, rejected or its server is unreachable:
 
-- RateLimited  -> the key cools down 65 s (a 429 is usually per minute), next key.
+- RateLimited  -> the key cools down for the wait the server asked (Gemini: retryDelay), else 65 s; a spent DAILY
+                  quota (Gemini quotaId ...PerDay...) 1 hour - next key.
 - KeyRejected  -> the key is parked 10 min (wrong key / unknown model does not heal by retrying), next key.
+                  OutOfCredits (402, prepaid balance spent) is a KeyRejected - the same, with its own message.
 - Transient    -> the same key is retried twice with a short backoff, then the next key.
 - Unreachable  -> retried twice; then keys on the SAME host are skipped (no internet = every Groq key fails),
                   keys on other hosts (a local Ollama, another service) are still tried.
@@ -29,18 +31,72 @@ import time
 
 from pydantic import BaseModel
 
-from .base import TranslationProvider, RateLimited, KeyRejected, Unreachable, Transient
+from services import run_progress
+from . import key_usage
+from .base import (TranslationProvider, RateLimited, KeyRejected, OutOfCredits, NO_CREDITS, Unreachable, Transient,
+                   take_served_model, same_model)
 
 RETRIES = 2
 BACKOFF_SECONDS = 2
 RATE_LIMIT_COOLDOWN = 65.0
 REJECTED_COOLDOWN = 600.0
+DAILY_COOLDOWN = 3600.0          # a spent DAILY quota: try the key again in an hour, not every minute
 
 
 def scrub(message: str, entry: dict) -> str:
     """Never let a key reach a message (some servers echo request details)."""
     key = (entry.get("api_key") or "").strip()
     return message.replace(key, key[:4] + "..." + key[-3:]) if len(key) >= 8 else message
+
+
+def _scrubbed(e: Exception, entry: dict) -> Exception:
+    """The same error with the key scrubbed from its text - and its fields kept (RateLimited.retry_after / daily)."""
+    copy = type(e)(scrub(str(e), entry))
+    copy.__dict__.update(e.__dict__)
+    return copy
+
+
+def rate_limit_cooldown(e: RateLimited) -> float:
+    """How long a rate-limited key rests: a day's quota an hour, else what the server asked (+1 s), else 65 s."""
+    if getattr(e, "daily", False):
+        return DAILY_COOLDOWN
+    retry = getattr(e, "retry_after", None)
+    return min(max(retry + 1.0, 5.0), 120.0) if retry else RATE_LIMIT_COOLDOWN
+
+
+_KIND = {RateLimited: "limit / quota reached", KeyRejected: "rejected", OutOfCredits: NO_CREDITS.lower() + " (402)",
+         Unreachable: "server unreachable", Transient: "server error"}
+
+
+def summarize(failures: list[tuple[str, Exception]]) -> str:
+    """
+    One readable line for the user when no key could translate. The raw provider replies (Gemini's 429 is a JSON blob
+    of ~400 characters per key, repeated for every key) went straight into the editor / Memory page; they now go to the
+    backend log only, the message says what happened per key and what to do.
+    """
+    if not failures:
+        return "No key could translate."
+    kinds = {type(e) for _, e in failures}
+    labels = ", ".join(label for label, _ in failures)
+    if kinds == {RateLimited} and all(getattr(e, "daily", False) for _, e in failures):
+        return (f"The daily quota of every translation key is used up ({labels}). Free Gemini quotas come back at "
+                f"midnight Pacific time (09:00 in Poland in winter, 10:00 in summer) - or add / switch on another key "
+                f"in Settings > Translation & API keys.")
+    if kinds == {RateLimited}:
+        return (f"Every translation key is at its rate limit or quota ({labels}). A per-minute limit clears in about a "
+                f"minute; a daily quota (free Gemini keys) only tomorrow - or add / switch on another key in "
+                f"Settings > Translation & API keys.")
+    if kinds == {Unreachable}:
+        return f"No translation server could be reached ({labels}) - check the internet connection (or the local server)."
+    if kinds == {OutOfCredits}:
+        return (f"{NO_CREDITS} on any translation key ({labels}): 402 Payment Required - the prepaid balance is used up. "
+                f"Add credits on the provider's billing page, or switch on another key in Settings > Translation & API keys.")
+    parts = []
+    for label, e in failures:
+        kind = _KIND.get(type(e), "failed")
+        detail = str(e).split("{", 1)[0].strip().rstrip(".:")     # no raw JSON body
+        parts.append(f"{label}: {kind}" + (f" ({detail[:120]})" if kind in ("rejected", "failed") and detail else ""))
+    return "No key could translate - " + "; ".join(parts) + "."
 
 
 class KeyPool(TranslationProvider):
@@ -59,6 +115,11 @@ class KeyPool(TranslationProvider):
         self._temperature = temperature
         self._max_tokens = max_tokens
 
+    @property
+    def temperature(self) -> float:
+        """Sampling temperature of every call of this pool - logged per bubble (TranslationLog.injection_json)."""
+        return self._temperature
+
     def request_json(self, system_prompt: str, payload, schema: type[BaseModel], pin: str | None = None) -> BaseModel:
         user_message = payload if isinstance(payload, str) else json.dumps(payload, ensure_ascii=False)
 
@@ -74,7 +135,7 @@ class KeyPool(TranslationProvider):
                 raise RuntimeError(f"No translation key available - every key is rate-limited or was rejected "
                                    f"(retry in ~{self._seconds_until_any_key()}s), or none is set.")
 
-        errors: list[str] = []
+        errors: list[tuple[str, Exception]] = []
         dead_hosts: set[str] = set()
         for entry in candidates:
             host = self._host_of(entry)
@@ -82,31 +143,47 @@ class KeyPool(TranslationProvider):
                 continue
             client = self._clients[entry["provider"]]
             for attempt in range(RETRIES + 1):
+                take_served_model()                    # clear what an earlier call in this thread left
+                # the editor's progress panel while a page runs (services/run_progress.py; no-op otherwise)
+                run_progress.note(f"waiting for the answer - key \"{entry.get('label') or entry['provider']}\", "
+                                  f"{entry.get('model') or entry['provider']}"
+                                  + (f" (after {', '.join(label for label, _ in errors)} could not)" if errors else ""))
                 try:
                     result = client.call(entry, system_prompt, user_message, schema, self._temperature, self._max_tokens)
                 except RateLimited as e:
-                    print(f"[KEYS] '{entry['id']}' rate-limited - next key")
-                    self._cool_down(entry["id"], RATE_LIMIT_COOLDOWN)
-                    errors.append(f"{entry['label']}: {scrub(str(e), entry)}")
+                    key_usage.record_limit(entry, e.daily, getattr(e, "limit", None), getattr(e, "metric", None))
+                    rest = rate_limit_cooldown(e)
+                    print(f"[KEYS] '{entry['id']}' rate-limited, rests {rest:.0f}s - next key ({scrub(str(e), entry)[:300]})")
+                    self._cool_down(entry["id"], rest)
+                    errors.append((entry["label"], _scrubbed(e, entry)))
                     break
                 except KeyRejected as e:
                     print(f"[KEYS] '{entry['id']}' rejected: {scrub(str(e), entry)} - next key")
                     self._cool_down(entry["id"], REJECTED_COOLDOWN)
-                    errors.append(f"{entry['label']}: {scrub(str(e), entry)}")
+                    errors.append((entry["label"], _scrubbed(e, entry)))
                     break
                 except (Unreachable, Transient) as e:
                     if attempt < RETRIES:
                         wait = BACKOFF_SECONDS * (attempt + 1)
                         print(f"[KEYS] '{entry['id']}' {type(e).__name__} - retry {attempt + 1}/{RETRIES} in {wait}s")
+                        run_progress.note(f"no answer from key \"{entry.get('label') or entry['provider']}\" - "
+                                          f"trying again in {wait} s")
                         time.sleep(wait)
                         continue
                     if isinstance(e, Unreachable) and host:
                         dead_hosts.add(host)
-                    errors.append(f"{entry['label']}: {scrub(str(e), entry)}")
+                    print(f"[KEYS] '{entry['id']}' {type(e).__name__}: {scrub(str(e), entry)[:300]}")
+                    errors.append((entry["label"], _scrubbed(e, entry)))
                     break
+                key_usage.record_success(entry)        # Settings: requests today / what is left (estimate)
                 self.current_key_label = entry["label"]
                 self.current_model = entry["model"]
                 self.current_key_id = entry["id"]
+                self.current_served_model = take_served_model()
+                if not same_model(entry["model"], self.current_served_model):
+                    from utils.log_once import print_once
+                    print_once(f"[KEYS] '{entry['id']}' asked for {entry['model']} but {self.current_served_model} "
+                               f"answered (the provider routes this id to another model)")
                 return result
 
-        raise RuntimeError("No key could translate - " + " | ".join(errors) if errors else "No key could translate.")
+        raise RuntimeError(summarize(errors))

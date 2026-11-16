@@ -20,12 +20,52 @@ instead of being copied into every provider.
 and model as the shown translation, otherwise the pair compares two models).
 """
 
+import threading
 import time
 from abc import ABC, abstractmethod
 
 from pydantic import BaseModel
 
 from .prompts import SYSTEM_PROMPT
+
+
+# ---------------------------------------------------------------- the model that really answered
+
+_served = threading.local()
+
+
+def note_served_model(name: str | None) -> None:
+    """
+    Called by a client after a successful request with the model id the SERVER reports (Gemini model_version, the
+    "model" field of an OpenAI-style reply). Why: a model id the user typed is not always the model that answers -
+    Google routes requests for a shut-down model to its successor silently (gemini-2.5-flash -> gemini-3.5-flash-lite
+    after 01.12.2026), so the log would name a model that did not translate. Thread-local: the pool reads it right
+    after the call in the same thread (page jobs run in worker threads).
+    """
+    _served.name = (name or "").strip() or None
+
+
+def take_served_model() -> str | None:
+    """The served model noted by the last call in this thread (None = the server did not say), cleared."""
+    name = getattr(_served, "name", None)
+    _served.name = None
+    return name
+
+
+def same_model(requested: str | None, served: str | None) -> bool:
+    """
+    Whether the served model is the requested one. Servers may answer with a dated / "models/" prefixed form of the
+    same id (gemini-2.5-flash-001, models/gemini-2.5-flash) - that counts as the same; an unknown served model too.
+    """
+    if not served or not requested:
+        return True
+    req = requested.removeprefix("models/").lower()
+    srv = served.removeprefix("models/").lower()
+    if srv == req or req.endswith("/" + srv) or srv.endswith("/" + req):    # OpenRouter "google/..." prefixes
+        return True
+    rest = srv.removeprefix(req + "-") if srv.startswith(req + "-") else None
+    # a snapshot of the same id: -001, -2024-08-06, -preview-05-20, -latest (NOT -lite / -8b = another model)
+    return rest is not None and (rest[:1].isdigit() or rest.startswith(("preview", "latest")))
 
 
 class BubbleTranslation(BaseModel):
@@ -44,11 +84,37 @@ class KeyCallError(Exception):
 
 
 class RateLimited(KeyCallError):
-    """429 / quota spent: this key cools down for a while, the next key is tried."""
+    """
+    429 / quota spent: this key cools down for a while, the next key is tried.
+    retry_after = seconds the server asked to wait (Gemini sends it), None = unknown; daily = the DAY's quota is spent
+    (free Gemini keys: resets at midnight Pacific time) - waiting a minute and retrying only burns time.
+    """
+
+    def __init__(self, message: str = "", retry_after: float | None = None, daily: bool = False,
+                 limit: int | None = None, metric: str | None = None):
+        super().__init__(message)
+        self.retry_after = retry_after
+        self.daily = daily
+        self.limit = limit          # the number the server named for the spent limit (Gemini, Groq), None = not said
+        self.metric = metric        # which limit ("GenerateRequestsPerDayPerProjectPerModel-FreeTier", "requests per day")
 
 
 class KeyRejected(KeyCallError):
     """401 / 403 / unknown model: retrying cannot help - the key is parked for longer, the next key is tried."""
+
+
+NO_CREDITS = "No credits left"
+"""Start of every OutOfCredits message - callers that only see the pool's text (the replay script) look for it."""
+
+
+class OutOfCredits(KeyRejected):
+    """
+    402 Payment Required: the PREPAID balance of the account behind the key is spent (Gemini Prepay - the default for
+    new paid accounts since 2026 -, OpenRouter, DeepSeek). Retrying does not help, so the pool treats it like a rejected
+    key (parked, next key); a class of its own because the user's fix differs (add credits, not copy the key again) and
+    the replay script stops on it instead of failing every remaining request. Gemini: EVERY key of that billing
+    account gets 402 at once.
+    """
 
 
 class Unreachable(KeyCallError):
@@ -69,6 +135,8 @@ class TranslationProvider(ABC):
         self.current_key_label: str | None = None
         self.current_model: str | None = None
         self.current_key_id: str | None = None
+        # model id the server reported for that call (None = not said) - see note_served_model
+        self.current_served_model: str | None = None
         # "provider/label" -> time.monotonic() until which the key is skipped. A 429 is usually per-MINUTE; the old
         # permanent "exhausted" set killed translation until restart after the first burst (single-key users!).
         self._cooldown_until: dict[str, float] = {}

@@ -6,11 +6,13 @@
  * and everything that went into the prompt with it (memory examples, glossary, terminology post-edit...).
  *
  * "Research view" (a switch, remembered) adds the thesis columns: the zero-shot counterfactual next to the
- * memory-injected output, lane / similarity / key badges and the summary numbers of the memory experiment.
+ * memory-injected output, lane / similarity badges, Model (+ key) and Temperature, and the summary numbers of the
+ * memory experiment. "Columns" shows / hides columns; the normal and the research view remember separate sets
+ * (localStorage okt-logs-cols-normal / -research), hidden columns are not built, so the rest share the width.
  * The A/B comparison uses the MODEL output of both variants (injection_json.model_output, i.e. before the
  * terminology post-edit and the ALL-CAPS normalization), so only the memory differs between them.
  *
- * Sorting: click a column name (Time, Where, Source, In the bubble now). By time the rows are grouped by day, by
+ * Sorting: click a column name (Time, Where, Source, In the bubble now, Hints - bubbles with memory / glossary first). By time the rows are grouped by day, by
  * Where by chapter; both groups fold with a click. Rows are DRAWN in chunks (50 / 100 / 250 / all) - the whole
  * history is loaded once, so filters, sorting and the summary always see every bubble.
  * Display only: nothing here changes what is logged.
@@ -27,6 +29,7 @@ const SORT_KEY = "okt-logs-sort";             // {"key": time | where | source |
 const PAGE_SIZE_KEY = "okt-logs-page-size";   // 50 | 100 | 250 | 0 (= all)
 
 let allRows = [];
+let memoryEntries = [];                      // corrections of the project (created_at): memory size of old logs
 let shownCount = 0;
 const folded = new Set(JSON.parse(sessionStorage.getItem("okt-logs-folded") || "[]"));   // group labels folded in this tab
 const saveFolded = () => sessionStorage.setItem("okt-logs-folded", JSON.stringify([...folded]));
@@ -67,6 +70,9 @@ window.addEventListener("DOMContentLoaded", async () => {
         saveFolded();
         renderRows();
     });
+    const colsMenu = document.getElementById("colsMenu");
+    document.addEventListener("click", (e) => { if (colsMenu.open && !colsMenu.contains(e.target)) colsMenu.open = false; });
+    document.addEventListener("keydown", (e) => { if (e.key === "Escape") colsMenu.open = false; });
     applyResearch();
     watchBand();
     await loadLogs();
@@ -99,6 +105,7 @@ function applyResearch() {
     document.getElementById("logsIntro").textContent = isResearch()
         ? "Research view: every zero-shot vs. memory-injected pair the correction-memory experiment is evaluated from. Read-only - never fed back into translation. Click a column name to sort."
         : "What the AI translated, where, what it was given as hints - and what the bubble says now. Click a column name to sort.";
+    renderColumnMenu();
     renderHead();
 }
 
@@ -106,9 +113,12 @@ async function loadLogs() {
     const tableBody = document.getElementById("logsBody");
     let logs;
     try {
-        logs = await api.logs.listByProject(projectId);
+        [logs, memoryEntries] = await Promise.all([
+            api.logs.listByProject(projectId),
+            api.corrections.listByProject(projectId).catch(() => []),     // only for the hit-rate table
+        ]);
     } catch (e) {
-        tableBody.innerHTML = `<tr><td colspan="${columns().length}">Couldn't load logs: ${escapeHtml(e.message)}</td></tr>`;
+        tableBody.innerHTML = `<tr><td colspan="${visibleColumns().length}">Couldn't load logs: ${escapeHtml(e.message)}</td></tr>`;
         return;
     }
     const groups = new Map();
@@ -124,8 +134,18 @@ async function loadLogs() {
     document.getElementById("logsChapterSelect").innerHTML = '<option value="">All chapters</option>'
         + chapters.map((c) => `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join("");
     renderSummary(allRows);
+    countFilterOptions();
     applyResearch();
     renderRows();
+}
+
+/** "With memory (any lane) - 8": how many bubbles each filter would show (the rare ones are easy to miss). */
+function countFilterOptions() {
+    document.querySelectorAll("#logsFilterSelect option").forEach((opt) => {
+        opt.dataset.label = opt.dataset.label || opt.textContent;
+        const test = FILTERS[opt.value];
+        opt.textContent = test && opt.value !== "all" ? `${opt.dataset.label} - ${allRows.filter(test).length}` : opt.dataset.label;
+    });
 }
 
 const base = (g) => g.zero_shot || g.memory_injected;
@@ -181,6 +201,13 @@ function nowStatus(g) {
 }
 const STATUS_RANK = { edited: 0, accepted: 1, page: 2, open: 3, gone: 4 };
 
+/** Hints column order: memory + glossary first, then memory, glossary, nothing. */
+function hintRank(g) {
+    const memory = !!g.memory_injected;
+    const glossary = glossaryTerms(shownLog(g)).length > 0;
+    return memory && glossary ? 0 : memory ? 1 : glossary ? 2 : 3;
+}
+
 /**
  * Columns of the current view (research: zero-shot + memory-injected instead of one "AI translation" column).
  * width: fixed px / % - the text columns without one share what is left. sort: the comparator (ascending) of a
@@ -210,9 +237,90 @@ function columns() {
         { id: "now", label: "In the bubble now", title: "Sorted: edited, accepted, accepted with the page, not reviewed, bubble gone",
           sort: { dir: "asc", cmp: (a, b) => STATUS_RANK[nowStatus(a)] - STATUS_RANK[nowStatus(b)] },
           cell: (g) => `<td>${nowCell(g)}</td>` },
-        { id: "hints", label: "Hints given to the AI", width: "21%", cell: (g) => `<td>${injectionCell(shownLog(g))}</td>` },
+        { id: "hints", label: "Hints given to the AI", width: "21%",
+          title: "Sorted: memory + glossary, memory only, glossary only, no hints (then newest first)",
+          sort: { dir: "asc", cmp: (a, b) => hintRank(a) - hintRank(b) || natural(base(b).created_at, base(a).created_at) },
+          cell: (g) => `<td>${injectionCell(shownLog(g))}</td>` },
+        { id: "model", label: "Model", width: "150px", hidden: { normal: true },
+          title: "Model that wrote the shown translation and the API key that served it (the A/B pair always uses the same key and model)",
+          sort: { dir: "asc", cmp: (a, b) => natural(shownLog(a).model_used, shownLog(b).model_used) || natural(shownLog(a).key_label, shownLog(b).key_label) },
+          cell: (g) => `<td class="logs-model">${modelCell(shownLog(g))}</td>` },
+        { id: "temp", label: "Temperature", width: "104px", hidden: { normal: true },
+          title: "Sampling temperature of the call (logged since 07.11.2026; \"filled in\" = older rows, value entered afterwards from the setting of that time). Split the A/B data by it when it changed",
+          sort: { dir: "asc", cmp: (a, b) => (temperatureOf(a) ?? 99) - (temperatureOf(b) ?? 99) || natural(base(b).created_at, base(a).created_at) },
+          cell: (g) => `<td class="logs-temp">${temperatureCell(shownLog(g))}</td>` },
     );
     return cols;
+}
+
+/* ------------------------------------------------------------------ which columns are shown */
+
+/** localStorage key of the column choice: the normal and the research view keep separate sets. */
+const colsKey = () => `okt-logs-cols-${isResearch() ? "research" : "normal"}`;
+
+function columnChoice() {
+    try { return JSON.parse(localStorage.getItem(colsKey()) || "{}") || {}; } catch { return {}; }
+}
+
+/** Shown in this view: the user's choice, else the column's default (Model / Temperature: research view only). */
+function isShown(col, choice = columnChoice()) {
+    if (typeof choice[col.id] === "boolean") return choice[col.id];
+    return !col.hidden?.[isResearch() ? "research" : "normal"];
+}
+
+/** The columns actually built (hidden ones are left out entirely, the rest share the width). Sorting still uses columns(). */
+function visibleColumns() {
+    const choice = columnChoice();
+    const shown = columns().filter((c) => isShown(c, choice));
+    return shown.length ? shown : columns().slice(0, 1);
+}
+
+function renderColumnMenu() {
+    const pop = document.getElementById("colsPop");
+    if (!pop) return;
+    const choice = columnChoice();
+    const cols = columns();
+    const shownCount = cols.filter((c) => isShown(c, choice)).length;
+    pop.innerHTML = `<div class="cols-head">${isResearch() ? "Research view" : "Normal view"} columns</div>`
+        + cols.map((c) => {
+            const on = isShown(c, choice);
+            return `<label title="${escapeHtml(c.title || "")}"><input type="checkbox" data-col="${c.id}"${on ? " checked" : ""}${on && shownCount === 1 ? " disabled" : ""}> ${escapeHtml(c.label)}</label>`;
+        }).join("")
+        + '<button type="button" id="colsReset">Default columns</button>';
+    pop.querySelectorAll("input[data-col]").forEach((box) => box.addEventListener("change", () => {
+        const next = columnChoice();
+        next[box.dataset.col] = box.checked;
+        localStorage.setItem(colsKey(), JSON.stringify(next));
+        renderColumnMenu();
+        renderHead();
+        renderRows();
+    }));
+    pop.querySelector("#colsReset").addEventListener("click", () => {
+        localStorage.removeItem(colsKey());
+        renderColumnMenu();
+        renderHead();
+        renderRows();
+    });
+}
+
+function modelCell(log) {
+    if (!log.model_used && !log.key_label) return '<span class="cell-none">-</span>';
+    return withMeta(escapeHtml(log.model_used || "?"), keyBadge(log.key_label));
+}
+
+/** injection_json.temperature of the shown translation (null = not logged; the A/B pair shares one pool and value). */
+function temperatureOf(g) {
+    const t = shownLog(g).injection?.temperature;
+    return typeof t === "number" ? t : null;
+}
+
+function temperatureCell(log) {
+    const inj = log.injection || {};
+    if (typeof inj.temperature !== "number") return '<span class="cell-none" title="Not logged">-</span>';
+    const filled = inj.temperature_backfilled;
+    return filled
+        ? withMeta(`${inj.temperature}`, `<span class="cell-none" title="Translated before the temperature was logged: the value was entered afterwards (${escapeHtml(filled)}) from the setting of that time">filled in</span>`)
+        : `${inj.temperature}`;
 }
 
 function loadSort() {
@@ -223,7 +331,7 @@ function loadSort() {
 }
 
 function renderHead() {
-    const cols = columns();
+    const cols = visibleColumns();
     const sort = loadSort();
     document.getElementById("logsCols").innerHTML = cols.map((c) => `<col${c.width ? ` style="width:${c.width}"` : ""}>`).join("");
     const head = document.getElementById("logsHead");
@@ -264,7 +372,7 @@ function groupLabel(g) {
 function renderRows() {
     const tableBody = document.getElementById("logsBody");
     const rows = sortedRows();
-    const cols = columns();
+    const cols = visibleColumns();
     const span = cols.length;
     document.getElementById("countBadge").textContent = `${rows.length} bubble${rows.length === 1 ? "" : "s"}`;
     document.getElementById("bandCount").textContent = document.getElementById("countBadge").textContent;
@@ -356,7 +464,7 @@ function zeroShotCell(g) {
 
 function memoryCell(g) {
     return g.memory_injected
-        ? withMeta(escapeHtml(g.memory_injected.output_text), laneBadge(g) + similarityBadge(g.memory_injected.similarity_score) + keyBadge(g.memory_injected.key_label))
+        ? withMeta(escapeHtml(g.memory_injected.output_text), laneBadge(g) + similarityBadge(g.memory_injected.similarity_score))
         : '<span class="cell-none" title="No memory entry was similar enough - only the zero-shot translation exists">-</span>';
 }
 
@@ -445,6 +553,7 @@ function injectionCell(log) {
     if (inj.context_bubbles) meta.push(`${inj.context_bubbles} context bubble(s)`);
     if (inj.ab) meta.push(`A/B: ${inj.ab.replace("_", " ")}`);
     if (log.model_used) meta.push(log.model_used);
+    if (typeof inj.temperature === "number") meta.push(`temperature ${inj.temperature}${inj.temperature_backfilled ? " (filled in afterwards)" : ""}`);
     if (log.key_label) meta.push(`key ${log.key_label}`);
     if (meta.length) parts.push(`<div class="inj-meta">${meta.map(escapeHtml).join(" · ")}</div>`);
 
@@ -492,7 +601,67 @@ function renderSummary(rows) {
         stat("Threshold(s) seen", thresholds.length ? thresholds.map((t) => t.toFixed(2)).join(", ") : "-"),
         stat("Glossary fired", `${glossaryFired}${pct(glossaryFired)}`, "Bubbles with at least one glossary term injected"),
         stat("Term missing / fixed", `${termMissing} / ${termFixed}`, "Bubbles whose model output missed a glossary term / of those, fixed by the terminology post-edit"),
-    ].join("");
+    ].join("") + hitRateHtml(rows);
+}
+
+/* ------------------------------------------------------------------ memory hit rate vs memory size */
+
+const SIZE_BUCKETS = [[0, 10], [10, 25], [25, 50], [50, 100], [100, 200], [200, 400], [400, Infinity]];
+const WHAT_IF = [0.5, 0.55, 0.6, 0.65, 0.7, 0.75, 0.8, 0.85, 0.9];
+
+/**
+ * Memory size when the bubble was translated: logged since 2026-11-05 (injection_json.memory_probe.size); older logs:
+ * the entries saved before that moment (approximate - deleted entries are not counted, a re-saved entry moved).
+ */
+function memorySizeAt(g) {
+    const probe = shownLog(g).injection?.memory_probe;
+    if (probe && probe.size != null) return { size: probe.size, exact: true };
+    const t = base(g).created_at;
+    if (!t) return null;
+    return { size: memoryEntries.filter((c) => c.created_at && c.created_at < t).length, exact: false };
+}
+
+/**
+ * The research question "does the memory fire more often as it grows - and at which size / threshold?":
+ * share of translated bubbles that got memory, per memory size; and, for bubbles logged with a probe, how often the
+ * best entry WOULD have cleared other thresholds (cosine only - the word-overlap gate is not applied here).
+ */
+function hitRateHtml(rows) {
+    const buckets = SIZE_BUCKETS.map(([lo, hi]) => ({ lo, hi, n: 0, fuzzy: 0, exact: 0, approx: 0 }));
+    rows.forEach((g) => {
+        const at = memorySizeAt(g);
+        if (!at) return;
+        const bucket = buckets.find((b) => at.size >= b.lo && at.size < b.hi);
+        bucket.n += 1;
+        if (!at.exact) bucket.approx += 1;
+        if (lane(g) === "fuzzy") bucket.fuzzy += 1;
+        if (lane(g) === "exact") bucket.exact += 1;
+    });
+    const used = buckets.filter((b) => b.n);
+    if (!used.length) return "";
+    const pc = (n, of) => (of ? `${((100 * n) / of).toFixed(1)}%` : "-");
+    const label = (b) => (b.hi === Infinity ? `${b.lo}+` : `${b.lo}-${b.hi - 1}`);
+    const sizeRows = used.map((b) => `<tr><td>${label(b)}${b.approx ? '<span class="text-muted" title="Some of these bubbles were translated before the memory size was logged - size estimated from the save times of the entries"> ≈</span>' : ""}</td>
+        <td>${b.n}</td><td>${pc(b.fuzzy + b.exact, b.n)}</td><td>${pc(b.fuzzy, b.n)}</td><td>${pc(b.exact, b.n)}</td></tr>`).join("");
+
+    const probed = rows.map((g) => shownLog(g).injection?.memory_probe).filter((p) => p && p.lane === "fuzzy" && p.candidates);
+    const current = probed.length ? probed[probed.length - 1].threshold : null;
+    const whatIf = probed.length ? `
+        <table class="hit-table"><caption>What if the similarity threshold were different?
+            <span class="hit-sub">${probed.length} longer bubbles also logged how similar their best memory entry was, even below the threshold.
+            Share of them that would have got examples at each threshold (cosine only; the current one is highlighted).</span></caption>
+            <tr><th>Threshold</th>${WHAT_IF.map((t) => `<th class="${current != null && Math.abs(t - current) < 0.026 ? "now" : ""}">${t.toFixed(2)}</th>`).join("")}</tr>
+            <tr><td>Would get examples</td>${WHAT_IF.map((t) => `<td>${pc(probed.filter((p) => p.best != null && p.best >= t).length, probed.length)}</td>`).join("")}</tr>
+        </table>`
+        : `<p class="text-muted hit-note"><b>What if the threshold were different?</b> - no data in this project yet. Bubbles translated since
+            v0.3.1 (05.11.2026) also log how similar their best memory entry was, even below the threshold; once there are some,
+            a table here shows how many would have got examples at a lower or a higher threshold.</p>`;
+    return `<div class="hit-rate">
+        <table class="hit-table"><caption>Does the memory help more often as it grows?
+            <span class="hit-sub">Bubbles grouped by how many entries the project memory had when they were translated; the %
+            columns = share of those bubbles that got something from memory. ≈ = memory size estimated (translated before it was logged).</span></caption>
+            <tr><th>Memory size</th><th>Bubbles</th><th>Got memory</th><th>Examples (fuzzy)</th><th>Exact phrase</th></tr>${sizeRows}
+        </table>${whatIf}</div>`;
 }
 
 function laneBadge(group) {

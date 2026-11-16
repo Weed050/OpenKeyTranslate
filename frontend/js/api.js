@@ -5,7 +5,23 @@
  * endpoint path ever changes, this is the one file to edit.
  */
  
-export const API_BASE = "http://127.0.0.1:8000";
+// Pages served by the backend itself (/app/... - the packaged app, or http://127.0.0.1:8000/app/ from the source) call
+// the API on their own origin, whatever port the launcher picked. Opened from another local server (VS Code Live
+// Server :5500): the backend's usual address.
+export const SERVED_BY_APP = location.protocol.startsWith("http") && location.pathname.startsWith("/app/");
+export const API_BASE = SERVED_BY_APP ? location.origin : "http://127.0.0.1:8000";
+
+/**
+ * What to tell the user when the backend does not answer. Served from /app/ (the packaged exe, `python launcher.py` or
+ * `python main.py`) the program itself is gone - its window was closed - and "python main.py" would be wrong advice for
+ * the exe; from another local server (Live Server :5500) the backend is a separate thing to start.
+ */
+export function backendDownHint() {
+    return SERVED_BY_APP
+        ? `OpenKeyTranslate is not running any more - was its window (the black console) closed? Start the app again `
+          + `(OpenKeyTranslate.exe, or <code>python launcher.py</code> from the source), then reload this page.`
+        : `Is the backend running? Start it with <code>python main.py</code> in the backend folder, then reload this page.`;
+}
  
 async function request(path, options = {}) {
     const hasBody = options.body !== undefined;
@@ -39,6 +55,12 @@ export const api = {
     projects: {
         list: () => request("/projects/"),
         progress: (projectId) => request(`/projects/${projectId}/progress`),   // {total, processed, reviewed}
+        // project-wide choices: {bubble_order, lettering_style} (services/project_prefs.py)
+        prefs: (projectId) => request(`/projects/${projectId}/prefs`),
+        setPrefs: (projectId, payload) => request(`/projects/${projectId}/prefs`, { method: "PATCH", body: JSON.stringify(payload) }),
+        // find & replace in the bubbles' translations: {find, replace, mode: "word" | "prefix", keys?, apply}
+        replaceTranslations: (projectId, payload) =>
+            request(`/projects/${projectId}/replace-translations`, { method: "POST", body: JSON.stringify(payload) }),
         openExported: (projectId) => request(`/projects/${projectId}/open-exported`, { method: "POST" }),
         selectFolder: () => request("/projects/select-folder"),
         import: (path, projectName) =>
@@ -68,6 +90,8 @@ export const api = {
         // one key of the pool, by id "provider/label": a tiny translation / the models its server offers
         testKey: (id) => request("/settings/test-key", { method: "POST", body: JSON.stringify({ id }) }),
         keyModels: (id) => request("/settings/key-models", { method: "POST", body: JSON.stringify({ id }) }),
+        // {keys: {"provider/label": {today, limit_day, limit_source, left, exhausted_today, ...}}} - an estimate
+        keyUsage: () => request("/settings/key-usage"),
         updateOcrOptions: (payload) => request("/settings/ocr-options", { method: "POST", body: JSON.stringify(payload) }),
         updateOcrEngine: (payload) => request("/settings/ocr-engine", { method: "POST", body: JSON.stringify(payload) }),
     },
@@ -77,6 +101,8 @@ export const api = {
             request(`/pages/by-project/${projectId}${includeExcluded ? "?include_excluded=true" : ""}`),
         get: (pageId) => request(`/pages/${pageId}`),
         imageUrl: (pageId) => `${API_BASE}/pages/${pageId}/image`,
+        // the raw page (text not erased) - the editor's "Original" view
+        originalUrl: (pageId) => `${API_BASE}/pages/${pageId}/original`,
         // the page with the translation typeset into the bubbles (rendered on every request)
         renderUrl: (pageId, download = false) => `${API_BASE}/pages/${pageId}/render${download ? "?download=true" : ""}`,
         process: (pageId) => request(`/pages/${pageId}/process`, { method: "POST" }),
@@ -87,17 +113,27 @@ export const api = {
             method: "POST", body: detectRotation === null ? undefined : JSON.stringify({ detect_rotation: detectRotation }),
         }),
         reinpaint: (pageId) => request(`/pages/${pageId}/reinpaint`, { method: "POST" }),
-        // manual "Clean area" rectangles (stored in the page JSON, kept by Rebuild image / Re-OCR)
-        addCleanup: (pageId, box) => request(`/pages/${pageId}/cleanups`, { method: "POST", body: JSON.stringify({ box }) }),
-        removeCleanups: (pageId, all = false) => request(`/pages/${pageId}/cleanups?all=${all}`, { method: "DELETE" }),
+        // manual clean-tool rectangles (stored in the page JSON, kept by Rebuild image / Re-OCR);
+        // mode: "clean" (marks inside) | "fill" (background colour) | "redraw" (AI model, when installed) |
+        //       "text" (only the letters inside, each hole filled the best way found) | "text_ai" (the same letters,
+        //       all redrawn by the AI model - needs it); answer: {cleanups, filled: how the new letters were filled};
+        // shape: "rect" | "ellipse" (only the ellipse inside the box)
+        addCleanup: (pageId, box, mode = "clean", shape = "rect") =>
+            request(`/pages/${pageId}/cleanups`, { method: "POST", body: JSON.stringify({ box, mode, shape }) }),
+        // all = every cleaned area; index = that one (0 = the oldest); neither = the last one
+        removeCleanups: (pageId, all = false, index = null) =>
+            request(`/pages/${pageId}/cleanups?all=${all}${index === null ? "" : `&index=${index}`}`, { method: "DELETE" }),
         patchBubble: (pageId, bubbleId, payload) =>
             request(`/pages/${pageId}/bubbles/${bubbleId}`, { method: "PATCH", body: JSON.stringify(payload) }),
         // box (optional) = [x1, y1, x2, y2] the user drew: that exact area is read instead of the detected bubble
         reocrBubble: (pageId, bubbleId, box = null) =>
             request(`/pages/${pageId}/bubbles/${bubbleId}/reocr`, { method: "POST", body: box ? JSON.stringify({ box }) : undefined }),
+        // right after a re-read only: text, box and lines of the bubble come back (409 after any other page edit)
+        undoReocrBubble: (pageId, bubbleId) => request(`/pages/${pageId}/bubbles/${bubbleId}/reocr/undo`, { method: "POST" }),
         reorderBubbles: (pageId, payload) =>
             request(`/pages/${pageId}/bubbles/reorder`, { method: "POST", body: JSON.stringify(payload) }),
-        addBubble: (pageId, box) => request(`/pages/${pageId}/bubbles`, { method: "POST", body: JSON.stringify({ box }) }),
+        // text given = no OCR, the bubble gets the typed text (drawn sound effects)
+        addBubble: (pageId, box, text) => request(`/pages/${pageId}/bubbles`, { method: "POST", body: JSON.stringify(text === undefined ? { box } : { box, text }) }),
         // otherIds: one id or a list; order: every merged id in joining order (null = reading-order setting)
         mergeBubble: (pageId, bubbleId, otherIds, order = null) =>
             request(`/pages/${pageId}/bubbles/${bubbleId}/merge`, { method: "POST", body: JSON.stringify({ with: otherIds, order }) }),
@@ -108,10 +144,11 @@ export const api = {
             request(`/pages/${pageId}/bubbles/${bubbleId}/layout`, { method: "PATCH", body: JSON.stringify(changes) }),
         exportPage: (pageId, options) => request(`/pages/${pageId}/export`, { method: "POST", body: JSON.stringify(options) }),
         // target: an existing bubble id = MOVE the picked lines there (with their part of the translation)
-        splitPreview: (pageId, bubbleId, newLines, target = null) =>
-            request(`/pages/${pageId}/bubbles/${bubbleId}/split`, { method: "POST", body: JSON.stringify({ new_lines: newLines, preview: true, ...(target ? { target } : {}) }) }),
-        splitBubble: (pageId, bubbleId, newLines, target = null) =>
-            request(`/pages/${pageId}/bubbles/${bubbleId}/split`, { method: "POST", body: JSON.stringify({ new_lines: newLines, ...(target ? { target } : {}) }) }),
+        // translations: [first part, second part] in reading order = the user's own cut of the translation
+        splitPreview: (pageId, bubbleId, newLines, target = null, translations = null) =>
+            request(`/pages/${pageId}/bubbles/${bubbleId}/split`, { method: "POST", body: JSON.stringify({ new_lines: newLines, preview: true, ...(target ? { target } : {}), ...(translations ? { translations } : {}) }) }),
+        splitBubble: (pageId, bubbleId, newLines, target = null, translations = null) =>
+            request(`/pages/${pageId}/bubbles/${bubbleId}/split`, { method: "POST", body: JSON.stringify({ new_lines: newLines, ...(target ? { target } : {}), ...(translations ? { translations } : {}) }) }),
         mergePreview: (pageId, bubbleId, otherIds, order = null) =>
             request(`/pages/${pageId}/bubbles/${bubbleId}/merge`, { method: "POST", body: JSON.stringify({ with: otherIds, order, preview: true }) }),
         retranslateBubble: (pageId, bubbleId) =>
@@ -132,9 +169,17 @@ export const api = {
     system: {
         health: () => request("/system/health"),
         ocrRuntime: () => request("/system/ocr-runtime"),
+        // correction-memory model: state (no loading) / real test (loads it if needed, checks similarities)
+        embedder: () => request("/system/embedder"),
+        embedderTest: () => request("/system/embedder/test", { method: "POST" }),
         // Settings > Storage & uninstall: places + sizes; delete only caches / logs / spare copies (by item id)
         storage: () => request("/system/storage"),
         storageDelete: (id) => request("/system/storage/delete", { method: "POST", body: JSON.stringify({ id }) }),
+        // optional AI redraw model (Settings > Add-ons): state / start the one-time download / stop it
+        lama: () => request("/system/lama"),
+        lamaInstall: () => request("/system/lama/install", { method: "POST" }),
+        lamaCancel: () => request("/system/lama/cancel", { method: "POST" }),
+        changelog: () => request("/system/changelog"),
         openPath: (path) => request("/system/open-path", { method: "POST", body: JSON.stringify({ path }) }),
         tailLog: (lines = 200, errorsOnly = false) =>
             request(`/system/tail-log?lines=${lines}&errors_only=${errorsOnly}`),

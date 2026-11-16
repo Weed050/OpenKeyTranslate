@@ -1,0 +1,132 @@
+# .github/workflows/build-windows.yml
+#
+# Builds the Windows app (CPU, folder build) from the public source on GitHub's own machine - never on a private PC -
+# so anyone can check where a download came from:
+#   1. this file and packaging/okt.spec are the whole recipe, run on a clean windows-latest from the chosen commit;
+#   2. the zip gets a build provenance attestation (SLSA, signed through Sigstore by GitHub):
+#        gh attestation verify OpenKeyTranslate-<version>-windows-cpu.zip --repo Weed050/OpenKeyTranslate
+#      proves it was built by this workflow, from which commit;
+#   3. SHA-256 checksums go next to the zip.
+# The exe is NOT code-signed (no certificate): Windows SmartScreen shows "unknown publisher" - see
+# packaging/RELEASE_NOTES.md. Actions are pinned to commit SHAs (a moved tag cannot change what runs here).
+#
+# ONLY by hand (the user's choice, 13.11.2026 - a push or a tag never starts a ~40 min build):
+#   Actions > Build Windows app > Run workflow, pick the branch:
+#     - "Also make a draft release" off -> a workflow artifact (zip + SHA256SUMS.txt) to download and test, kept
+#       `keep_days` days (the zip is ~0.5 GB, a test build does not need to stay for GitHub's default 90 days);
+#     - on -> also a DRAFT release v<APP_VERSION> with the zip, published by hand after a look. The tag is created when
+#       the release is published, on the commit that was built; an existing tag must point at that same commit.
+
+name: Build Windows app
+
+on:
+  workflow_dispatch:
+    inputs:
+      release:
+        description: "Also make a draft release v<APP_VERSION> (backend/core/config.py) with the zip"
+        type: boolean
+        default: false
+      keep_days:
+        description: "Keep the downloadable test build for this many days (1-90)"
+        type: number
+        default: 14
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 150
+    permissions:
+      contents: write             # create the draft release (only with "release" ticked)
+      id-token: write             # Sigstore certificate for the attestation
+      attestations: write         # store the attestation
+      artifact-metadata: write    # artifact storage record of the attestation
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1    # v7.0.1
+
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0    # v7.1.0
+        with:
+          python-version: "3.12"
+
+      - name: Version
+        run: |
+          $version = (Select-String -Path backend/core/config.py -Pattern '^APP_VERSION = "(.+)"').Matches[0].Groups[1].Value
+          if ($env:GITHUB_REF_TYPE -eq "tag" -and $env:GITHUB_REF_NAME -ne "v$version") {
+            throw "Tag $env:GITHUB_REF_NAME does not match APP_VERSION $version in backend/core/config.py"
+          }
+          "VERSION=$version" >> $env:GITHUB_ENV
+          "ZIP=OpenKeyTranslate-$version-windows-cpu.zip" >> $env:GITHUB_ENV
+          "Building $version from $env:GITHUB_REF_NAME ($env:GITHUB_SHA)"
+
+      - name: Release check (before the long build)
+        if: inputs.release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = "v$env:VERSION"
+          $refs = git ls-remote --tags origin "refs/tags/$tag" "refs/tags/$tag^{}"
+          if ($refs) {
+            # an annotated tag lists its commit on the ^{} line, a lightweight one on its only line
+            $peeled = @($refs | Where-Object { $_ -match '\^\{\}$' })
+            $line = if ($peeled.Count) { $peeled[0] } else { @($refs)[0] }
+            $commit = ($line -split '\s+')[0]
+            if ($commit -ne $env:GITHUB_SHA) {
+              throw "Tag $tag already exists on commit $commit, but this run builds $env:GITHUB_SHA. Raise APP_VERSION or run the workflow from the tag."
+            }
+          }
+          gh release view $tag --repo $env:GITHUB_REPOSITORY *> $null
+          if ($LASTEXITCODE -eq 0) { throw "A release $tag already exists - delete the draft first or raise APP_VERSION." }
+          $global:LASTEXITCODE = 0
+
+      - name: Install dependencies (CPU)
+        run: |
+          python -m pip install --upgrade pip
+          pip install torch==2.14.0 --index-url https://download.pytorch.org/whl/cpu
+          pip install -r setup/requirements_cpu_only.txt
+          pip install -r packaging/requirements_build.txt
+
+      - name: Build
+        run: pyinstaller packaging/okt.spec --noconfirm --clean
+
+      - name: Smoke test (starts the built app, checks the API and the pages, stops)
+        run: ./dist/OpenKeyTranslate/OpenKeyTranslate.exe --smoke-test --no-browser
+
+      - name: OCR self-test, quick (versions, OpenCV, Paddle - inside the built app)
+        run: ./dist/OpenKeyTranslate/OpenKeyTranslate.exe --ocr-selftest --quick
+
+      - name: Pack
+        run: |
+          Copy-Item packaging/RELEASE_NOTES.md dist/OpenKeyTranslate/README.txt
+          7z a -tzip -mx=7 $env:ZIP ./dist/OpenKeyTranslate
+          $hash = (Get-FileHash $env:ZIP -Algorithm SHA256).Hash.ToLower()
+          "$hash  $env:ZIP" | Out-File SHA256SUMS.txt -Encoding ascii
+          Get-Content SHA256SUMS.txt
+          "Size: {0:N0} MB" -f ((Get-Item $env:ZIP).Length / 1MB)
+
+      - name: Attest build provenance
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6    # v4.2.2
+        with:
+          subject-path: ${{ env.ZIP }}
+
+      - name: Upload the test build
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9    # v7.0.2
+        with:
+          name: OpenKeyTranslate-${{ env.VERSION }}-windows-cpu
+          path: |
+            ${{ env.ZIP }}
+            SHA256SUMS.txt
+          compression-level: 0
+          retention-days: ${{ inputs.keep_days }}
+
+      - name: Draft release
+        if: inputs.release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "v$env:VERSION" $env:ZIP SHA256SUMS.txt --draft --target $env:GITHUB_SHA `
+            --title "OpenKeyTranslate $env:VERSION" --notes-file packaging/RELEASE_NOTES.md

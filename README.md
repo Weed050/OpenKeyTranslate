@@ -6,7 +6,7 @@ translator decides, and the AI learns from every correction.
 
 > 🇵🇱 A Polish-language README is available at [`README-pl.md`](./README-pl.md) (older; this file is the current one).
 
-**Status: working prototype, version 0.3.0** (see [`CHANGELOG.md`](./CHANGELOG.md)). The whole first chapter of a test
+**Status: working prototype, version 0.5.0** (see [`CHANGELOG.md`](./CHANGELOG.md)). The whole first chapter of a test
 series has been translated with it. It is still a thesis project: expect rough edges, and the README will be rewritten
 when the thesis is finished.
 
@@ -57,7 +57,17 @@ a live correction loop.
 
 ---
 
-## Quick start (Windows, Python 3.12)
+## Quick start
+
+**Windows app (CPU):** download the zip from [Releases](https://github.com/Weed050/OpenKeyTranslate/releases), unzip,
+run `OpenKeyTranslate.exe` - the browser opens the app. Every release is built by GitHub Actions from this source
+([`build-windows.yml`](./.github/workflows/build-windows.yml), [`packaging/okt.spec`](./packaging/okt.spec)) and carries
+a signed build provenance record; check a download with
+`gh attestation verify <zip> --repo Weed050/OpenKeyTranslate` or against `SHA256SUMS.txt`. The exe is not
+code-signed, so Windows SmartScreen shows an unknown publisher (details in
+[`packaging/RELEASE_NOTES.md`](./packaging/RELEASE_NOTES.md)).
+
+**From the source (Windows, Python 3.12):**
 
 ```bash
 git clone https://github.com/Weed050/OpenKeyTranslate.git
@@ -65,12 +75,12 @@ cd OpenKeyTranslate/backend
 python -m venv .venv
 .venv\Scripts\activate
 pip install -r ../setup/requirements_cpu_only.txt     # or ../setup/req_gtx_1050ti_OKT.txt for an NVIDIA GPU
-python main.py                                         # API on http://127.0.0.1:8000
+python launcher.py                                     # opens http://127.0.0.1:8000/app/ in the browser
 ```
 
-Then open `frontend/index.html` through a local web server (e.g. VS Code Live Server on port 5500 - the API only
-accepts pages served from `localhost` / `127.0.0.1`). See `setup/pip_install_instruction.txt` for the GPU / CPU
-package details. The first run downloads the OCR and embedding models.
+`python main.py` starts only the server (pages at `http://127.0.0.1:8000/app/`); a separate web server such as VS
+Code Live Server still works too. See `setup/pip_install_instruction.txt` for the GPU / CPU package details. The first
+run downloads the OCR and embedding models.
 
 1. **Settings > Translation & API keys**: follow the Quick start box (free key from Groq or Google AI Studio, paste,
    Test).
@@ -93,7 +103,8 @@ folder with its size and what to delete when removing the app.
   multilingual memory embeddings.
 - The speaker's gender (Polish verb endings) is not inferred from the image.
 - One series, one translator and one model so far: the evaluation sample is small.
-- Starting it still needs a terminal (backend) and a browser; a one-click desktop app is planned.
+- The Windows app is a console window plus your browser, not a native desktop window; it is CPU-only (GPU: from the
+  source).
 
 ---
 

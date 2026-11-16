@@ -12,6 +12,9 @@ The JSON keeps the text LINES with the bubble that owns each one (page_export.sa
 rebuilt at any time from the ORIGINAL file without OCR:
   - delete a false-positive bubble  -> its lines are no longer erased (real artwork comes back exactly)
   - skip / un-skip a bubble          -> the original pixels return / the text is erased
+  - "Erase: off" on a bubble         -> its original pixels return although it IS translated and lettered
+                                        (bubble "no_auto_erase": true, since 2026-11-11): the automatic erase did a
+                                        bad job and the user cleans that spot by hand with the clean tools.
 Pages processed before line data existed have no "lines" in their JSON -> reinpaint_from_json() returns False.
 """
 
@@ -25,13 +28,21 @@ def _bbox(box):
     return min(xs), min(ys), max(xs), max(ys)
 
 
+def _erased(bubble: dict) -> bool:
+    """The automatic pass erases this bubble's text: not skipped and not switched to "Erase: off" by the user."""
+    return not bubble.get("skip") and not bubble.get("no_auto_erase")
+
+
 def targets_from_result(ocr_result: dict, to_original_coords):
     """(boxes to erase, bubbles to analyse) from a fresh process_image() result; converted to original coordinates."""
     by_id = {l["line_id"]: l for l in ocr_result["lines"]}
-    boxes = [to_original_coords(l["box"]) for l in ocr_result.get("inpaint_lines", ocr_result["lines"])]
+    kept = {i for b in ocr_result["bubbles"] if b.get("no_auto_erase") and not b.get("skip")
+            for i in b.get("line_ids", [])}              # "Erase: off" carried over by a Re-OCR (bubble_post.carry_over)
+    boxes = [to_original_coords(l["box"]) for l in ocr_result.get("inpaint_lines", ocr_result["lines"])
+             if l.get("line_id") not in kept]
     bubbles = []
     for b in ocr_result["bubbles"]:
-        if b.get("skip"):
+        if not _erased(b):
             continue
         bubbles.append({
             "bubble_id": b["bubble_id"], "bbox": _bbox(to_original_coords(b["box_coords"])),
@@ -49,12 +60,12 @@ def targets_from_json(ocr_data: dict):
     boxes, owned = [], {}
     for line in lines:
         owner = line.get("bubble_id")
-        if owner is None or (owner in alive and not alive[owner].get("skip")):
+        if owner is None or (owner in alive and _erased(alive[owner])):
             boxes.append(line["box"])            # unowned (watermark) lines are always erased
             if owner is not None:
                 owned.setdefault(owner, []).append(line["box"])
     bubbles = [{"bubble_id": bid, "bbox": _bbox(b["box"]), "boxes": owned.get(bid, [])}
-               for bid, b in alive.items() if not b.get("skip")]
+               for bid, b in alive.items() if _erased(b)]
     return boxes, bubbles
 
 

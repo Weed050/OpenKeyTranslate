@@ -5,8 +5,9 @@
  * (an API key typed in but never saved was easy to lose).
  */
  
-import { api, API_BASE } from "./api.js";
+import { api, API_BASE, backendDownHint } from "./api.js";
 import { renderSidebar } from "./nav.js";
+import { askOk, notify, choose } from "./dialogs.js";
 import { ACTIONS, SCOPES, currentBindings, loadOverrides, saveOverrides, validateBinding, comboFromEvent,
          formatCombo, normalizeCombo } from "./shortcuts.js";
  
@@ -23,8 +24,25 @@ window.addEventListener("DOMContentLoaded", () => {
 
 /* ------------------------------ autosave + unsaved-changes guard ------------------------------ */
 
+/*
+ * Every backend section saves itself when a field is left (runSave). A save that does not go through keeps its section
+ * in failedSections with the reason: "offline" = no answer from the backend (retried by itself every few seconds and
+ * when the window gets focus) or "invalid" = a value the user has to fix. Such sections are listed in a bar at the
+ * bottom of the page (a click on a name scrolls there) and marked in the section list on the right - before, the only
+ * trace was the status line of a card you had already scrolled away from.
+ * Leaving through a link of the app: unsaved sections are saved first; when that fails, the app's own dialog asks
+ * (Show me / Leave without saving). F5, closing the tab or typing an address can only get the browser's own question
+ * (a page is not allowed to replace it); when the answer there is "stay", the page scrolls to the first unsaved section.
+ * Until the settings are LOADED nothing is saved: the fields still hold the page's placeholders, and a save would write
+ * them (and an empty key list) over the real settings. The cards are locked and the page reloads once the backend answers.
+ */
 const dirtySections = new Set();
+const failedSections = new Map();       // section -> "offline" | "invalid"
 const saveTimers = {};
+const savesInFlight = {};
+let settingsLoaded = false;
+let retryTimer = null;
+let leavingOnPurpose = false;
 const SECTION_STATUS = {
     translation: "translationStatus", memory: "memorySettingsStatus", ocr: "ocrOptionsStatus", engine: "ocrEngineStatus",
     typesetting: "typesettingStatus", ignore: "ignorePatternsStatus",
@@ -51,16 +69,85 @@ function sectionStatus(section, text) {
 function markDirty(section) {
     if (!dirtySections.has(section)) sectionStatus(section, "Unsaved changes - saved when you leave the field.");
     dirtySections.add(section);
+    updateUnsavedUi();
 }
 
 function markClean(section, message) {
     dirtySections.delete(section);
+    failedSections.delete(section);
     if (message !== undefined) sectionStatus(section, message);
+    updateUnsavedUi();
+}
+
+/** catch-block of a save: no answer at all (fetch threw a TypeError) = backend offline, retried; else the server's reason */
+function saveFailed(section, e) {
+    const offline = e instanceof TypeError;
+    sectionStatus(section, offline
+        ? "Not saved: no answer from the backend (is it running?) - saved by itself as soon as it answers."
+        : `Not saved: ${e.message}`);
+    failedSections.set(section, offline ? "offline" : "invalid");
+    if (offline) startRetrying();
+    updateUnsavedUi();
+    return false;
+}
+
+/**
+ * Save one section (autosave, its Save button, the retry, leaving the page). One save per section at a time: a request
+ * made while one is running runs once more after it, with the fields as they are then.
+ */
+function runSave(section, opts = {}) {
+    if (!settingsLoaded) return Promise.resolve(false);
+    const running = savesInFlight[section];
+    if (running) {
+        running.again = true;
+        return running.done;
+    }
+    const me = { again: false };
+    savesInFlight[section] = me;
+    me.done = (async () => {
+        let ok = false;
+        try {
+            do {
+                me.again = false;
+                failedSections.delete(section);
+                ok = await SAVERS[section](opts);
+                if (!ok && !failedSections.has(section)) failedSections.set(section, "invalid");   // a value check said no
+            } while (me.again);
+        } finally {
+            delete savesInFlight[section];
+            updateUnsavedUi();
+        }
+        return ok;
+    })();
+    return me.done;
 }
 
 function scheduleSave(section) {
     clearTimeout(saveTimers[section]);
-    saveTimers[section] = setTimeout(() => SAVERS[section]({ auto: true }), 200);
+    saveTimers[section] = setTimeout(() => runSave(section, { auto: true }), 200);
+}
+
+/** every section with input that is not stored yet, saved now; true when nothing is left unsaved */
+async function saveAllPending() {
+    const sections = [...new Set([...dirtySections, ...failedSections.keys()])];
+    sections.forEach((s) => clearTimeout(saveTimers[s]));
+    const results = await Promise.all(sections.map((s) => runSave(s, { auto: true })));
+    return results.every(Boolean) && !dirtySections.size;
+}
+
+function startRetrying() {
+    if (retryTimer) return;
+    retryTimer = setInterval(retryOffline, 5000);
+}
+
+async function retryOffline() {
+    const waiting = [...failedSections].filter(([, why]) => why === "offline").map(([s]) => s);
+    if (!waiting.length) {
+        clearInterval(retryTimer);
+        retryTimer = null;
+        return;
+    }
+    await Promise.all(waiting.map((s) => runSave(s, { auto: true })));
 }
 
 function wireField(section, el) {
@@ -69,15 +156,145 @@ function wireField(section, el) {
     el.addEventListener("change", () => { markDirty(section); scheduleSave(section); });   // blur / tick / select
 }
 
+/** the card of a section (the one holding its status line) and that card's name in the section list */
+function sectionCard(section) {
+    return document.getElementById(SECTION_STATUS[section])?.closest(".card") || null;
+}
+
+function sectionName(section) {
+    const card = sectionCard(section);
+    const link = card && document.querySelector(`#settingsToc a[href="#${card.id}"]`);
+    return link?.textContent || card?.querySelector("h2")?.textContent.trim() || section;
+}
+
+function unsavedInPageOrder() {
+    const all = [...new Set([...failedSections.keys(), ...dirtySections])];
+    const pos = (s) => [...document.querySelectorAll(".settings-cards > .card")].indexOf(sectionCard(s));
+    return all.sort((a, b) => pos(a) - pos(b));
+}
+
+/** scroll to a section that is not saved (default: the first one) and make its card blink once */
+function showUnsaved(section = unsavedInPageOrder()[0]) {
+    const card = section && sectionCard(section);
+    if (!card) return;
+    card.scrollIntoView({ behavior: "smooth", block: "start" });
+    card.classList.remove("unsaved-flash");
+    void card.offsetWidth;                                   // restart the animation
+    card.classList.add("unsaved-flash");
+}
+
+const WHY_TEXT = {
+    offline: "no answer from the backend - retrying",
+    invalid: "a value needs fixing - see the card",
+};
+
+/** the bar at the bottom of the page + the markers in the section list */
+function updateUnsavedUi() {
+    document.querySelectorAll("#settingsToc a").forEach((a) => a.classList.remove("toc-dirty", "toc-failed"));
+    for (const s of dirtySections) {
+        const card = sectionCard(s);
+        if (card) document.querySelector(`#settingsToc a[href="#${card.id}"]`)?.classList.add("toc-dirty");
+    }
+    for (const s of failedSections.keys()) {
+        const card = sectionCard(s);
+        if (card) document.querySelector(`#settingsToc a[href="#${card.id}"]`)?.classList.add("toc-failed");
+    }
+
+    let bar = document.getElementById("unsavedBar");
+    if (!failedSections.size) {
+        bar?.remove();
+        return;
+    }
+    if (!bar) {
+        bar = document.createElement("div");
+        bar.id = "unsavedBar";
+        bar.className = "unsaved-bar";
+        bar.setAttribute("role", "status");
+        bar.addEventListener("click", async (e) => {
+            const go = e.target.closest("[data-section]");
+            if (go) showUnsaved(go.dataset.section);
+            else if (e.target.closest("[data-save-now]")) await saveAllPending();
+        });
+        document.querySelector(".main-content")?.appendChild(bar);
+    }
+    const items = unsavedInPageOrder().filter((s) => failedSections.has(s)).map((s) =>
+        `<button type="button" class="link-btn" data-section="${s}" title="Go to this section">${sectionName(s)}</button>`
+        + ` <span class="text-muted">(${WHY_TEXT[failedSections.get(s)]})</span>`);
+    bar.innerHTML = `<strong>Not saved:</strong> <span class="unsaved-list">${items.join(" &middot; ")}</span>
+        <button type="button" data-save-now title="Try to save every section listed here now">Save now</button>`;
+}
+
 function wireAutosave() {
     for (const [section, ids] of Object.entries(SECTION_FIELDS)) {
         ids.forEach((id) => wireField(section, document.getElementById(id)));
     }
+    window.addEventListener("focus", () => { if (retryTimer) retryOffline(); });
+
+    // a link of the app (sidebar, logo, project): save first; only when that fails ask - in the app's own dialog
+    document.addEventListener("click", async (e) => {
+        if (!dirtySections.size && !failedSections.size) return;
+        const a = e.target.closest("a[href]");
+        if (!a || e.defaultPrevented || e.button !== 0 || e.ctrlKey || e.metaKey || e.shiftKey || a.target === "_blank") return;
+        const url = new URL(a.href, location.href);
+        if (url.origin === location.origin && url.pathname === location.pathname && url.search === location.search) return;
+        e.preventDefault();
+        if (await saveAllPending()) {
+            leavingOnPurpose = true;
+            location.href = url.href;
+            return;
+        }
+        const rows = unsavedInPageOrder().map((s) =>
+            `<li><b>${sectionName(s)}</b> - ${failedSections.get(s) === "offline" ? "no answer from the backend (is it running?)" : "a value needs fixing"}</li>`);
+        const { choice } = await choose({
+            title: "Some settings are not saved",
+            html: `<ul>${rows.join("")}</ul><p>Leaving now loses these changes.</p>`,
+            buttons: [{ id: "leave", label: "Leave without saving", danger: true, left: true },
+                      { id: "show", label: "Show me", primary: true }],
+        });
+        if (choice === "leave") {
+            leavingOnPurpose = true;
+            location.href = url.href;
+        } else {
+            showUnsaved();
+        }
+    }, true);
+
+    // F5 / closing the tab / another address: only the browser's own question is possible. If the answer is "stay",
+    // the page lives on and the timer runs - then show where the unsaved input is.
     window.addEventListener("beforeunload", (event) => {
-        if (!dirtySections.size) return;
+        if (leavingOnPurpose || (!dirtySections.size && !failedSections.size)) return;
         event.preventDefault();
-        event.returnValue = "";          // the browser shows its own "leave page?" dialog
+        event.returnValue = "";
+        setTimeout(() => showUnsaved(), 400);
     });
+}
+
+/**
+ * The settings could not be loaded (backend not running): lock the cards that are saved to the backend - their fields
+ * hold placeholders, not your settings - and reload the page as soon as the backend answers. Appearance and keyboard
+ * shortcuts live in the browser and stay usable.
+ */
+function settingsNotLoaded(message) {
+    Object.keys(SECTION_STATUS).forEach((s) => {
+        const card = sectionCard(s);
+        if (card) { card.inert = true; card.classList.add("not-loaded"); }
+    });
+    if (!document.getElementById("settingsOffline")) {
+        const note = document.createElement("div");
+        note.id = "settingsOffline";
+        note.className = "settings-offline";
+        note.innerHTML = `<strong>Settings could not be loaded</strong> - ${message}. ${backendDownHint()} The cards
+            that are saved there are locked until it answers (nothing typed into them could be saved); this page reloads
+            by itself then. Appearance and keyboard shortcuts work without it.`;
+        document.querySelector(".settings-cards .page-header")?.after(note);
+    }
+    const poll = setInterval(async () => {
+        try {
+            await api.settings.get();
+            clearInterval(poll);
+            location.reload();
+        } catch { /* still no answer */ }
+    }, 4000);
 }
 
 function savedNow() {
@@ -241,12 +458,59 @@ function initShortcuts() {
             render();
         }
     });
-    document.getElementById("resetShortcutsBtn").addEventListener("click", () => {
-        if (!confirm("Put every keyboard shortcut back to its default?")) return;
+    document.getElementById("resetShortcutsBtn").addEventListener("click", async () => {
+        if (!(await askOk("Put every keyboard shortcut back to its default?", { ok: "Reset all" }))) return;
         saveOverrides({});
         capturing = null;
         render();
         status.textContent = "All shortcuts are back to their defaults";
+    });
+
+    // Export / Import: the shortcuts live in this browser (localStorage), so Backup cannot carry them
+    document.getElementById("exportShortcutsBtn")?.addEventListener("click", () => {
+        const data = { app: "OpenKeyTranslate", kind: "shortcuts", version: 1, exported_at: new Date().toISOString(),
+                       shortcuts: loadOverrides() };
+        const url = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], { type: "application/json" }));
+        const a = Object.assign(document.createElement("a"), { href: url, download: "okt-shortcuts.json" });
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+        const n = Object.keys(data.shortcuts).length;
+        status.textContent = n ? `Exported ${n} changed shortcut(s) - the others are defaults` : "Exported - all shortcuts are defaults";
+    });
+    const fileInput = document.getElementById("importShortcutsFile");
+    document.getElementById("importShortcutsBtn")?.addEventListener("click", () => fileInput?.click());
+    fileInput?.addEventListener("change", async () => {
+        const file = fileInput.files?.[0];
+        fileInput.value = "";
+        if (!file) return;
+        try {
+            const data = JSON.parse(await file.text());
+            const incoming = data && typeof data.shortcuts === "object" ? data.shortcuts : null;
+            if (!incoming || data.kind !== "shortcuts") throw new Error("not a shortcuts file from Export");
+            // every key is checked against the whole imported set: a collision or a browser key falls back to the default
+            const candidate = {};
+            for (const [id, combo] of Object.entries(incoming)) {
+                if (ACTIONS.some((a) => a.id === id) && typeof combo === "string") candidate[id] = combo;
+            }
+            const merged = currentBindings(candidate);
+            const accepted = {};
+            const rejected = [];
+            for (const [id, combo] of Object.entries(candidate)) {
+                const check = validateBinding(id, combo, { ...merged, [id]: "" });
+                if (check.ok) accepted[id] = combo;
+                else rejected.push(`${ACTIONS.find((a) => a.id === id).label}: ${check.error}`);
+            }
+            if (!(await askOk(`Replace your shortcuts with the ${Object.keys(accepted).length} from "${file.name}"?`
+                + (rejected.length ? `\n\nKept at default (${rejected.length}):\n${rejected.join("\n")}` : ""), { ok: "Replace" }))) return;
+            saveOverrides(accepted);
+            capturing = null;
+            render();
+            status.textContent = `Imported ${Object.keys(accepted).length} shortcut(s)${rejected.length ? `, ${rejected.length} kept at default` : ""}`;
+        } catch (e) {
+            status.textContent = `Not imported: ${e.message}`;
+        }
     });
     render();
 }
@@ -266,8 +530,14 @@ function initSettingsToc() {
 
     const slug = (text) => text.toLowerCase().replace(/&/g, "and").replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
     toc.innerHTML = `<div class="settings-toc-title">On this page</div>`;
+    // heading text without its "?" help button (.help-q) - the button's own text must not end up in the list
+    const headingText = (h2) => {
+        const copy = h2.cloneNode(true);
+        copy.querySelectorAll(".help-q").forEach((b) => b.remove());
+        return copy.textContent.trim();
+    };
     const links = cards.map((card) => {
-        const title = card.querySelector("h2").textContent.trim();
+        const title = headingText(card.querySelector("h2"));
         card.id = card.id || `section-${slug(title)}`;
         const a = document.createElement("a");
         a.href = `#${card.id}`;
@@ -301,8 +571,10 @@ function initSettingsToc() {
         if (!ticking) { ticking = true; requestAnimationFrame(update); }
     }, { passive: true });
 
+    // #section = go there when Settings is OPENED that way (a link); on F5 / Back nav.js puts back where you were
+    const navType = performance.getEntriesByType?.("navigation")?.[0]?.type;
     const fromHash = cards.findIndex((c) => `#${c.id}` === location.hash);
-    if (fromHash > 0) cards[fromHash].scrollIntoView({ block: "start" });
+    if (fromHash > 0 && !["reload", "back_forward"].includes(navType)) cards[fromHash].scrollIntoView({ block: "start" });
     update();
 }
  
@@ -317,13 +589,15 @@ async function loadSettings() {
         document.getElementById("memoryLexicalInput").value = appSettings.memory_lexical_min ?? 25;
         document.getElementById("memoryAbRateInput").value = appSettings.memory_ab_sample_rate ?? 1.0;
         document.getElementById("memoryStoreApprovedCheckbox").checked = appSettings.memory_store_approved === true;
-        document.getElementById("memoryAbCheckbox").checked = appSettings.memory_ab_test_logging !== false;
+        document.getElementById("memoryAbCheckbox").checked = appSettings.memory_ab_test_logging === true;
+        updateAbDependents();
         document.getElementById("glossaryPosteditCheckbox").checked = appSettings.glossary_postedit !== false;
         document.getElementById("glossarySuggestCheckbox").checked = appSettings.glossary_suggest_on_save !== false;
         document.getElementById("matchCaseCheckbox").checked = appSettings.translation_match_case !== false;
         document.getElementById("ignorePatternsInput").value = (appSettings.ocr_ignore_patterns || []).join("\n");
         document.getElementById("appVersionLabel").textContent = appSettings.app_version || "unknown";
         document.getElementById("settingsPathLabel").textContent = appSettings.settings_path || "unknown";
+        renderIgnoreTools();
         fillTranslationForm();
         document.getElementById("ocrTextfixCheckbox").checked = appSettings.ocr_textfix !== false;
         document.getElementById("ocrSkipNumericCheckbox").checked = appSettings.ocr_skip_numeric !== false;
@@ -342,9 +616,12 @@ async function loadSettings() {
         loadOcrRuntime();
         document.getElementById("inpaintModeSelect").value = appSettings.inpaint_mode || "glyph";
         document.getElementById("bubbleOrderSelect").value = appSettings.bubble_order || "ttb";
+        settingsLoaded = true;
         Object.keys(SECTION_STATUS).forEach((section) => markClean(section));
     } catch (e) {
         document.getElementById("currentWorkspacePath").textContent = `Error: ${e.message}`;
+        settingsLoaded = false;
+        settingsNotLoaded(e instanceof TypeError ? "no answer from the backend" : e.message);
     }
 }
  
@@ -357,12 +634,213 @@ document.getElementById("copyWorkspaceBtn").addEventListener("click", async () =
     }
 });
  
+/* ------------------------------ explanations, A/B switch, About ------------------------------ */
+
+/* "?" buttons next to settings open the matching Help topic (js/help.js); inside a <label> the click must not tick the box */
+document.querySelectorAll(".help-q[data-help]").forEach((btn) => btn.addEventListener("click", (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    window.oktHelp?.open(btn.dataset.help);
+}));
+
+/**
+ * A/B experiment switch: what only matters while it is on (sample rate, the note at the keys) is greyed out / hidden
+ * when it is off - the values stay in the fields and in settings.json, so switching it on again brings back the
+ * user's own values, not the defaults.
+ */
+function updateAbDependents() {
+    const on = document.getElementById("memoryAbCheckbox").checked;
+    document.querySelectorAll(".ab-dependent").forEach((row) => {
+        row.classList.toggle("is-off", !on);
+        row.querySelectorAll("input, select").forEach((input) => { input.disabled = !on; });
+    });
+    document.getElementById("keyAbNote")?.classList.toggle("is-off", !on);
+}
+document.getElementById("memoryAbCheckbox").addEventListener("change", updateAbDependents);
+
+/* Settings file: the path only on request (it is next to the API keys - nothing secret in the path, but no need to show it) */
+document.getElementById("showSettingsPathBtn")?.addEventListener("click", (e) => {
+    const label = document.getElementById("settingsPathLabel");
+    const shown = label.classList.toggle("hidden") === false;
+    e.target.textContent = shown ? "Hide path" : "Show path";
+});
+document.getElementById("openSettingsFolderBtn")?.addEventListener("click", async () => {
+    try {
+        await api.system.openPath(appSettings.settings_path);
+    } catch (e) {
+        notify(`Couldn't open: ${e.message}`);
+    }
+});
+
+/* After editing a bubble's ORIGINAL text in the editor: ask / translate again / keep (same key as js/editor.js) */
+const SOURCE_CHANGE_KEY = "okt-source-change";
+const sourceChangeSelect = document.getElementById("sourceChangeSelect");
+if (sourceChangeSelect) {
+    try { sourceChangeSelect.value = localStorage.getItem(SOURCE_CHANGE_KEY) || "ask"; } catch { /* private mode */ }
+    if (!sourceChangeSelect.value) sourceChangeSelect.value = "ask";
+    sourceChangeSelect.addEventListener("change", () => {
+        try { localStorage.setItem(SOURCE_CHANGE_KEY, sourceChangeSelect.value); } catch { /* private mode */ }
+    });
+}
+
+/*
+ * What's new: CHANGELOG.md of the program folder in a dialog (a few markdown rules are enough for that file).
+ * One fold per version ("## [0.4.0] - date"): only the newest is open - all of them open at once was a wall of text.
+ */
+function renderChangelog(md, installed) {
+    const sections = [];
+    let intro = [];
+    for (const line of md.split(/\r?\n/)) {
+        const head = line.match(/^## (.*)$/);
+        if (head) sections.push({ title: head[1], lines: [] });
+        else if (sections.length) sections.at(-1).lines.push(line);
+        else if (!/^# /.test(line)) intro.push(line);
+    }
+    const label = (title) => {
+        const m = title.match(/^\[([^\]]+)\](.*)$/);
+        if (!m) return escapeHtml(title);
+        const [, version, rest] = m;
+        if (/unreleased/i.test(version)) return `Not released yet <span class="text-muted">- changes after ${escapeHtml(installed || "the last version")}</span>`;
+        return `Version ${escapeHtml(version)}<span class="text-muted">${escapeHtml(rest)}</span>${version === installed ? ' <span class="changelog-you">your version</span>' : ""}`;
+    };
+    intro = intro.join("\n").trim();
+    return (intro ? `<div class="text-muted">${renderChangelogBody(intro)}</div>` : "")
+        + sections.map((s, i) => `<details class="changelog-version" ${i === 0 ? "open" : ""}>
+            <summary>${label(s.title)}</summary>${renderChangelogBody(s.lines.join("\n"))}</details>`).join("");
+}
+
+function renderChangelogBody(md) {
+    const inline = (s) => escapeHtml(s)
+        .replace(/`([^`]+)`/g, "<code>$1</code>")
+        .replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>")
+        .replace(/(^|[^*])\*([^*\s][^*]*)\*/g, "$1<i>$2</i>");
+    const out = [];
+    let list = false;
+    let item = null;
+    const flush = () => {
+        if (item !== null) { out.push(`<li>${inline(item)}</li>`); item = null; }
+    };
+    for (const line of md.split(/\r?\n/)) {
+        const bullet = line.match(/^- (.*)$/);
+        if (bullet) {
+            flush();
+            if (!list) { out.push("<ul>"); list = true; }
+            item = bullet[1];
+            continue;
+        }
+        if (item !== null && /^\s+\S/.test(line)) { item += ` ${line.trim()}`; continue; }   // wrapped bullet text
+        flush();
+        if (list) { out.push("</ul>"); list = false; }
+        const h = line.match(/^(#{1,3}) (.*)$/);
+        if (h) out.push(h[1].length === 1 ? "" : `<h${h[1].length + 1}>${inline(h[2])}</h${h[1].length + 1}>`);
+        else if (line.trim()) out.push(`<p>${inline(line)}</p>`);
+    }
+    flush();
+    if (list) out.push("</ul>");
+    return out.join("");
+}
+
+document.getElementById("changelogBtn")?.addEventListener("click", async () => {
+    let data;
+    try {
+        data = await api.system.changelog();
+    } catch (e) {
+        notify(`Couldn't load the changelog: ${e.message}`);
+        return;
+    }
+    const { choose } = await import("./dialogs.js");
+    await choose({
+        title: `What's new - you have version ${data.version}`,
+        html: `<div class="changelog-body">${renderChangelog(data.text, data.version)}</div>`,
+        buttons: [{ id: "close", label: "Close", primary: true }],
+        width: "min(820px, 94vw)",
+    });
+});
+
+/* OCR: ignored text - ready patterns (a click adds the line) and a tester that runs the lines on a sample text */
+const IGNORE_PRESETS = [
+    { label: "Site addresses (.com, .net ...)", pattern: "\\b[\\w-]+\\.(?:com|net|org|gg|io)\\b",     // = the default line
+      example: "READ AT MANGASITE.COM" },
+    { label: "Links with www / http", pattern: "(?:https?://|www\\.)\\S+", example: "www.example.org/manga" },
+    { label: "Discord / Patreon / Ko-fi", pattern: "\\b(?:discord|patreon|ko-fi|kofi)\\b", example: "JOIN OUR DISCORD" },
+    { label: "Scanlation credits", pattern: "\\b(?:scan(?:lat(?:ion|ed))?|translat(?:ed|ion|or)|clean(?:ed|er)|typeset(?:ter)?|proofread(?:er)?|raws?)\\s*(?:by|:)",
+      example: "TRANSLATED BY: TEAM X" },
+    { label: "Only numbers (page numbers)", pattern: "^\\W*\\d+\\W*$", example: "- 12 -" },
+];
+
+function ignoreLines() {
+    return document.getElementById("ignorePatternsInput").value.split("\n").map((l) => l.trim()).filter(Boolean);
+}
+
+function renderIgnoreTools() {
+    const box = document.getElementById("ignorePresets");
+    if (!box) return;
+    const lines = ignoreLines();
+    // a ready pattern is a switch: + adds its line, a second click (✓) takes the line out again
+    box.innerHTML = `<span class="text-muted" style="font-size:12px; align-self:center;">Ready patterns:</span>` + IGNORE_PRESETS.map((p, i) => {
+        const on = lines.includes(p.pattern);
+        return `<button type="button" data-preset="${i}" class="${on ? "is-on" : ""}" aria-pressed="${on}"
+            title="${on ? "In the list - click to take it out again" : "Click to add"}: ${escapeHtml(p.pattern)} - e.g. drops &quot;${escapeHtml(p.example)}&quot;">${on ? "✓ " : "+ "}${escapeHtml(p.label)}</button>`;
+    }).join("");
+    testIgnore();
+}
+
+/** The tester runs the lines with the browser's regular expressions - the same for ordinary patterns as Python's re. */
+function testIgnore() {
+    const input = document.getElementById("ignoreTestInput");
+    const out = document.getElementById("ignoreTestResult");
+    if (!input || !out) return;
+    const text = input.value.trim();
+    const bad = [];
+    const hit = ignoreLines().find((line) => {
+        try {
+            return text && new RegExp(line, "i").test(text);
+        } catch {
+            bad.push(line);
+            return false;
+        }
+    });
+    out.className = text ? (hit ? "hit" : "miss") : "text-muted";
+    // the result in words: a bubble with this text would be dropped (and by which line) or translated as usual
+    out.textContent = !text ? (bad.length ? `Line not understood: ${bad[0]}` : "")
+        : hit ? `A bubble with this text would be dropped (not translated) - because of the line ${hit}`
+            : "A bubble with this text would be translated - no line catches it";
+    if (text && bad.length) out.textContent += ` (not understood: ${bad[0]})`;
+}
+
+document.getElementById("ignorePresets")?.addEventListener("click", (e) => {
+    const btn = e.target.closest("[data-preset]");
+    if (!btn) return;
+    const preset = IGNORE_PRESETS[Number(btn.dataset.preset)];
+    const area = document.getElementById("ignorePatternsInput");
+    const lines = ignoreLines();
+    if (lines.includes(preset.pattern)) {
+        area.value = lines.filter((l) => l !== preset.pattern).join("\n");     // second click: out again
+    } else {
+        area.value = [...lines, preset.pattern].join("\n");
+    }
+    document.getElementById("ignoreTestInput").value = preset.example;      // the tester shows the effect either way
+    renderIgnoreTools();
+    area.dispatchEvent(new Event("change"));        // autosave, as if the line had been typed
+});
+document.getElementById("ignoreTestInput")?.addEventListener("input", testIgnore);
+document.getElementById("ignorePatternsInput")?.addEventListener("input", renderIgnoreTools);
+
 document.getElementById("changeWorkspaceBtn").addEventListener("click", async () => {
     const data = await api.projects.selectFolder();
     if (!data.path) return;
  
-    const shouldMigrate = confirm("Do you want to MIGRATE existing project data to the new workspace location?");
-    const payload = { ...appSettings, app_root_dir: data.path, migrate_data: shouldMigrate };
+    // three answers - with confirm() "Cancel" meant "switch, but do not move", not "cancel"
+    const { choose } = await import("./dialogs.js");
+    const { choice } = await choose({
+        title: "Move your data to the new folder?",
+        html: `<p>New workspace folder: <code>${escapeHtml(data.path)}</code></p>
+            <p><b>Move the data</b>: projects and the database go there with you. <b>Only switch</b>: the app starts with
+            whatever is in that folder (empty for a new one); your current data stays where it is.</p>`,
+        buttons: [{ id: "switch", label: "Only switch" }, { id: "move", label: "Move the data", primary: true }],
+    });
+    if (!choice) return;
+    const payload = { ...appSettings, app_root_dir: data.path, migrate_data: choice === "move" };
  
     try {
         const result = await api.settings.update(payload);
@@ -374,7 +852,7 @@ document.getElementById("changeWorkspaceBtn").addEventListener("click", async ()
 });
  
 document.getElementById("resetWorkspaceBtn").addEventListener("click", async () => {
-    if (!confirm("Reset to the default AppData location? All project data will be moved there.")) return;
+    if (!(await askOk("Reset to the default AppData location? All project data will be moved there.", { ok: "Move to the default" }))) return;
  
     try {
         const result = await api.settings.resetToDefault();
@@ -389,7 +867,7 @@ function flashStatus(message) {
     document.getElementById("settingsStatus").textContent = message;
 }
  
-document.getElementById("saveMemorySettingsBtn").addEventListener("click", () => saveMemorySettings());
+document.getElementById("saveMemorySettingsBtn").addEventListener("click", () => runSave("memory"));
 
 async function saveMemorySettings() {
     const status = { set textContent(t) { sectionStatus("memory", t); } };
@@ -422,12 +900,11 @@ async function saveMemorySettings() {
         markClean("memory", `${savedNow()} - ${result.message}`);
         return true;
     } catch (e) {
-        status.textContent = `Not saved: ${e.message}`;
-        return false;
+        return saveFailed("memory", e);
     }
 }
 
-document.getElementById("saveIgnorePatternsBtn").addEventListener("click", () => saveIgnorePatterns());
+document.getElementById("saveIgnorePatternsBtn").addEventListener("click", () => runSave("ignore"));
 
 async function saveIgnorePatterns() {
     const patterns = document.getElementById("ignorePatternsInput").value
@@ -437,8 +914,7 @@ async function saveIgnorePatterns() {
         markClean("ignore", `${savedNow()} - ${result.message}`);
         return true;
     } catch (e) {
-        sectionStatus("ignore", `Not saved: ${e.message}`);
-        return false;
+        return saveFailed("ignore", e);
     }
 }
  
@@ -448,7 +924,7 @@ document.getElementById("openLogFolderBtn").addEventListener("click", async () =
     try {
         await api.system.openPath(appSettings.log_file_path);
     } catch (e) {
-        alert(`Couldn't open log file: ${e.message}`);
+        notify(`Couldn't open log file: ${e.message}`);
     }
 });
  
@@ -457,25 +933,38 @@ document.getElementById("openDbFolderBtn").addEventListener("click", async () =>
     try {
         await api.system.openPath(appSettings.database_path);
     } catch (e) {
-        alert(`Couldn't open database file: ${e.message}`);
+        notify(`Couldn't open database file: ${e.message}`);
     }
 });
  
  
-document.getElementById("viewLogBtn").addEventListener("click", async () => {
+document.getElementById("viewLogBtn").addEventListener("click", async (e) => {
     const block = document.getElementById("logViewerBlock");
-    block.classList.toggle("hidden");
-    if (!block.classList.contains("hidden")) await refreshLogViewer();
+    const shown = block.classList.toggle("hidden") === false;
+    e.currentTarget.textContent = shown ? "Hide log" : "View recent";   // the button says what a click does now
+    if (shown) await refreshLogViewer();
 });
 document.getElementById("logErrorsOnlyCheckbox").addEventListener("change", refreshLogViewer);
  
+/** Log lines newest first, by entry: a line starting with a date opens an entry, the lines after it belong to it. */
+function newestFirst(lines) {
+    const entries = [];
+    for (const line of lines) {
+        if (/^\d{4}-\d{2}-\d{2} /.test(line) || !entries.length) entries.push([line]);
+        else entries.at(-1).push(line);
+    }
+    return entries.reverse().flat();
+}
+
 async function refreshLogViewer() {
     const errorsOnly = document.getElementById("logErrorsOnlyCheckbox").checked;
     const content = document.getElementById("logViewerContent");
     content.textContent = "Loading...";
     try {
         const result = await api.system.tailLog(200, errorsOnly);
-        content.textContent = result.lines.length ? result.lines.join("\n") : "(no matching log lines)";
+        // newest first: what just happened is what you look for (a multi-line entry - a traceback - keeps its own order)
+        content.textContent = result.lines.length ? newestFirst(result.lines).join("\n") : "(no matching log lines)";
+        content.scrollTop = 0;
     } catch (e) {
         content.textContent = `Couldn't load log: ${e.message}`;
     }
@@ -514,6 +1003,17 @@ function providerLabel(name) {
 
 function defaultModel(provider) {
     return document.getElementById(PROVIDER_MODEL_INPUT[provider])?.value.trim() || "";
+}
+
+/**
+ * Model field of a key row: the placeholder is the effective model itself ("gemini-2.5-flash", grey italic = the
+ * provider default used while the field is empty). It used to read "default: gemini-2.5-flas" - cut off, so one
+ * could not tell flash from flash-lite.
+ */
+function setModelHint(input, provider) {
+    const model = defaultModel(provider);
+    input.placeholder = model || "model";
+    input.title = `Model for this key only. Empty = the ${providerLabel(provider)} default model set below${model ? ` (now ${model})` : ""}. Click to pick from the list, or type any name.`;
 }
 
 function keyId(row) {
@@ -555,6 +1055,7 @@ function fillTranslationForm() {
     document.getElementById("translationMaxTokensInput").value = appSettings.translation_max_tokens ?? 4096;
     document.getElementById("geminiThinkingInput").value = appSettings.gemini_thinking_budget ?? 0;
     renderKeyRows();
+    loadKeyUsage();
 }
 
 function fillDatalist(id, values) {
@@ -637,8 +1138,7 @@ function keyRowElement(row, i) {
     model.type = "text"; model.value = row.model; model.spellcheck = false; model.className = "key-model";
     const listId = `keyModels${i}`;
     model.setAttribute("list", listId);
-    model.placeholder = `default: ${defaultModel(row.provider) || "?"}`;
-    model.title = "Model for this key only - empty = the provider's default model below. Click to pick from the list, or type any name.";
+    setModelHint(model, row.provider);
     model.addEventListener("input", () => { row.model = model.value; });
     const models = document.createElement("datalist");
     models.id = listId;
@@ -665,8 +1165,9 @@ function keyRowElement(row, i) {
 
     const del = document.createElement("button");
     del.type = "button"; del.className = "danger key-small"; del.textContent = "Remove";
-    del.addEventListener("click", () => {
-        if (row.api_key && !confirm(`Remove the key "${row.label}"? Its secret is deleted from the settings.`)) return;
+    del.addEventListener("click", async () => {
+        if (row.api_key && !(await askOk(`Remove the key "${row.label}"?\n\nIts secret is deleted from the settings.`,
+            { ok: "Remove", danger: true }))) return;
         keyRows.splice(i, 1);
         renderKeyRows();
         keyChanged();
@@ -707,6 +1208,12 @@ function keyRowElement(row, i) {
         wrap.appendChild(warn);
     }
 
+    const usage = document.createElement("div");
+    usage.className = "key-usage hidden";
+    wrap.appendChild(usage);
+    row._usage = usage;
+    showKeyUsage(row);
+
     const result = document.createElement("div");
     result.className = "key-result hidden";
     result.setAttribute("role", "status");
@@ -721,7 +1228,7 @@ for (const name of PROVIDER_ORDER) {
         // the "default: <model>" hints follow the provider default models without re-rendering (keeps focus)
         keyRows.forEach((row) => {
             const input = row._el?.querySelector(".key-model");
-            if (input && row.provider === name) input.placeholder = `default: ${defaultModel(name) || "?"}`;
+            if (input && row.provider === name) setModelHint(input, name);
         });
     });
 }
@@ -737,7 +1244,7 @@ document.getElementById("addKeyBtn")?.addEventListener("click", () => {
     keyRows[keyRows.length - 1]._keyInput?.focus();
 });
 
-document.getElementById("saveTranslationBtn")?.addEventListener("click", () => saveTranslation());
+document.getElementById("saveTranslationBtn")?.addEventListener("click", () => runSave("translation"));
 
 async function saveTranslation() {
     const status = (t) => sectionStatus("translation", t);
@@ -791,21 +1298,21 @@ async function saveTranslation() {
         renderSidebar(null);       // health banner: a "no API key" warning disappears right away
         return true;
     } catch (e) {
-        status(`Not saved: ${e.message}`);
-        return false;
+        return saveFailed("translation", e);
     }
 }
 
 /** Save first when the section has unsaved input: tests and model lists use the STORED key. */
 async function savedForServer() {
-    if (!dirtySections.has("translation")) return true;
+    if (!dirtySections.has("translation") && !failedSections.has("translation")) return true;
     clearTimeout(saveTimers.translation);
-    return saveTranslation();
+    return runSave("translation");
 }
 
 const RESULT_KIND = {
     RateLimited: ["Rate limit", "The key works, but its limit is used up for now - wait a minute, or add another key below it."],
     KeyRejected: ["Rejected", "Check the key (copy it again), the model name (Models lists what this key can use) and the server address."],
+    OutOfCredits: ["No credits left", "The key itself is fine, but the prepaid balance of its account is used up - add credits on the provider's billing page."],
     Unreachable: ["No connection", "The server did not answer."],
     Transient: ["Server error", "The provider has a problem right now - try again in a moment."],
     unusable: ["Not ready", ""],
@@ -849,6 +1356,55 @@ async function testOneKey(row) {
         row._lastResult = { ok: false, kind: "error", message: e.message };
     }
     showKeyResult(row._result, row._lastResult);
+    loadKeyUsage();                     // the test was a request too
+}
+
+/*
+ * Usage line under a key: requests this app made with it today, the day's limit when a server named it (Groq with
+ * every answer, Gemini in its "quota used up" answer) or the count reached when the quota ran out (estimate), and a
+ * bar of what is used. Requests made with the same key elsewhere are not seen - backend services/providers/key_usage.py.
+ */
+let keyUsage = {};
+
+async function loadKeyUsage() {
+    try {
+        keyUsage = (await api.settings.keyUsage()).keys || {};
+    } catch {
+        keyUsage = {};
+    }
+    keyRows.forEach(showKeyUsage);
+}
+
+function showKeyUsage(row) {
+    const box = row._usage;
+    if (!box) return;
+    const u = keyUsage[keyId(row)];
+    if (!u || (!u.today && !u.limit_day && !u.last_limit)) {
+        box.classList.add("hidden");
+        return;
+    }
+    const resetNote = row.provider === "gemini" ? "Google's day ends at midnight Pacific time (09:00 in Poland, 08:00 in summer)" : "the day is counted in UTC";
+    const parts = [`<b>${u.today}</b> request${u.today === 1 ? "" : "s"} today`];
+    let share = null;
+    if (u.exhausted_today) {
+        parts.push(`<span class="key-usage-out">daily quota used up</span>`);
+        share = 1;
+    } else if (u.limit_day) {
+        const left = u.left ?? Math.max(0, u.limit_day - u.today);
+        parts.push(`limit ${u.limit_day}/day ${u.limit_source === "server" ? "(said by the server)" : "(estimate: where it ran out last time)"}`);
+        parts.push(`<b>~${left}</b> left`);
+        share = Math.min(1, Math.max(0, 1 - left / u.limit_day));
+    } else {
+        parts.push(`<span class="text-muted">limit not known yet - it is learned when the server says the quota is used up</span>`);
+    }
+    if (u.limit_minute) parts.push(`${u.last_minute}/${u.limit_minute} in the last minute`);
+    const last = u.last_limit && u.last_limit.at
+        ? `\nLast limit reached: ${new Date(u.last_limit.at * 1000).toLocaleString()} (${u.last_limit.daily ? "per day" : "per minute"}${u.last_limit.metric ? `, ${u.last_limit.metric}` : ""})` : "";
+    const week = Object.entries(u.week || {}).map(([d, n]) => `${d}: ${n}`).join("\n");
+    box.title = `Model ${u.model || "?"} - counted by this app only (requests made with this key elsewhere are not seen); ${resetNote}.${last}${week ? `\n\nRequests per day:\n${week}` : ""}`;
+    box.innerHTML = `<span class="key-usage-text">${parts.join(" &middot; ")}</span>`
+        + (share === null ? "" : `<span class="key-usage-bar"><i style="width:${Math.round(share * 100)}%" class="${share >= 0.9 ? "high" : ""}"></i></span>`);
+    box.classList.remove("hidden");
 }
 
 async function fetchKeyModels(row) {
@@ -900,7 +1456,7 @@ document.getElementById("testTranslationBtn")?.addEventListener("click", async (
     }
 });
 
-document.getElementById("saveOcrOptionsBtn")?.addEventListener("click", () => saveOcrOptions());
+document.getElementById("saveOcrOptionsBtn")?.addEventListener("click", () => runSave("ocr"));
 
 async function saveOcrOptions() {
     try {
@@ -918,8 +1474,7 @@ async function saveOcrOptions() {
         markClean("ocr", `${savedNow()} - ${result.message}`);
         return true;
     } catch (e) {
-        sectionStatus("ocr", `Not saved: ${e.message}`);
-        return false;
+        return saveFailed("ocr", e);
     }
 }
 
@@ -942,6 +1497,31 @@ async function followJob(jobId) {
     }
 }
 
+/*
+ * This browser's own preferences (localStorage "okt-*": shortcuts, appearance, editor switches, History columns...).
+ * The backend cannot read them, so the export sends them along and the import hands them back to be written here.
+ * Positions on a page (sessionStorage) are not preferences and stay out.
+ */
+function browserPrefs() {
+    const prefs = {};
+    try {
+        for (let i = 0; i < localStorage.length; i += 1) {
+            const key = localStorage.key(i);
+            if (key && key.startsWith("okt-")) prefs[key] = localStorage.getItem(key);
+        }
+    } catch { /* private mode: nothing to send */ }
+    return prefs;
+}
+
+function restoreBrowserPrefs(prefs) {
+    let n = 0;
+    for (const [key, value] of Object.entries(prefs || {})) {
+        if (!key.startsWith("okt-") || typeof value !== "string") continue;
+        try { localStorage.setItem(key, value); n += 1; } catch { /* quota / private mode */ }
+    }
+    return n;
+}
+
 function setBackupButtons(disabled) {
     document.getElementById("exportAllBtn").disabled = disabled;
     document.getElementById("importAllBtn").disabled = disabled;
@@ -959,6 +1539,7 @@ document.getElementById("exportAllBtn")?.addEventListener("click", async () => {
             include_secrets: document.getElementById("backupSecretsCheckbox").checked,
             include_models: document.getElementById("backupModelsCheckbox").checked,
             include_logs: document.getElementById("backupLogsCheckbox").checked,
+            browser_prefs: document.getElementById("backupBrowserCheckbox")?.checked ? browserPrefs() : null,
         });
         const job = await followJob(job_id);
         backupStatus().textContent = job.state === "done" ? `\u2713 ${job.message}` : `\u2717 Export failed: ${job.message}`;
@@ -977,20 +1558,23 @@ document.getElementById("importAllBtn")?.addEventListener("click", async () => {
         const m = info.manifest;
         const projects = (m.projects || []).map((p) => `  - ${p.name}: ${p.chapters} chapters, ${p.pages} pages, ${p.corrections} corrections, ${p.glossary_terms} glossary terms`).join("\n");
         const summary = `Backup from ${new Date(m.created_at).toLocaleString()} (app ${m.app_version}, ${m.source_platform}).\n`
-            + `${(m.total_bytes / 1048576).toFixed(0)} MB, ${m.file_count} files. API keys: ${m.has_secrets ? "included" : "not included"}; models: ${m.has_models ? "included" : "no"}.\n\nProjects:\n${projects || "  (none)"}`;
+            + `${(m.total_bytes / 1048576).toFixed(0)} MB, ${m.file_count} files. API keys: ${m.has_secrets ? "included" : "not included"}; models: ${m.has_models ? "included" : "no"}; shortcuts + browser preferences: ${m.has_browser_prefs ? "included" : "no"}.\n\nProjects:\n${projects || "  (none)"}`;
         if (info.busy_pages) { backupStatus().textContent = `\u2717 ${info.busy_pages} page(s) are being processed - wait, then import.`; return; }
 
         let mode = "fresh";
         if (info.target_has_data) {
-            if (!confirm(`${summary}\n\nThis installation ALREADY has projects. Importing REPLACES them.\nThe current database and workspace are moved aside (not deleted) into a pre_import_backup_... folder next to the workspace.\n\nReplace the current data?`)) return;
+            if (!(await askOk(`${summary}\n\nThis installation ALREADY has projects. Importing REPLACES them.\nThe current database and workspace are moved aside (not deleted) into a pre_import_backup_... folder next to the workspace.\n\nReplace the current data?`, { ok: "Replace the current data", danger: true }))) return;
             mode = "replace";
-        } else if (!confirm(`${summary}\n\nImport into this (empty) installation?`)) return;
+        } else if (!(await askOk(`${summary}\n\nImport into this (empty) installation?`, { ok: "Import" }))) return;
 
         setBackupButtons(true);
         const { job_id } = await api.system.importBackup({ path, mode });
         const job = await followJob(job_id);
         if (job.state === "done") {
-            const notes = (job.result.notes || []).map((n) => `\n- ${n}`).join("");
+            const restored = restoreBrowserPrefs(job.result.browser_prefs);
+            const notes = [...(job.result.notes || []),
+                ...(restored ? [`${restored} browser preference(s) restored (shortcuts, appearance, editor switches)`] : [])]
+                .map((n) => `\n- ${n}`).join("");
             backupStatus().textContent = `\u2713 ${job.message}${notes}\nReload the page (and restart the backend if a .env was restored).`;
         } else {
             backupStatus().textContent = `\u2717 Import failed: ${job.message}\n(Nothing was lost - the previous data is back in place.)`;
@@ -1003,7 +1587,7 @@ document.getElementById("importAllBtn")?.addEventListener("click", async () => {
 });
 
 
-document.getElementById("saveTypesettingBtn")?.addEventListener("click", () => saveTypesetting());
+document.getElementById("saveTypesettingBtn")?.addEventListener("click", () => runSave("typesetting"));
 
 /* ------------------------------ fonts (Settings > Text & fonts) ------------------------------ */
 
@@ -1037,34 +1621,45 @@ async function initFonts(current, refresh = false) {
     }
 }
 
+const FONTS_SHOWN = 5;          // rows of "Your fonts" shown before "Show all N fonts"
+let fontsExpanded = false;
+
 function renderUserFonts(files) {
     const list = document.getElementById("userFontList");
     if (!files.length) {
         list.innerHTML = '<span class="text-muted">None yet - the system fonts are used.</span>';
         return;
     }
-    list.innerHTML = files.map((f) => `
-        <div class="user-font">
+    // a long list is folded: the first FONTS_SHOWN rows, the rest behind "Show all" (their samples load when shown)
+    const folded = files.length > FONTS_SHOWN + 1 && !fontsExpanded;
+    list.innerHTML = files.map((f, i) => `
+        <div class="user-font${folded && i >= FONTS_SHOWN ? " hidden" : ""}">
             <span class="font-sample" style="font-family:'${fontEsc(f.family).replace(/'/g, "")}'">Zażółć gęślą</span>
             <span class="font-meta">${fontEsc(f.family)} <span class="text-muted">${fontEsc(f.style)} &middot; ${fontEsc(f.file)}</span>
                 ${f.polish ? "" : '<span class="font-warn" title="The font has no glyphs for some Polish letters">no Polish</span>'}</span>
             <button class="copy-btn danger" data-font-file="${fontEsc(f.file)}">Remove</button>
-        </div>`).join("");
-    files.forEach((f, i) => {                     // the sample line in the font itself (it is not installed in the system)
+        </div>`).join("")
+        + (files.length > FONTS_SHOWN + 1 ? `<button type="button" class="link-btn fonts-more" id="fontsMoreBtn">${folded ? `Show all ${files.length} fonts` : "Show fewer"}</button>` : "");
+    const loadSample = (f, i) => {                // the sample line in the font itself (it is not installed in the system)
         const face = new FontFace(`okt-user-font-${i}`, `url(${API_BASE}/fonts/user/${encodeURIComponent(f.file)}/data)`);
         face.load().then((loaded) => {
             document.fonts.add(loaded);
             const sample = list.querySelectorAll(".font-sample")[i];
             if (sample) sample.style.fontFamily = `okt-user-font-${i}`;
         }).catch(() => { /* keep the fallback font */ });
+    };
+    files.forEach((f, i) => { if (!folded || i < FONTS_SHOWN) loadSample(f, i); });
+    document.getElementById("fontsMoreBtn")?.addEventListener("click", () => {
+        fontsExpanded = !fontsExpanded;
+        renderUserFonts(files);
     });
     list.querySelectorAll("[data-font-file]").forEach((btn) => btn.addEventListener("click", async () => {
-        if (!confirm(`Remove the font file ${btn.dataset.fontFile} from the app's font folder?\n\nBubbles that use this font fall back to the default font.`)) return;
+        if (!(await askOk(`Remove the font file ${btn.dataset.fontFile} from the app's font folder?\n\nBubbles that use this font fall back to the default font.`, { ok: "Remove", danger: true }))) return;
         try {
             await api.fonts.remove(btn.dataset.fontFile);
             await initFonts(null, true);
         } catch (e) {
-            alert(`Couldn't remove: ${e.message}`);
+            notify(`Couldn't remove: ${e.message}`);
         }
     }));
 }
@@ -1098,7 +1693,7 @@ document.getElementById("openFontFolderBtn")?.addEventListener("click", async ()
     try {
         await api.system.openPath(fontFolder);
     } catch (e) {
-        alert(`Couldn't open: ${e.message}`);
+        notify(`Couldn't open: ${e.message}`);
     }
 });
 document.getElementById("refreshFontsBtn")?.addEventListener("click", () => initFonts(null, true));
@@ -1113,14 +1708,13 @@ async function saveTypesetting() {
         markClean("typesetting", `${savedNow()} - the next preview / export uses it.`);
         return true;
     } catch (e) {
-        sectionStatus("typesetting", `Not saved: ${e.message}`);
-        return false;
+        return saveFailed("typesetting", e);
     }
 }
 
 /* ----------------------- OCR engine (core/ocr_runtime.py) ----------------------- */
 
-document.getElementById("saveOcrEngineBtn")?.addEventListener("click", () => saveOcrEngine());
+document.getElementById("saveOcrEngineBtn")?.addEventListener("click", () => runSave("engine"));
 
 async function saveOcrEngine() {
     try {
@@ -1133,8 +1727,7 @@ async function saveOcrEngine() {
         markClean("engine", `${savedNow()} - ${result.message}`);
         return true;
     } catch (e) {
-        sectionStatus("engine", `Not saved: ${e.message}`);
-        return false;
+        return saveFailed("engine", e);
     }
 }
 
@@ -1164,7 +1757,147 @@ async function loadOcrRuntime() {
         + ((r.advice || []).length ? `<ul style="margin:6px 0 0 18px; padding:0;">${r.advice.map((a) => `<li>${escapeHtml(a)}</li>`).join("")}</ul>` : "");
 }
 
-// section -> save function (autosave calls them with {auto: true}; the Save buttons without arguments)
+/*
+ * Settings > Correction memory: is the local embedding model really working? The health banner's "Check if it works
+ * now" link opens Settings at #memory, which runs the test at once. The test loads the model if needed, so a load
+ * that failed at start (e.g. no network for a moment) is retried; a pass removes the banner's now outdated row.
+ */
+const EMBEDDER_STATES = { idle: "not loaded yet (loads at the first translation)", loading: "loading…", ready: "ready", error: "failed to load" };
+
+function describeEmbedder(s) {
+    const where = s.source === "disk" ? "from disk" : s.source === "internet" ? "downloaded" : "";
+    const time = s.seconds != null ? ` in ${s.seconds} s` : "";
+    return `Memory model <b>${escapeHtml(s.model)}</b>: ${EMBEDDER_STATES[s.state] || escapeHtml(s.state)}`
+        + (s.state === "ready" && where ? ` (${where}${time})` : "");
+}
+
+async function loadEmbedderState() {
+    const el = document.getElementById("embedderState");
+    try {
+        el.innerHTML = describeEmbedder(await api.system.embedder());
+    } catch (e) {
+        el.textContent = `Memory model: couldn't ask the backend (${e.message})`;
+    }
+}
+
+async function testEmbedder() {
+    const btn = document.getElementById("embedderTestBtn");
+    const box = document.getElementById("embedderTestResult");
+    btn.disabled = true;
+    showKeyResult(box, { busy: "Testing the memory model (the first load can take up to half a minute)…" });
+    try {
+        const r = await api.system.embedderTest();
+        box.classList.remove("busy");
+        box.classList.add(r.ok ? "ok" : "err");
+        if (r.ok) {
+            box.innerHTML = `<b>✓ Works</b> - memory hints and saving corrections are available.`
+                + `<div class="key-hint">Similar lines ${r.similar} vs unrelated ${r.unrelated} (cosine), ${r.dim}-dim vectors, test ${r.test_seconds} s.</div>`;
+            document.querySelector('#healthBanner [data-code="embedder_failed"]')?.remove();
+            const banner = document.getElementById("healthBanner");
+            if (banner && !banner.children.length) banner.remove();
+        } else {
+            const step = { load: "Model doesn't load", embed: "Model loaded, but can't embed text", compare: "Model gives wrong results" }[r.step] || "Failed";
+            box.innerHTML = `<b>✗ ${step}</b> - ${escapeHtml(r.message)}`
+                + `<div class="key-hint">${r.step === "load"
+                    ? "Without the model on disk it has to be downloaded once (huggingface.co) - check the internet / VPN / firewall and press Test again."
+                    : "Delete the model cache in Storage &amp; uninstall and restart the backend."}</div>`;
+        }
+    } catch (e) {
+        showKeyResult(box, { ok: false, kind: "error", message: e.message });
+    } finally {
+        btn.disabled = false;
+        loadEmbedderState();
+    }
+}
+
+/* ----------------------------- optional AI redraw model (Settings > Add-ons) ----------------------------- */
+
+/*
+ * Install downloads big-LaMa once (backend services/lama_service.py checks its MD5) - only then the editor's clean
+ * tools list "Redraw (AI)". While it downloads: a progress bar, polled every second, and Cancel; leaving the page
+ * does not stop it. Remove = the same delete as in Storage & uninstall. Sizes in binary MB, like Windows Explorer and
+ * the Storage list (the button once said 196 MB and the page text 205 MB for the same file).
+ */
+let lamaPoll = null;
+let lamaFailedPolls = 0;
+
+function renderLama(s) {
+    const install = document.getElementById("lamaInstallBtn");
+    const cancel = document.getElementById("lamaCancelBtn");
+    const remove = document.getElementById("lamaRemoveBtn");
+    const bar = document.getElementById("lamaProgress");
+    const info = document.getElementById("lamaState");
+    if (!install || !info) return;
+    const mb = (b) => `${Math.round(b / (1024 * 1024))} MB`;
+    install.classList.toggle("hidden", !!s.installed || !!s.downloading);
+    cancel.classList.toggle("hidden", !s.downloading);
+    remove.classList.toggle("hidden", !s.installed);
+    bar.classList.toggle("hidden", !s.downloading);
+    install.disabled = false;
+    cancel.disabled = !!s.cancelling;
+    if (s.installed) {
+        info.textContent = "✓ Installed - in the editor: the arrow next to Clean area > Redraw (AI).";
+    } else if (s.downloading) {
+        const pct = s.total ? Math.floor((100 * s.done) / s.total) : 0;
+        bar.value = pct;
+        info.textContent = s.cancelling ? "Cancelling…"
+            : s.done ? `Downloading ${mb(s.done)} of ${mb(s.total)} (${pct}%) - you can keep working meanwhile.`
+            : `Connecting to github.com… (${Math.round(s.seconds || 0)} s - gives up after 30 s without data)`;
+    } else {
+        install.textContent = s.error ? "Try again" : `Install (${mb(s.bytes || 205669692)})`;
+        info.textContent = s.error ? `✗ Download failed: ${s.error}` : "Not installed.";
+    }
+    clearTimeout(lamaPoll);
+    if (s.downloading) lamaPoll = setTimeout(loadLama, 1000);
+}
+
+async function loadLama() {
+    try {
+        renderLama(await api.system.lama());
+        lamaFailedPolls = 0;
+    } catch (e) {
+        const info = document.getElementById("lamaState");
+        if (info) info.textContent = `State unknown - is the app still running? (${e.message})`;
+        if (++lamaFailedPolls < 30) lamaPoll = setTimeout(loadLama, 2000);   // a backend restart: pick the state up again
+    }
+}
+
+document.getElementById("lamaInstallBtn")?.addEventListener("click", async () => {
+    const btn = document.getElementById("lamaInstallBtn");
+    btn.disabled = true;
+    try {
+        renderLama(await api.system.lamaInstall());
+    } catch (e) {
+        btn.disabled = false;
+        document.getElementById("lamaState").textContent = `✗ ${e.message}`;
+    }
+});
+document.getElementById("lamaCancelBtn")?.addEventListener("click", async () => {
+    try {
+        renderLama(await api.system.lamaCancel());
+    } catch (e) {
+        document.getElementById("lamaState").textContent = `✗ ${e.message}`;
+    }
+});
+document.getElementById("lamaRemoveBtn")?.addEventListener("click", async () => {
+    if (!(await askOk("Remove the Redraw (AI) model (196 MB)?\n\nAreas already redrawn on pages stay as they are until the page image is rebuilt; then they are cleaned like Clean area. Install brings it back.", { ok: "Remove", danger: true }))) return;
+    try {
+        const res = await api.system.storageDelete("models_lama");
+        await loadLama();
+        document.getElementById("lamaState").textContent = `${res.message} Not installed now.`;
+    } catch (e) {
+        document.getElementById("lamaState").textContent = `Not removed: ${e.message}`;
+    }
+    if (document.getElementById("storageList").children.length) loadStorage();
+});
+loadLama();
+
+document.getElementById("embedderTestBtn")?.addEventListener("click", testEmbedder);
+loadEmbedderState();
+if (location.hash === "#memory") testEmbedder();
+
+// section -> save function; always called through runSave (autosave, Save buttons, retry, leaving the page).
+// A save function returns true when stored; on a failed request it returns saveFailed(section, e).
 const SAVERS = {
     translation: saveTranslation, memory: saveMemorySettings, ocr: saveOcrOptions, engine: saveOcrEngine,
     typesetting: saveTypesetting, ignore: saveIgnorePatterns,
@@ -1201,7 +1934,9 @@ async function loadStorage() {
         const report = await api.system.storage();
         renderStorage(report);
         const total = report.items.reduce((sum, i) => sum + (i.bytes || 0), 0);
-        status.textContent = `${formatBytes(total)} in all - checked ${new Date().toLocaleTimeString()}`;
+        const approx = report.items.some((i) => i.approx);       // a count stopped by the time limit: "at least"
+        status.textContent = `${approx ? "≥ " : ""}${formatBytes(total)} in all - checked ${new Date().toLocaleTimeString()}`;
+        document.getElementById("storageAllTotal").textContent = `- ${approx ? "≥ " : ""}${formatBytes(total)}`;
     } catch (e) {
         status.textContent = `Couldn't check: ${e.message}`;
     } finally {
@@ -1209,17 +1944,42 @@ async function loadStorage() {
     }
 }
 
+/* folded groups of the list (a click on the group title), remembered in this browser - the list got long.
+   "__all" = the whole list folded (the "Folders and sizes" line above the groups). */
+const STORAGE_FOLD_KEY = "okt-storage-folded";
+const STORAGE_FOLD_ALL = "__all";
+
+function foldedStorageGroups() {
+    try { return new Set(JSON.parse(localStorage.getItem(STORAGE_FOLD_KEY) || "[]")); } catch { return new Set(); }
+}
+
+function rememberStorageFold(group, open) {
+    const now = foldedStorageGroups();
+    if (open) now.delete(group); else now.add(group);
+    try { localStorage.setItem(STORAGE_FOLD_KEY, JSON.stringify([...now])); } catch { /* private mode */ }
+}
+
+document.getElementById("storageAll")?.addEventListener("toggle", (e) => rememberStorageFold(STORAGE_FOLD_ALL, e.target.open));
+
 function renderStorage(report) {
     const list = document.getElementById("storageList");
     list.innerHTML = "";
+    const folded = foldedStorageGroups();
+    const all = document.getElementById("storageAll");
+    all.classList.remove("hidden");
+    all.open = !folded.has(STORAGE_FOLD_ALL);
     for (const [group, title, sub] of STORAGE_GROUPS) {
         const items = report.items.filter((i) => i.group === group);
         if (!items.length) continue;
-        const head = document.createElement("div");
-        head.className = "storage-group";
-        head.innerHTML = `${escapeHtml(title)}${sub ? ` <span class="text-muted">- ${escapeHtml(sub)}</span>` : ""}`;
-        list.appendChild(head);
-        items.forEach((item) => list.appendChild(storageRow(item)));
+        const bytes = items.reduce((sum, i) => sum + (i.bytes || 0), 0);
+        const fold = document.createElement("details");
+        fold.className = "storage-fold";
+        fold.open = !folded.has(group);
+        fold.innerHTML = `<summary class="storage-group">${escapeHtml(title)}${sub ? ` <span class="text-muted">- ${escapeHtml(sub)}</span>` : ""}
+            <span class="storage-group-size">${items.some((i) => i.approx) ? "≥ " : ""}${formatBytes(bytes)}</span></summary>`;
+        items.forEach((item) => fold.appendChild(storageRow(item)));
+        fold.addEventListener("toggle", () => rememberStorageFold(group, fold.open));
+        list.appendChild(fold);
     }
     const folders = document.getElementById("uninstallFolders");
     folders.innerHTML = "";
@@ -1240,7 +2000,7 @@ function storageRow(item) {
     row.className = `storage-row group-${item.group}` + (item.exists ? "" : " missing");
     const size = item.exists
         ? `${item.approx ? "≥ " : ""}${formatBytes(item.bytes)}<small>${item.files} file${item.files === 1 ? "" : "s"}</small>`
-        : `<small>not there</small>`;
+        : `<small>${escapeHtml(item.missing || "nothing here")}</small>`;
     const notes = [item.extra_bytes ? `${formatBytes(item.extra_bytes)} ${escapeHtml(item.extra_label || "")}` : "",
                    item.shared ? escapeHtml(item.shared_note || "") : "", escapeHtml(item.note || ""),
                    item.deletable ? "" : escapeHtml(item.keep || "")].filter(Boolean);
@@ -1267,7 +2027,7 @@ function storageRow(item) {
         del.addEventListener("click", async () => {
             const text = `Delete "${item.title}" (${formatBytes(item.bytes)})?\n\n${item.what}`
                 + (item.shared ? `\n\n${item.shared_note}` : "") + (item.note ? `\n\n${item.note}` : "");
-            if (!confirm(text)) return;
+            if (!(await askOk(text, { ok: "Delete", danger: true }))) return;
             del.disabled = true;
             try {
                 const res = await api.system.storageDelete(item.id);
@@ -1276,6 +2036,7 @@ function storageRow(item) {
                 document.getElementById("storageStatus").textContent = `Not deleted: ${e.message}`;
             }
             const message = document.getElementById("storageStatus").textContent;
+            if (item.id === "models_lama") loadLama();      // Settings > Add-ons shows "Install" again
             await loadStorage();
             document.getElementById("storageStatus").textContent = message;
         });
@@ -1288,12 +2049,16 @@ async function openStoragePath(path) {
     try {
         await api.system.openPath(path);
     } catch (e) {
-        alert(`Couldn't open: ${e.message}`);
+        notify(`Couldn't open: ${e.message}`);
     }
 }
 
 document.getElementById("storageScanBtn")?.addEventListener("click", loadStorage);
 if (location.hash === "#storage") loadStorage();
+// a link to #storage inside the page (Add-ons, Redraw note) counts the sizes too, as opening Settings at #storage does
+window.addEventListener("hashchange", () => {
+    if (location.hash === "#storage" && !document.getElementById("storageList").children.length) loadStorage();
+});
 document.getElementById("uninstallBox")?.addEventListener("toggle", (e) => {
     if (e.target.open && !document.getElementById("storageList").children.length) loadStorage();
 });
@@ -1305,5 +2070,15 @@ if (ocrDebugCheckbox) {
     ocrDebugCheckbox.checked = localStorage.getItem(OCR_DEBUG_KEY) === "1";
     ocrDebugCheckbox.addEventListener("change", () => {
         localStorage.setItem(OCR_DEBUG_KEY, ocrDebugCheckbox.checked ? "1" : "0");
+    });
+}
+
+/* Merge dialog: "Translate the merged bubble again" ticked by default or not (js/editor-merge.js, same key; off unless set) */
+const MERGE_RETRANSLATE_KEY = "okt-merge-retranslate";
+const mergeRetranslateCheckbox = document.getElementById("mergeRetranslateSettingCheckbox");
+if (mergeRetranslateCheckbox) {
+    try { mergeRetranslateCheckbox.checked = localStorage.getItem(MERGE_RETRANSLATE_KEY) === "1"; } catch { /* private mode */ }
+    mergeRetranslateCheckbox.addEventListener("change", () => {
+        try { localStorage.setItem(MERGE_RETRANSLATE_KEY, mergeRetranslateCheckbox.checked ? "1" : "0"); } catch { /* private mode */ }
     });
 }

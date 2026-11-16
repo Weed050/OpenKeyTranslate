@@ -27,7 +27,13 @@ WALK_BUDGET_SECONDS = 6.0        # a huge folder (the program's .venv: tens of t
 
 
 def _size(paths: list[str], budget: float = WALK_BUDGET_SECONDS) -> dict:
-    """{"bytes", "files", "approx"} of files / folders (approx = counting stopped after `budget` seconds)."""
+    """
+    {"bytes", "files", "approx"} of files / folders (approx = counting stopped after `budget` seconds).
+    os.scandir, not os.walk + getsize: on Windows the directory listing already carries the file sizes, so the
+    program's .venv (tens of thousands of files) is counted in about a second instead of running out of the budget -
+    a cut-off count differed from scan to scan (a warm disk cache got further), so deleting something could make the
+    total GROW.
+    """
     total = files = 0
     start = time.monotonic()
     for path in paths:
@@ -38,13 +44,22 @@ def _size(paths: list[str], budget: float = WALK_BUDGET_SECONDS) -> dict:
             except OSError:
                 pass
             continue
-        for dirpath, _, names in os.walk(path):
-            for name in names:
-                try:
-                    total += os.path.getsize(os.path.join(dirpath, name))
-                    files += 1
-                except OSError:
-                    pass
+        stack = [path]
+        while stack:
+            folder = stack.pop()
+            try:
+                with os.scandir(folder) as entries:
+                    for entry in entries:
+                        try:
+                            if entry.is_dir(follow_symlinks=False):
+                                stack.append(entry.path)
+                            elif entry.is_file(follow_symlinks=False):
+                                total += entry.stat(follow_symlinks=False).st_size
+                                files += 1
+                        except OSError:
+                            pass
+            except OSError:
+                pass
             if time.monotonic() - start > budget:
                 return {"bytes": total, "files": files, "approx": True}
     return {"bytes": total, "files": files, "approx": False}
@@ -68,6 +83,8 @@ def _items() -> list[dict]:
     paddle_target = caches["paddlex"] if own_models else os.path.join(caches["paddlex"], "official_models")
     exported = glob.glob(os.path.join(WORKSPACE_DIR, "*", "exported"))
     program_dir = os.path.dirname(ROOT_DIR)
+    from services.lama_service import model_dir
+    lama_dir = model_dir()
 
     return [
         {"id": "projects", "group": "work", "title": "Projects",
@@ -88,34 +105,38 @@ def _items() -> list[dict]:
         {"id": "fonts", "group": "work", "title": "Your fonts",
          "what": "Font files you added in Text on the page & fonts.",
          "paths": [os.path.join(APP_ROOT_DIR, "fonts")], "folder": os.path.join(APP_ROOT_DIR, "fonts"),
-         "deletable": False, "keep": "Remove single fonts by hand in that folder."},
+         "deletable": False, "missing": "none added", "keep": "Remove single fonts by hand in that folder."},
         {"id": "models_paddle", "group": "cache", "title": "OCR models (PaddleOCR)",
          "what": "Text detection / recognition models. Downloaded again on the next start of the backend (needs internet).",
-         "paths": [paddle_target], "folder": paddle_target, "deletable": True,
+         "paths": [paddle_target], "folder": paddle_target, "deletable": True, "missing": "not downloaded yet",
          "shared": not own_models,
          "shared_note": "Shared with other programs that use PaddleOCR 3 on this computer - they download them again too."},
         {"id": "models_hf", "group": "cache", "title": "Correction memory model",
          "what": "The sentence embedding model of the memory (MiniLM). Downloaded again when the backend starts.",
-         "paths": [hf_target], "folder": hf_target, "deletable": True,
+         "paths": [hf_target], "folder": hf_target, "deletable": True, "missing": "not downloaded yet",
          "note": "In use while the backend runs - its files may stay until you delete again after a restart."},
+        {"id": "models_lama", "group": "cache", "title": "AI redraw model - big-LaMa (optional add-on)",
+         "what": "For the editor's \"Redraw (AI)\" clean tool. Only there if you installed it in Settings > "
+                 "Add-ons; NOT downloaded again by itself - deleting it removes the tool until you install it again.",
+         "paths": [lama_dir], "folder": lama_dir, "deletable": True, "missing": "not installed"},
         {"id": "logs", "group": "cache", "title": "Logs",
          "what": "Application and error logs, crash traces, the OCR self-test report.",
          "paths": [os.path.join(APP_ROOT_DIR, "logs")], "folder": os.path.join(APP_ROOT_DIR, "logs"), "deletable": True,
-         "note": "Today's log files are open while the backend runs and stay."},
+         "missing": "none yet", "note": "Today's log files are open while the backend runs and stay."},
         {"id": "settings_backups", "group": "cache", "title": "Old copies of the settings file",
          "what": "settings.json.bak (made at every save) and copies from the move out of the program folder. "
                  "They contain your API keys too.",
          "paths": sorted(glob.glob(os.path.join(settings_dir, "settings.json.bak"))
                          + glob.glob(os.path.join(settings_dir, "settings.json.tmp"))
                          + glob.glob(os.path.join(settings_dir, "legacy_settings.json*.bak"))),
-         "folder": settings_dir, "deletable": True,
+         "folder": settings_dir, "deletable": True, "missing": "none",
          "note": "A new settings.json.bak is written at the next save; it is the fallback for a damaged settings file."},
         {"id": "import_leftovers", "group": "cache", "title": "Data set aside by an import",
          "what": "\"Replace\" import moves your previous data here instead of deleting it (pre_import_backup_*), "
                  "plus unfinished import folders.",
          "paths": sorted(glob.glob(os.path.join(APP_ROOT_DIR, "pre_import_backup_*"))
                          + glob.glob(os.path.join(APP_ROOT_DIR, "_import_staging_*"))),
-         "folder": APP_ROOT_DIR, "deletable": True},
+         "folder": APP_ROOT_DIR, "deletable": True, "missing": "none"},
         {"id": "program", "group": "program", "title": "The program",
          "what": "The app itself with its Python environment (backend\\.venv: Paddle, PyTorch...).",
          "paths": [program_dir], "folder": program_dir, "deletable": False,
@@ -169,7 +190,10 @@ def delete_item(item_id: str) -> dict:
                     pass
             if not kept and os.path.isdir(path):
                 shutil.rmtree(path, ignore_errors=True)
-    mb = freed / (1024 * 1024)
+    if item_id == "models_lama":
+        from services.lama_service import unload
+        unload()                                    # the editor's Redraw (AI) disappears with the file
+    mb = freed / (1024 * 1024)                      # binary MB, like the sizes in the list and Windows Explorer
     shown = f"{mb:.1f} MB" if mb >= 0.1 else f"{freed / 1024:.0f} KB"
     message = f"Freed {shown}." + (f" {kept} file(s) in use were kept - delete again after restarting the backend."
                                    if kept else "")

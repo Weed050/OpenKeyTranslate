@@ -8,9 +8,10 @@
  * activity (newest page change), name, progress or creation date; the choice is remembered.
  */
 
-import { api } from "./api.js";
+import { api, backendDownHint } from "./api.js";
 import { renderSidebar } from "./nav.js";
-import { countGroups, doneScore, stageBarHtml, stageLegendHtml } from "./stages.js";
+import { countGroups, doneScore, exportedDraftNote, stageBarHtml, stageLegendHtml } from "./stages.js";
+import { askOk, notify } from "./dialogs.js";
 
 const SORT_KEY = "okt-project-sort";          // {"field", "dir"} (older versions: a bare mode string)
 const byName = (a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: "base" });
@@ -47,7 +48,7 @@ async function loadProjects() {
         projects = await api.projects.list();
     } catch (e) {
         list.innerHTML = `<div class="card dash-empty"><p>Couldn't load projects: ${esc(e.message)}</p>
-            <p class="text-muted">Is the backend running? Start it with <code>python main.py</code> in the backend folder, then reload this page.</p></div>`;
+            <p class="text-muted">${backendDownHint()}</p></div>`;
         return;
     }
 
@@ -126,19 +127,19 @@ function projectCard(p) {
         try {
             await api.system.openPath(p.workspace_path);
         } catch (err) {
-            alert(`Couldn't open folder: ${err.message}`);
+            notify(`Couldn't open folder: ${err.message}`);
         }
     });
     card.querySelector('[data-act="exported"]').addEventListener("click", () =>
-        api.projects.openExported(p.id).catch((err) => alert(`Couldn't open folder: ${err.message}`)));
+        api.projects.openExported(p.id).catch((err) => notify(`Couldn't open folder: ${err.message}`)));
     card.querySelector('[data-act="delete"]').addEventListener("click", async () => {
-        if (!confirm(`Delete project "${p.name}"?\n\nThis removes its files on disk too (scans, cleaned pages, translations). It cannot be undone - consider Settings > Backup first.`)) return;
+        if (!(await askOk(`Delete project "${p.name}"?\n\nThis removes its files on disk too (scans, cleaned pages, translations). It cannot be undone - consider Settings > Backup first.`, { ok: "Delete project", danger: true }))) return;
         try {
             await api.projects.delete(p.id);
             loadProjects();
             renderSidebar(null);
         } catch (err) {
-            alert(`Delete failed: ${err.message}`);
+            notify(`Delete failed: ${err.message}`);
         }
     });
 
@@ -156,7 +157,7 @@ function fillProgress(card, progress) {
     card.querySelector(".progress-bar").innerHTML = stageBarHtml(counts);
     const when = progress.last_activity
         ? new Date(progress.last_activity * 1000).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" }) : "";
-    legend.innerHTML = stageLegendHtml(counts, esc)
+    legend.innerHTML = stageLegendHtml(counts, esc) + exportedDraftNote(progress.stages, esc)
         + `<span class="legend-total" title="Last change on any page">${when ? `last change ${esc(when)} &middot; ` : ""}${progress.total} pages</span>`;
     if (!progress.processed) {
         const exp = card.querySelector(".export-link");

@@ -63,6 +63,8 @@ async def confirm_bubble_correction(
         ai_translation=payload.ai_translation,
         final_translation=payload.final_translation,
         approve=payload.approve,
+        page_id=page_id,
+        bubble_id=bubble_id,     # a re-save of this bubble updates its own unused entry instead of adding one
     )
 
     if correction is None:

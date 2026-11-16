@@ -28,6 +28,9 @@ class ExportRequest(BaseModel):
     include_secrets: bool = False     # API keys in settings.json + the .env file - opt-in: a zip gets copied around
     include_models: bool = False      # HuggingFace / PaddleX caches (big, but the new PC then needs no download)
     include_logs: bool = False
+    # the browser's own preferences (localStorage "okt-*": keyboard shortcuts, appearance, editor switches) - the
+    # backend cannot read them, so the page sends them along; None = not wanted
+    browser_prefs: dict[str, str] | None = None
 
 
 class ImportRequest(BaseModel):
@@ -102,13 +105,33 @@ async def health():
         issues.append({"level": "warn", "code": "ocr_gpu_fallback", "message": f"OCR runs on CPU: {RUNTIME.get('reason')}."})
     from services.memory_service import EMBEDDER_STATE
     if EMBEDDER_STATE["state"] == "error":
+        # the state is live: a later successful load (next translation / correction save / Settings test) clears it
         issues.append({"level": "warn", "code": "embedder_failed",
                        "message": f"Correction memory model failed to load ({EMBEDDER_STATE['error']}). Translation still works, "
-                                  f"but memory hints and saving corrections will fail until it loads (needs internet once to download)."})
+                                  f"but without memory hints, and saving corrections fails until it loads - the app "
+                                  f"tries again on the next translation (internet is needed only for the first download)."})
     # things the startup reconcile found but only wrote to the log (missing page files, chapters kept without raw/ ...)
     for i, line in enumerate(LAST_REPORT.get("warnings", [])[:5]):
         issues.append({"level": "warn", "code": f"reconcile_{i}", "message": f"Disk vs DB: {line} (page list -> Rescan folders)"})
     return {"issues": issues}
+
+
+@router.get("/embedder")
+async def embedder():
+    """State of the correction-memory model (idle / loading / ready / error, from disk or internet) - no loading."""
+    from services.memory_service import embedder_status
+    return embedder_status()
+
+
+@router.post("/embedder/test")
+def embedder_test():
+    """
+    Settings > Correction memory > Test (also linked from the health banner): loads the model if it is not loaded -
+    i.e. retries a failed start-up load - and checks that a paraphrase pair scores above an unrelated pair.
+    Plain def: the load blocks for seconds and must not stall the event loop.
+    """
+    from services.memory_service import embedder_self_test
+    return embedder_self_test()
 
 
 @router.get("/storage")
@@ -130,6 +153,46 @@ def storage_delete(payload: StorageDeleteRequest):
         return delete_item(payload.id)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.get("/lama")
+async def lama_status():
+    """Optional AI redraw model (services/lama_service.py): installed / downloading (bytes done of total) / last error."""
+    from services.lama_service import status
+    return status()
+
+
+@router.post("/lama/install")
+def lama_install():
+    """Settings > Add-ons > Install: starts the one-time 196 MB download in the background; poll GET /system/lama."""
+    from services.lama_service import start_install
+    return start_install()
+
+
+@router.post("/lama/cancel")
+def lama_cancel():
+    """Settings > Add-ons > Cancel: stops a running download (the partial file is deleted)."""
+    from services.lama_service import cancel_install
+    return cancel_install()
+
+
+@router.get("/about")
+async def about():
+    """Who answers on this port - launcher.py checks it before opening a second copy of the app."""
+    from core.config import APP_VERSION, FROZEN
+    return {"app": "OpenKeyTranslate", "version": APP_VERSION, "packaged": FROZEN}
+
+
+@router.get("/changelog")
+async def changelog():
+    """CHANGELOG.md of the program folder (Settings > About > What's new). Public text - it is in the repository."""
+    from core.config import APP_VERSION, PROGRAM_DIR
+    path = os.path.join(PROGRAM_DIR, "CHANGELOG.md")
+    try:
+        with open(path, encoding="utf-8") as f:
+            return {"version": APP_VERSION, "text": f.read()}
+    except OSError:
+        raise HTTPException(status_code=404, detail="CHANGELOG.md is not in the program folder.")
 
 
 @router.get("/tail-log")
@@ -188,7 +251,7 @@ def export_all(payload: ExportRequest):
     from services import backup_service as bs
     try:
         job_id = bs.start_job("export", bs.create_backup, payload.path, payload.include_secrets,
-                              payload.include_models, payload.include_logs)
+                              payload.include_models, payload.include_logs, payload.browser_prefs)
     except bs.BackupError as e:
         raise HTTPException(status_code=409, detail=str(e))
     return {"job_id": job_id}

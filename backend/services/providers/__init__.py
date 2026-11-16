@@ -22,7 +22,7 @@ import json
 import time
 
 from core.config import get_setting
-from .base import TranslationProvider, TranslationBatch, KeyCallError
+from .base import TranslationProvider, TranslationBatch, KeyCallError, RateLimited
 from .pool import KeyPool, scrub
 
 PROVIDER_NAMES = ("groq", "gemini", "openai_compat")
@@ -37,7 +37,10 @@ PROVIDERS_INFO = {
     },
     "gemini": {
         "label": "Gemini", "key_url": "https://aistudio.google.com/apikey", "needs_key": True,
-        "models": ["gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-2.5-pro", "gemini-2.0-flash"],
+        # free tier on 13.11.2026 (aistudio.google.com/docs/pricing); 2.5-flash / 2.5-pro / 2.0 left out: closed to new
+        # projects or shut down. Daily limits per model are shown in AI Studio, not in the docs.
+        "models": ["gemini-3.6-flash", "gemini-3.8-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite",
+                   "gemini-2.5-flash-lite"],
     },
     "openai_compat": {
         "label": "OpenAI-compatible", "beta": True, "needs_key": False,
@@ -157,7 +160,7 @@ def find_entry(kid: str) -> dict | None:
 def test_key(kid: str) -> dict:
     """
     One tiny translation through ONE key, switched on or not (Settings: "Test" per key).
-    -> {"ok", "kind" (ok / RateLimited / KeyRejected / Unreachable / Transient / error / unusable), "message",
+    -> {"ok", "kind" (ok / RateLimited / KeyRejected / OutOfCredits / Unreachable / Transient / error / unusable), "message",
         "model", "ms", "sample"}. Never contains the key.
     """
     entry = find_entry(kid)
@@ -174,12 +177,17 @@ def test_key(kid: str) -> dict:
             entry, SYSTEM_PROMPT, json.dumps([{"id": "t", "text": source}]), TranslationBatch,
             get_setting("translation_temperature", 0.4), min(2048, int(get_setting("translation_max_tokens", 4096))))
     except KeyCallError as e:
+        if isinstance(e, RateLimited):                       # what the server said about its limit (Settings usage line)
+            from .key_usage import record_limit
+            record_limit(entry, e.daily, e.limit, e.metric)
         return {"ok": False, "kind": type(e).__name__, "message": scrub(str(e), entry), "model": entry["model"],
                 "ms": int((time.monotonic() - start) * 1000)}
     except Exception as e:
         return {"ok": False, "kind": "error", "message": scrub(f"{type(e).__name__}: {e}", entry)[:500],
                 "model": entry["model"], "ms": int((time.monotonic() - start) * 1000)}
     ms = int((time.monotonic() - start) * 1000)
+    from .key_usage import record_success
+    record_success(entry)                                    # a Test is a request like any other (it counts too)
     text = next((t.translation for t in result.translations if t.id == "t"), "").strip()
     if not text:
         return {"ok": False, "kind": "error", "model": entry["model"], "ms": ms,

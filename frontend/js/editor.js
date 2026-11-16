@@ -14,13 +14,16 @@ import { params, pageId, state, el, escapeHtml, showToast, openOrAlert, groupByC
 import { showPagePicker } from "./pagepicker.js";
 import { memoryEntryUrl, offerMemoryCleanup } from "./memory-links.js";
 import { initMerge, isMergePick, toggleMergePick, clearMergePicks, renderMergeBar, openMergeDialog } from "./editor-merge.js";
-import { initSplit, startSplit, cancelSplit, isSplitting, renderSplitOverlay } from "./editor-split.js";
+import { initSplit, startSplit, cancelSplit, isSplitting, renderSplitOverlay, splitDragStart } from "./editor-split.js";
 import { initLettering, isLettering, setMode, toggleMode, enterCurrentMode, checkReviewedOnLoad, renderLetteringOverlay,
          renderLetteringPanel, letteringAction, exportPage } from "./editor-lettering.js";
 import { actionFor, currentBindings, formatCombo } from "./shortcuts.js";
 import { initReview, renderReviewControls, reviewBeforeNextPage, offerUndoFromPreviousPage, reviewMode } from "./editor-review.js";
 import { initOcrDebug, renderOcrDebug, invalidateOcrDebug } from "./editor-ocrdebug.js";
- 
+import { openReplaceDialog } from "./replace-dialog.js";
+import { choose, wordDiff, askOk, notify } from "./dialogs.js";
+import { watchRun, progressHtml, shortLabel, formatElapsed } from "./editor-progress.js";
+
 const enterAt = params.get("enterAt"); // "first" | "last" | null - set when arriving via cross-page nav
 const resumeBubbleIndex = params.get("bubble"); // set by the dashboard's "Resume where I left off" link
  
@@ -154,6 +157,7 @@ async function init() {
         rerender: () => { renderBubbleList(); applyZoom(); renderBubbleDetail(); },
         refreshImage: refreshPageImage,
         saveIfChanged: saveIfChanged,
+        acceptOpen: saveCurrentBubble,      // the open, unchanged bubble: confirmed as when moving on (mode switch)
         status: savedStatus,
         navigate: navigateBubble,
         shortcutLabel: (id) => { const c = currentBindings()[id]; return c ? formatCombo(c) : ""; },
@@ -184,15 +188,21 @@ async function init() {
     document.getElementById("reocrBtn").addEventListener("click", runReocr);
     document.getElementById("reinpaintBtn").addEventListener("click", runReinpaint);
     document.getElementById("previewBtn").addEventListener("click", togglePreview);
+    document.getElementById("originalBtn").addEventListener("click", toggleOriginal);
     document.getElementById("addBubbleBtn").addEventListener("click", () => setDrawMode(state.drawMode === "add" ? false : "add"));
     document.getElementById("cleanAreaBtn").addEventListener("click", () => setDrawMode(state.drawMode === "clean" ? false : "clean"));
-    document.getElementById("undoCleanBtn").addEventListener("click", (e) => undoCleanup(e.shiftKey));
+    document.getElementById("cleanToolMenuBtn").addEventListener("click", (e) => openCleanToolMenu(e.currentTarget));
+    renderCleanTool();
+    loadLamaState();
+    document.getElementById("undoCleanBtn").addEventListener("click", (e) => (e.shiftKey ? undoCleanup(true) : openCleanupMenu(e.currentTarget)));
     document.getElementById("orderSelect").addEventListener("change", applyAutoOrder);
     el.imageCanvas.addEventListener("mousedown", onDrawStart);
     document.getElementById("prevPageBtn").addEventListener("click", () => goToAdjacentPage(-1));
     document.getElementById("nextPageBtn").addEventListener("click", () => goToAdjacentPage(1));
     document.getElementById("nextToReviewBtn").addEventListener("click", goToNextToReview);
     el.imageViewport.addEventListener("wheel", onWheelZoom, { passive: false });
+    el.imageViewport.addEventListener("mousedown", (e) => { stopGlide(); onPanStart(e); });
+    el.imageViewport.addEventListener("auxclick", (e) => { if (e.button === 1) e.preventDefault(); });
     window.addEventListener("keydown", onGlobalKeydown);
     // typed text that is not saved yet (the "unsaved" marker): leaving through a link would drop it silently
     window.addEventListener("beforeunload", (event) => {
@@ -245,6 +255,7 @@ async function loadPage() {
     state.projectId = String(data.project_id);
     state.jsonPath = data.json_path;
     state.pageFolder = data.page_folder;
+    state.rawPath = data.raw_path;
     state.hasLines = !!data.has_lines;
     state.selectedIndex = null;
     state.unsavedId = null;
@@ -256,9 +267,9 @@ async function loadPage() {
     renderSidebar(state.projectId);
     renderPageTools();
     await loadChapterNav();
-    if (isLettering()) {                // Lettering shows the typeset page: load that one right away
-        state.previewBeforeLettering = !!state.preview;
-        state.preview = true;
+    if (isLettering()) {                // Lettering shows the typeset page (unless its text was hidden): load that one now
+        if (state.previewBeforeLettering === undefined) state.previewBeforeLettering = !!state.preview;
+        state.preview = !state.letteringTextHidden;
     }
     loadImage();
     if (data.pending_translation) await translatePendingPage(); // prefetched page: translate NOW, with the corrections made since
@@ -271,6 +282,13 @@ async function loadPage() {
     } else if (state.bubbles.length && resumeBubbleIndex !== null) {
         const idx = Math.min(parseInt(resumeBubbleIndex, 10) || 0, state.bubbles.length - 1);
         selectBubble(idx, { scroll: false });
+    }
+    // Show the bubble the page opens at - or, with none selected, the first one to translate (the view only: nothing
+    // is selected for the user, a selection left behind counts as "accepted"). Waits for the image when needed.
+    if (state.bubbles.length) {
+        const firstOpen = state.bubbles.findIndex((b) => !b.skip);
+        state.pendingScroll = state.selectedIndex !== null ? state.selectedIndex : Math.max(0, firstOpen);
+        flushPendingScroll();
     }
     // Lettering mode on a page that is not fully reviewed switches to Translate (editor-lettering.js)
     await checkReviewedOnLoad();
@@ -310,6 +328,12 @@ async function showProcessPrompt(error) {
     el.processPrompt.classList.remove("hidden");
     el.processBtn.disabled = false;
     el.processStatus.textContent = "";
+    showRunProgress(null);
+    const thumb = document.getElementById("processThumb");          // the page itself, top part (a webtoon strip)
+    const thumbBox = document.getElementById("processThumbBox");
+    thumb.onerror = () => thumbBox.classList.add("no-image");
+    thumb.onload = () => thumbBox.classList.remove("no-image");
+    if (pageId && !thumb.src.endsWith(api.pages.originalUrl(pageId))) thumb.src = api.pages.originalUrl(pageId);
  
     const backLink = document.getElementById("backToPagesLink");
     if (backLink) backLink.href = state.projectId ? `editor.html?project=${state.projectId}` : "index.html";
@@ -334,7 +358,9 @@ async function showProcessPrompt(error) {
         const { status, error: lastError, raw_path } = await api.pages.status(pageId);
         state.rawPath = raw_path;
         if (status === "queued" || status === "processing") {
-            msgEl.textContent = "This page is already processing in the background - it'll load automatically...";
+            msgEl.textContent = status === "queued"
+                ? "This page is waiting in the background queue - it opens by itself when it is done."
+                : "This page is being processed in the background - it opens by itself when it is done.";
             el.processBtn.disabled = true;
             pollUntilProcessed();
             return;
@@ -362,11 +388,13 @@ function renderProcessPromptInfo() {
     const chapterPages = state.flatPageList.filter((p) => p.chapter === current.chapter);
     const idxInChapter = chapterPages.findIndex((p) => String(p.page_id) === String(pageId));
  
+    const stage = shownStage(current.stage || current.status, current.layout);
+    const [stageLabel, stageWhat] = PAGE_BADGES[stage] || [current.status, ""];
     infoEl.innerHTML = `
         <div class="process-prompt-meta">
-            <div><span class="field-label">Chapter</span> ${escapeHtml(current.chapter)}</div>
-            <div><span class="field-label">Page</span> ${escapeHtml(current.file_name)} (${idxInChapter + 1} / ${chapterPages.length} in chapter)</div>
-            <div><span class="field-label">Status</span> <span class="badge" data-status="${escapeHtml(current.status)}">${escapeHtml(current.status)}</span></div>
+            <span class="field-label">Chapter</span><span>${escapeHtml(current.chapter)}</span>
+            <span class="field-label">Page</span><span>${escapeHtml(current.file_name)} <span class="text-muted">(${idxInChapter + 1} of ${chapterPages.length} in the chapter)</span></span>
+            <span class="field-label">Stage</span><span><span class="badge stage-badge" data-status="${escapeHtml(stage)}" title="${escapeHtml(stageWhat)}">${escapeHtml(stageLabel)}</span></span>
         </div>
     `;
 }
@@ -375,19 +403,32 @@ function pollUntilProcessed() {
     clearTimeout(pollUntilProcessed._t);
     pollUntilProcessed._t = setTimeout(async () => {
         try {
-            const { status } = await api.pages.status(pageId);
+            const { status, progress } = await api.pages.status(pageId);
             if (status === "processed") {
+                showRunProgress(null);
                 await loadPage();
             } else if (status === "failed") {
+                showRunProgress(null);
                 document.getElementById("processPromptMsg").textContent = "Background processing failed - try running it manually.";
                 el.processBtn.disabled = false;
             } else {
+                showRunProgress(progress);         // the background run's steps, like a run started here
                 pollUntilProcessed();
             }
         } catch {
             pollUntilProcessed();
         }
-    }, 2000);
+    }, 1000);
+}
+
+/** The step list of a page run on the process card (js/editor-progress.js); null hides it and shows the hint again. */
+function showRunProgress(progress) {
+    const box = document.getElementById("processProgress");
+    const hint = document.getElementById("processHint");
+    if (!box) return;
+    box.classList.toggle("hidden", !progress);
+    hint?.classList.toggle("hidden", !!progress);
+    if (progress) box.innerHTML = progressHtml(progress);
 }
  
 function renderPageTools() {
@@ -395,6 +436,8 @@ function renderPageTools() {
         <button class="copy-btn" id="copyJsonPathBtn" title="Copy the translation JSON's file path">Copy path</button>
         <button class="copy-btn" id="openFolderBtn" title="Open this page's folder in the file explorer">Open folder</button>
         <button class="copy-btn" id="openJsonBtn" title="Reveal the translation JSON in the file explorer">Open JSON</button>
+        <button class="copy-btn" id="replaceBtn" title="Find &amp; replace in the translations of every page of the project (e.g. a term you changed your mind about) - preview first">Find &amp; replace...</button>
+        <button class="copy-btn" id="openRawBtn" title="Reveal the ORIGINAL page file (raw folder) in the file explorer - the Original button shows it here">Show original file</button>
         <button class="copy-btn danger" id="excludePageBtn" title="Remove this page from the list without deleting the file (for stray/junk scans)">Delete page</button>
     `;
     const more = document.getElementById("toolbarMore");
@@ -411,16 +454,31 @@ function renderPageTools() {
     });
     document.getElementById("openFolderBtn").addEventListener("click", () => openOrAlert(state.pageFolder));
     document.getElementById("openJsonBtn").addEventListener("click", () => openOrAlert(state.jsonPath));
+    document.getElementById("openRawBtn").addEventListener("click", () => openOrAlert(state.rawPath));
+    document.getElementById("replaceBtn").addEventListener("click", async () => {
+        if (!(await saveIfChanged())) return;            // the open bubble's typed text first: the replace reads the files
+        const selected = state.selectedIndex === null ? null : state.bubbles[state.selectedIndex].bubble_id;
+        const typed = window.getSelection?.().toString().trim().slice(0, 80) || "";
+        openReplaceDialog(state.projectId, {
+            initialFind: typed,
+            onDone: async (keys) => {
+                if (keys.some((k) => k.startsWith(`${pageId}:`))) {      // this page changed: show the new text
+                    await reloadBubbles(selected);
+                    if (state.preview) refreshPageImage();
+                }
+            },
+        });
+    });
     document.getElementById("excludePageBtn").addEventListener("click", excludeCurrentPage);
 }
  
 async function excludeCurrentPage() {
-    if (!confirm("Remove this page from the list? The image file stays on disk - toggle 'Show excluded' in the page list to undo.")) return;
+    if (!(await askOk("Remove this page from the list? The image file stays on disk - toggle 'Show excluded' in the page list to undo.", { ok: "Remove from the list" }))) return;
     try {
         await api.pages.exclude(pageId);
         window.location.href = `editor.html?project=${state.projectId}`;
     } catch (e) {
-        alert(`Couldn't exclude page: ${e.message}`);
+        notify(`Couldn't exclude page: ${e.message}`);
     }
 }
  
@@ -442,13 +500,19 @@ async function excludeCurrentPage() {
  
 async function runProcess() {
     el.processBtn.disabled = true;
-    el.processStatus.textContent = "Processing — this can take a while, don't close the tab...";
+    el.processStatus.textContent = "";
+    // until the backend's first answer: the first step, so something moves at once
+    showRunProgress({ step: "load", steps: ["load", "ocr", "translate", "clean", "save"], elapsed: 0, step_elapsed: 0 });
+    const stop = watchRun(pageId, (p) => { if (p) showRunProgress(p); });
     try {
         const result = await api.pages.process(pageId);
-        el.processStatus.textContent = "Done — loading page...";
+        stop();
+        el.processStatus.textContent = "Done - opening the page...";
         await loadPage();
         if (result.translation_error) showToast(result.message, 7000);
     } catch (e) {
+        stop();
+        showRunProgress(null);
         console.error("[EDITOR] Processing failed:", e);
         el.processStatus.textContent = `Failed: ${e.message}`;
         el.processBtn.disabled = false;
@@ -459,7 +523,7 @@ async function runRetranslate(overwriteEdited = false) {
     const warn = overwriteEdited
         ? "Re-translate EVERY bubble, including the ones you edited? Your edits on this page will be overwritten (corrections already in memory stay)."
         : "Re-translate this page? Bubbles you edited and skipped bubbles are kept (Shift+click overwrites edited ones too).";
-    if (!confirm(warn)) return;
+    if (!(await askOk(warn))) return;
 
     const btn = document.getElementById("retranslateBtn");
     const originalText = btn.textContent;
@@ -471,7 +535,7 @@ async function runRetranslate(overwriteEdited = false) {
         showToast(result.message, 3500);
         await loadPage();
     } catch (e) {
-        alert(`Retranslate failed: ${e.message}`);
+        notify(`Retranslate failed: ${e.message}`);
     } finally {
         btn.disabled = false;
         btn.textContent = originalText;
@@ -511,17 +575,26 @@ async function runReocr() {
     if (!options) return;
     const btn = document.getElementById("reocrBtn");
     const originalText = btn.textContent;
+    const originalTitle = btn.title;
     btn.disabled = true;
     btn.textContent = "Re-OCR...";
+    // what the run does, on the button itself ("Re-OCR: reading 40%") - the page stays visible meanwhile
+    const stop = watchRun(pageId, (p) => {
+        if (!p) return;
+        btn.textContent = `Re-OCR: ${shortLabel(p)}`;
+        btn.title = `${p.detail || ""}${p.detail ? " - " : ""}running for ${formatElapsed(p.elapsed)}`;
+    });
     try {
         const result = await api.pages.reocr(pageId, options.detectRotation);
         showToast(result.message, 5000);
         await loadPage();
     } catch (e) {
-        alert(`Re-OCR failed: ${e.message}\n(The previous result is untouched.)`);
+        notify(`Re-OCR failed: ${e.message}\n(The previous result is untouched.)`);
     } finally {
+        stop();
         btn.disabled = false;
         btn.textContent = originalText;
+        btn.title = originalTitle;
     }
 }
 
@@ -531,14 +604,19 @@ async function runReinpaint() {
         refreshPageImage();
         showToast(result.message);
     } catch (e) {
-        if (/line data/i.test(e.message) && confirm(`${e.message}\n\nRun Re-OCR now?`)) await runReocr();
-        else if (!/line data/i.test(e.message)) alert(`Rebuild failed: ${e.message}`);
+        if (/line data/i.test(e.message) && (await askOk(`${e.message}\n\nRun Re-OCR now?`, { ok: "Run Re-OCR" }))) await runReocr();
+        else if (!/line data/i.test(e.message)) notify(`Rebuild failed: ${e.message}`);
     }
 }
 
-/** Clean page, or - with "Preview text" on - the page with the translation typeset in (rendered by the server). */
+/**
+ * Clean page, or - with "Preview text" on - the page with the translation typeset in (rendered by the server), or -
+ * with "Original" on - the raw page as it was imported (what the OCR and the cleaning started from). Same size, so
+ * the bubble outlines / Lettering boxes stay where they are.
+ */
 function pageImageSrc(bust = false) {
-    const base = state.preview ? api.pages.renderUrl(pageId) : api.pages.imageUrl(pageId);
+    const base = state.showOriginal ? api.pages.originalUrl(pageId)
+        : state.preview ? api.pages.renderUrl(pageId) : api.pages.imageUrl(pageId);
     return bust ? `${base}${base.includes("?") ? "&" : "?"}t=${Date.now()}` : base;
 }
 
@@ -546,15 +624,28 @@ function refreshPageImage() {
     el.pageImage.src = pageImageSrc(true);
 }
 
+/** "Original": the raw page instead of the clean / typeset one - a quick look at what the text looked like (a line
+ *  the OCR missed, a cleaning leftover) without opening the file. Works in both modes; the other buttons stay. */
+function toggleOriginal() {
+    state.showOriginal = !state.showOriginal;
+    document.getElementById("originalBtn").classList.toggle("primary", state.showOriginal);
+    el.imageCanvas.classList.toggle("showing-original", state.showOriginal);
+    refreshPageImage();
+    showToast(state.showOriginal ? "Original page (as imported) - Original again goes back" : "Back to the cleaned page", 2200);
+}
+
+/** Preview text: the typeset page or the clean one. In Lettering too (before 11.2026 it always showed the text
+ *  there): hidden text = the clean page under the text boxes, which stay; kept for the next pages in Lettering. */
 function togglePreview() {
-    if (isLettering()) {
-        showToast("Lettering always shows the text on the page - switch to Translate for the clean page", 3000);
-        return;
-    }
+    if (state.showOriginal) toggleOriginal();      // Preview text = the typeset page, not the original
     state.preview = !state.preview;
+    if (isLettering()) state.letteringTextHidden = !state.preview;
     document.getElementById("previewBtn").classList.toggle("primary", state.preview);
     refreshPageImage();
-    showToast(state.preview ? "Preview: translation typeset into the bubbles" : "Showing the clean page", 2500);
+    showToast(isLettering()
+        ? (state.preview ? "Lettering: the text is drawn on the page again"
+                         : "Lettering: text hidden - the clean page under the boxes; Preview text shows it again")
+        : (state.preview ? "Preview: translation typeset into the bubbles" : "Showing the clean page"), 2500);
 }
 
 /* --------------------------- chapter / page nav ------------------------- */
@@ -620,6 +711,7 @@ function recordLastEdit() {
 }
  
 function loadImage() {
+    state.imageReady = false;
     el.imageCanvas.classList.add("hidden");
     el.imageState.classList.remove("hidden");
     el.imageState.innerHTML = `<p>Loading page image...</p>`;
@@ -630,12 +722,18 @@ function loadImage() {
         state.naturalH = img.naturalHeight;
         state.baseScale = el.imageViewport.clientHeight / state.naturalH;
  
-        const remembered = parseFloat(localStorage.getItem(zoomStorageKey()));
-        state.zoomFactor = Number.isFinite(remembered) ? remembered : 1;
- 
+        // "width" = Fit width was the last choice in this project: every page fits the width (webtoon strips of
+        // different heights got different widths from one remembered factor); a number = a zoom of its own
+        const stored = localStorage.getItem(zoomStorageKey());
+        const remembered = parseFloat(stored);
+        state.zoomFactor = stored === "width" ? widthFactor() : Number.isFinite(remembered) ? remembered : 1;
+
         el.imageState.classList.add("hidden");
         el.imageCanvas.classList.remove("hidden");
         applyZoom();
+        state.imageReady = true;
+        flushPendingScroll();           // the bubble the page was opened at (set in loadPage)
+        offerFitWidthTip(stored === "width");
     };
     img.onerror = () => {
         el.imageState.innerHTML = `
@@ -648,25 +746,125 @@ function loadImage() {
 }
  
 function onWheelZoom(event) {
+    stopGlide();
     if (!event.ctrlKey && !event.metaKey) return; // plain scroll = native pan, left alone
     event.preventDefault();
-    zoomBy(event.deltaY < 0 ? 1.1 : 0.9);
+    // Ctrl+wheel zooms at the mouse pointer (the point under it stays there); the buttons zoom at the middle
+    setZoom(state.zoomFactor * (event.deltaY < 0 ? 1.1 : 0.9), { persist: true, at: { x: event.clientX, y: event.clientY } });
+}
+
+/** Middle mouse button (the wheel) held down + drag = move the page in the view (the browser's autoscroll is off). */
+function onPanStart(event) {
+    if (event.button !== 1) return;
+    event.preventDefault();
+    const vp = el.imageViewport;
+    const sx = event.clientX, sy = event.clientY, left = vp.scrollLeft, top = vp.scrollTop;
+    vp.classList.add("panning");
+    const move = (e) => {
+        vp.scrollLeft = left - (e.clientX - sx);
+        vp.scrollTop = top - (e.clientY - sy);
+    };
+    const up = () => {
+        window.removeEventListener("mousemove", move);
+        window.removeEventListener("mouseup", up);
+        vp.classList.remove("panning");
+    };
+    window.addEventListener("mousemove", move);
+    window.addEventListener("mouseup", up);
 }
  
 function zoomBy(factor) {
     setZoom(state.zoomFactor * factor, { persist: true });
 }
  
+/** Zoom factor at which the page is ~80% of the view wide. */
+function widthFactor() {
+    return (el.imageViewport.clientWidth * 0.8) / (state.naturalW * state.baseScale);
+}
+
+/** Fit width - and keep fitting the width on the next pages of this project until a zoom of its own is chosen. */
 function fitToWidth() {
     if (!state.naturalW) return;
-    const targetTotalWidth = el.imageViewport.clientWidth * 0.8;
-    const currentUnzoomedWidth = state.naturalW * state.baseScale;
-    setZoom(targetTotalWidth / currentUnzoomedWidth, { persist: true });
+    setZoom(widthFactor());
+    localStorage.setItem(zoomStorageKey(), "width");
+    closeFitWidthTip();
+}
+
+/* ---- tall page tip: a webtoon strip fitted to the height is a narrow ribbon; Fit width is hidden in More ---- */
+const TALL_TIP_KEY = "okt-tip-tall-page";            // "off" = "Don't show this again" was ticked
+
+function closeFitWidthTip(dontShowAgain = false) {
+    const tip = document.getElementById("tallPageTip");
+    if (!tip) return;
+    if (dontShowAgain || tip.querySelector("#tallTipNever")?.checked) {
+        try { localStorage.setItem(TALL_TIP_KEY, "off"); } catch { /* not critical */ }
+    }
+    tip.remove();
+}
+
+/**
+ * A page at least 2.5x taller than wide shown at less than half the view's width: say once per project and browser
+ * session that Fit width exists and where. Not when the project already fits the width or the tip was switched off.
+ */
+function offerFitWidthTip(widthMode) {
+    if (widthMode || state.naturalH < 2.5 * state.naturalW) return;
+    if (state.naturalW * state.baseScale * state.zoomFactor >= 0.5 * el.imageViewport.clientWidth) return;
+    try {
+        if (localStorage.getItem(TALL_TIP_KEY) === "off") return;
+        const seen = `okt-tip-tall-page-${state.projectId}`;
+        if (sessionStorage.getItem(seen)) return;
+        sessionStorage.setItem(seen, "1");
+    } catch { return; }
+    if (document.getElementById("tallPageTip")) return;
+    const tip = document.createElement("div");
+    tip.id = "tallPageTip";
+    tip.className = "editor-tip";
+    tip.setAttribute("role", "dialog");
+    tip.setAttribute("aria-label", "Tip: tall page");
+    tip.innerHTML = `
+        <button type="button" class="editor-tip-close" title="Close" aria-label="Close">&times;</button>
+        <b>Tall page (webtoon strip)</b>
+        <p>Fitted to the height, this page is a narrow strip. <b>Fit width</b> makes it as wide as the view, and the
+        editor keeps that for every page of this project. Then scroll with the mouse wheel to go down the page;
+        Ctrl + wheel zooms. The button is also in <b>More &#9662;</b> &rsaquo; <b>Fit width</b> (Fit height goes back).</p>
+        <div class="editor-tip-actions">
+            <label class="checkbox-label"><input type="checkbox" id="tallTipNever"> Don't show this again</label>
+            <span class="editor-tip-buttons">
+                <button type="button" data-act="ok">OK</button>
+                <button type="button" class="primary" data-act="fit">Fit width</button>
+            </span>
+        </div>`;
+    tip.querySelector(".editor-tip-close").addEventListener("click", () => closeFitWidthTip());
+    tip.querySelector('[data-act="ok"]').addEventListener("click", () => closeFitWidthTip());
+    tip.querySelector('[data-act="fit"]').addEventListener("click", fitToWidth);   // closes the tip, reads the box
+    document.querySelector(".image-pane")?.appendChild(tip);
 }
  
-function setZoom(factor, { persist = false } = {}) {
-    state.zoomFactor = Math.min(20, Math.max(0.3, factor));
+/** at: {x, y} client coordinates of the point to keep in place (the mouse pointer); default = the middle of the view. */
+function setZoom(factor, { persist = false, at = null } = {}) {
+    // that point of the page stays where it is: zooming in used to keep the top-left corner instead, so the bubble
+    // being looked at slid out of the view with every step
+    const vp = el.imageViewport;
+    const before = state.baseScale * state.zoomFactor;
+    const keep = state.imageReady && before > 0;
+    const v = vp.getBoundingClientRect();
+    const ax = at ? Math.max(0, Math.min(at.x - v.left, vp.clientWidth)) : vp.clientWidth / 2;
+    const ay = at ? Math.max(0, Math.min(at.y - v.top, vp.clientHeight)) : vp.clientHeight / 2;
+    let cx = 0, cy = 0;
+    if (keep) {
+        const off = canvasOffset();
+        cx = (vp.scrollLeft + ax - off.x) / before;
+        cy = (vp.scrollTop + ay - off.y) / before;
+    }
+    // the factor is relative to "fit height": a webtoon strip 15x taller than wide needs more than 20x to fill the width
+    const most = state.naturalW ? Math.max(20, widthFactor() * 3) : 20;
+    state.zoomFactor = Math.min(most, Math.max(0.3, factor));
     applyZoom();
+    if (keep) {
+        const scale = state.baseScale * state.zoomFactor;
+        const off = canvasOffset();
+        vp.scrollTo({ left: off.x + cx * scale - ax, top: off.y + cy * scale - ay, behavior: "auto" });
+    }
     if (persist) localStorage.setItem(zoomStorageKey(), String(state.zoomFactor));
 }
  
@@ -716,14 +914,82 @@ function renderBubbleOutlines(scale) {
     renderSplitOverlay(scale);          // Split mode: the selected bubble's lines on top (editor-split.js)
 }
  
-function scrollToBubble(index) {
+/** Where the page image starts inside the scrolled area (it is centred / padded when smaller than the view). */
+function canvasOffset() {
+    const vp = el.imageViewport;
+    const c = el.imageCanvas.getBoundingClientRect();
+    const v = vp.getBoundingClientRect();
+    return { x: c.left - v.left + vp.scrollLeft, y: c.top - v.top + vp.scrollTop };
+}
+
+/*
+ * Bring a bubble to the middle of the view. Before the image has loaded there is no scale yet: the index waits in
+ * state.pendingScroll and the image's onload calls again (a page opened zoomed in used to stay at its top-left corner
+ * with the first bubble somewhere below). The view glides there (glideTo) - also a far jump and the first view of a
+ * page that was just OCR'd / translated, which used to jump: the browser's own smooth scroll was cut short by the next
+ * redraw at a high zoom, so it was switched off for those.
+ */
+function scrollToBubble(index, { instant = false } = {}) {
     const bubble = state.bubbles[index];
     if (!bubble) return;
-    const scale = state.baseScale * state.zoomFactor;
-    const rect = bubbleRect(bubble, scale);
-    const targetLeft = rect.x + rect.w / 2 - el.imageViewport.clientWidth / 2;
-    const targetTop = rect.y + rect.h / 2 - el.imageViewport.clientHeight / 2;
-    el.imageViewport.scrollTo({ left: targetLeft, top: targetTop, behavior: "smooth" });
+    if (!state.imageReady) { state.pendingScroll = index; return; }
+    const vp = el.imageViewport;
+    const target = () => {
+        const rect = bubbleRect(bubble, state.baseScale * state.zoomFactor);
+        const off = canvasOffset();
+        const clamp = (v, most) => Math.max(0, Math.min(v, most));
+        return { left: clamp(off.x + rect.x + rect.w / 2 - vp.clientWidth / 2, vp.scrollWidth - vp.clientWidth),
+                 top: clamp(off.y + rect.y + rect.h / 2 - vp.clientHeight / 2, vp.scrollHeight - vp.clientHeight) };
+    };
+    if (instant) {
+        stopGlide();
+        vp.scrollTo({ ...target(), behavior: "auto" });
+        return;
+    }
+    glideTo(target);
+}
+
+let glide = null;           // the running glideTo animation
+
+function stopGlide() {
+    if (glide) cancelAnimationFrame(glide.raf);
+    glide = null;
+}
+
+/**
+ * Smooth scroll of the image view to target() = {left, top}, recomputed every frame - a redraw on the way (the image
+ * of a page just processed, outlines, zoom) does not stop it as it stopped the browser's smooth scroll. 250-650 ms by
+ * distance, easing out. The wheel, a click or the middle-button drag in the view stop it (the user takes over).
+ */
+function glideTo(target) {
+    const vp = el.imageViewport;
+    stopGlide();
+    const from = { left: vp.scrollLeft, top: vp.scrollTop };
+    const first = target();
+    const dist = Math.hypot(first.left - from.left, first.top - from.top);
+    if (dist < 2) return;
+    const ms = Math.min(650, 250 + dist / 6);
+    const start = performance.now();
+    const g = { raf: 0 };
+    glide = g;
+    const step = (now) => {
+        if (glide !== g) return;
+        const p = Math.min(1, (now - start) / ms);
+        const ease = 1 - Math.pow(1 - p, 3);
+        const t = target();
+        vp.scrollLeft = from.left + (t.left - from.left) * ease;
+        vp.scrollTop = from.top + (t.top - from.top) * ease;
+        if (p < 1) g.raf = requestAnimationFrame(step);
+        else glide = null;
+    };
+    g.raf = requestAnimationFrame(step);
+}
+
+function flushPendingScroll() {
+    if (!state.imageReady || state.pendingScroll === null || state.pendingScroll === undefined) return;
+    const index = state.pendingScroll;
+    state.pendingScroll = null;
+    scrollToBubble(index);
 }
  
 /* ------------------------------ bubble list ----------------------------- */
@@ -803,7 +1069,9 @@ function renderBubbleList() {
         const row = document.createElement("div");
         row.className = "bubble-row" + (index === state.selectedIndex ? " selected" : "") + (isSkipped ? " skipped" : "")
             + (isMergePick(bubble.bubble_id) ? " merge-pick" : "");
-        const preview = isSkipped
+        const translating = state.translating.has(bubble.bubble_id);
+        const preview = translating ? '<span class="translating">Translating...</span>'
+            : isSkipped
             ? `skipped (${escapeHtml(bubble.skip_reason || "")}): ${escapeHtml(bubble.text || "")}`
             : isEmpty ? '<span style="color: var(--danger);">(no AI translation)</span>' : escapeHtml(bubble.translation || bubble.text || "(empty)");
         row.innerHTML = `
@@ -875,6 +1143,8 @@ function renderBubbleDetail() {
     const isEmpty = !isSkipped && !bubble.translation && !bubble.ai_translation;
     const textFixed = bubble.text_raw && bubble.text_raw !== bubble.text;
     const canSplit = state.hasLines && (bubble.line_count || 0) >= 2;
+    const translating = state.translating.has(bubble.bubble_id);   // a request runs: no stale text to edit meanwhile
+    const keepsLetters = !isSkipped && !!bubble.no_auto_erase;      // "Erase: off" (the user cleans this spot by hand)
     const skipWhy = { number: "only digits (page number?)", symbols: "only symbols / punctuation", manual: "skipped by you", empty: "empty text" }[bubble.skip_reason] || bubble.skip_reason || "";
  
     el.bubbleDetail.classList.remove("hidden");
@@ -890,11 +1160,17 @@ function renderBubbleDetail() {
                 <label>Original text</label>
                 <span style="display:flex; gap:6px;">
                     ${textFixed ? '<button id="undoCleanupBtn" class="copy-btn" title="Put the raw OCR string back (the automatic cleanup was wrong)">Use raw OCR</button>' : ""}
+                    <button id="googleTranslateBtn" class="copy-btn" title="Open this text in Google Translate in your browser - a second opinion to compare. Needs internet; the text goes to Google. Nothing is saved here.">Google &#8599;</button>
                     <button id="editSourceBtn" class="copy-btn" title="Fix an OCR mistake in the source text">Edit</button>
                 </span>
             </div>
             <div class="source-text" id="sourceView">${escapeHtml(bubble.text || "")}</div>
             ${textFixed ? `<div class="source-raw">Raw OCR: ${escapeHtml(bubble.text_raw)}</div>` : ""}
+            ${sourceChanged.has(bubble.bubble_id) && !isSkipped && !translating ? `<div class="source-changed-note" role="status">
+                <span>The original text changed after this translation was made - it may not match any more.</span>
+                <button id="staleRetranslateBtn" class="primary">Translate again</button>
+                <button id="staleDismissBtn" title="It still fits (or I will fix it by hand) - hide this note">It fits</button>
+            </div>` : ""}
             <div class="source-edit hidden" id="sourceEdit">
                 <textarea id="sourceInput" rows="3" spellcheck="false">${escapeHtml(bubble.text || "")}</textarea>
                 <div class="detail-actions">
@@ -905,9 +1181,11 @@ function renderBubbleDetail() {
         </div>
 
         <div>
-            <label>Translated text${isSkipped ? ` <span class="bubble-tag warn" title="Not translated; the original pixels stay on the page">skipped - ${escapeHtml(skipWhy)}</span>` : ""}</label>
-            <textarea id="translationInput" rows="4" lang="pl" spellcheck="${isSpellcheckEnabled()}" ${isSkipped ? "disabled" : ""}
-                placeholder="${isSkipped ? "Skipped - press Translate this below to translate it" : isEmpty ? "The AI returned no translation for this bubble (see the backend log) - type your own (saved as written from scratch) or press Retranslate" : ""}">${escapeHtml(bubble.translation || "")}</textarea>
+            <label>Translated text${isSkipped ? ` <span class="bubble-tag warn" title="Not translated; the original pixels stay on the page">skipped - ${escapeHtml(skipWhy)}</span>` : ""}${keepsLetters ? ' <span class="bubble-tag warn" title="Erase: off - the original letters of this bubble are not erased automatically">original letters kept</span>' : ""}</label>
+            <textarea id="translationInput" rows="4" lang="pl" spellcheck="${isSpellcheckEnabled()}" ${isSkipped || translating ? "disabled" : ""}
+                class="${translating ? "translating" : ""}"
+                placeholder="${translating ? "Translating... (the text appears here)" : isSkipped ? "Skipped - press Unskip below to translate it" : isEmpty ? "The AI returned no translation for this bubble (see the backend log) - type your own (saved as written from scratch) or press Retranslate" : ""}">${translating ? "" : escapeHtml(bubble.translation || "")}</textarea>
+            ${keepsLetters ? `<div class="field-label text-muted">Erase: off - the original letters stay under this text. Remove them with the clean tools (Erase text, Redraw (AI), Fill with background), or press <b>Erase: off</b> to switch the automatic erase back on.</div>` : ""}
         </div>
         <div id="memoryUsedPanel" class="memory-used"></div>
 
@@ -915,7 +1193,7 @@ function renderBubbleDetail() {
         <div class="detail-tools">
             <button id="resetBtn" ${isSkipped ? "disabled" : ""} title="Revert to the AI's original translation (does not save)">Reset to AI</button>
             <button id="undoBtn" ${isSkipped ? "disabled" : ""} title="Revert to the value shown when this bubble was opened">Undo</button>
-            <button id="retranslateBubbleBtn" ${isSkipped ? "disabled" : ""} title="Translate only this bubble again (neighbours are sent as context; memory + glossary apply)">Retranslate</button>
+            <button id="retranslateBubbleBtn" ${isSkipped || translating ? "disabled" : ""} title="Translate only this bubble again (neighbours are sent as context; memory + glossary apply)">${translating ? "Translating..." : "Retranslate"}</button>
             <button id="reocrBubbleBtn" title="Read this bubble again as ONE crop of its whole interior - finds lines the page pass missed. The previous text stays available under 'Use raw OCR'.">Re-OCR bubble</button>
             <button id="reocrAreaBtn" title="Draw the area yourself - for a bubble whose detected box misses a line (e.g. text below the box). That exact area is read.">Set area &amp; re-OCR</button>
             <button id="moveUpBtn" ${isFirst ? "disabled" : ""} title="Move this bubble one place earlier in the reading order">Move up</button>
@@ -924,9 +1202,12 @@ function renderBubbleDetail() {
             <button id="mergeNextBtn" ${isLast ? "disabled" : ""} title="Join this bubble with the one below it">Merge with &darr;</button>
             <button id="splitBtn" ${canSplit ? "" : "disabled"} title="${canSplit ? "The OCR glued two bubbles (or map labels) together: pick the lines of the new bubble on the page. The translation is divided too - no new translation unless you ask" : "Only for a bubble with at least two text lines"}">Split...</button>
             ${isSkipped
-                ? '<button id="unskipBtn" class="primary" title="Translate this bubble anyway (its text will be erased from the image)">Translate this</button>'
+                ? '<button id="unskipBtn" class="primary" title="Undo Skip: translate this bubble (its text will be erased from the image)">Unskip</button>'
                 : '<button id="skipBtn" title="Do not translate this bubble and put the original pixels back (page numbers, junk)">Skip</button>'}
             <button id="spellcheckToggleBtn" ${isSkipped ? "disabled" : ""} class="${isSpellcheckEnabled() ? "primary" : ""}" title="Toggle Polish spellcheck">Spellcheck: ${isSpellcheckEnabled() ? "On" : "Off"}</button>
+            <button id="autoEraseBtn" ${isSkipped ? "disabled" : ""} title="${isSkipped ? "A skipped bubble keeps its original pixels anyway" : keepsLetters
+                ? "Erase this bubble's original letters automatically again"
+                : "Keep this bubble's ORIGINAL pixels (the automatic erase smeared the drawing) while it stays translated and lettered - then remove the letters yourself with the clean tools, e.g. Erase text"}">Erase: ${keepsLetters ? "off" : "auto"}</button>
         </div>
 
         <div class="detail-actions detail-bottom" style="align-items:center;">
@@ -953,8 +1234,14 @@ function renderBubbleDetail() {
         document.getElementById("sourceInput").focus();
     });
     document.getElementById("cancelSourceBtn").addEventListener("click", () => sourceEdit.classList.add("hidden"));
+    document.getElementById("googleTranslateBtn").addEventListener("click", () => openGoogleTranslate(bubble.text));
     document.getElementById("saveSourceBtn").addEventListener("click", () => saveSourceText(document.getElementById("sourceInput").value));
     document.getElementById("undoCleanupBtn")?.addEventListener("click", () => saveSourceText(bubble.text_raw));
+    document.getElementById("staleRetranslateBtn")?.addEventListener("click", () => retranslateCurrentBubble(true));
+    document.getElementById("staleDismissBtn")?.addEventListener("click", () => {
+        sourceChanged.delete(bubble.bubble_id);
+        renderBubbleDetail();
+    });
 
     // tools that also work on a skipped bubble (wrong box, glued / cut bubbles)
     document.getElementById("reocrBubbleBtn").addEventListener("click", reocrCurrentBubble);
@@ -1001,6 +1288,7 @@ function renderBubbleDetail() {
     });
     document.getElementById("retranslateBubbleBtn").addEventListener("click", () => retranslateCurrentBubble());
     document.getElementById("skipBtn").addEventListener("click", () => setSkip(true));
+    document.getElementById("autoEraseBtn").addEventListener("click", () => setAutoErase(!!bubble.no_auto_erase));
     document.getElementById("saveBtn").addEventListener("click", () => saveCurrentBubble());
     document.getElementById("approveBtn")?.addEventListener("click", () => approveCurrentBubble());
  
@@ -1070,25 +1358,126 @@ function replaceCurrentBubble(updated) {
     renderBubbleDetail();
 }
 
+/*
+ * The source of a bubble changed (typed by the user, or read again by Re-OCR bubble / Set area & re-OCR): what happens
+ * to its translation. Asked in our own dialog (js/dialogs.js) - confirm() had only OK / Cancel, and Cancel looked like
+ * "cancel the re-read" although it only meant "keep the old translation". A kept translation gets a note in the
+ * panel ("the original text changed after this translation") until it is retranslated, saved or dismissed - for this
+ * session only (sourceChanged).
+ * Settings > Editor (localStorage SOURCE_CHANGE_KEY): after a typed source edit ask / always translate / always keep.
+ * A re-read always shows the dialog: the user did not type the new text, so they see what the OCR read and can undo it.
+ */
+const SOURCE_CHANGE_KEY = "okt-source-change";
+const sourceChanged = new Set();
+
+function sourceChangePref() {
+    try {
+        const v = localStorage.getItem(SOURCE_CHANGE_KEY);
+        return v === "translate" || v === "keep" ? v : "ask";
+    } catch {
+        return "ask";
+    }
+}
+
+/**
+ * -> "translate" | "keep" | "undo" | null (closed). `reread` = the change came from the OCR (offers "Put the old
+ * text back"); `bubble` = the bubble after the change.
+ */
+async function askAfterSourceChange(bubble, before, { reread = false } = {}) {
+    const hasTranslation = !!(bubble.translation || "").trim();
+    const pref = sourceChangePref();
+    if (!reread && pref !== "ask") return hasTranslation || pref === "translate" ? pref : "keep";
+    const diff = wordDiff(before, bubble.text);
+    const buttons = [];
+    if (reread) buttons.push({ id: "undo", label: "Put the old text back", left: true, title: "Undo the re-read: the previous text, box and text lines come back (the image is rebuilt)" });
+    if (!bubble.skip && hasTranslation) {
+        // with a translation, keeping it is the default answer (right, focused) - as merging does not translate again
+        // by default; most re-reads only add or fix a word the translation already got right
+        buttons.push({ id: "translate", label: "Translate again", title: "One request for this bubble; your edit of the old translation is replaced" });
+        buttons.push({ id: "keep", label: "Keep the translation", primary: true, title: "Nothing is sent; the panel reminds you that the text changed" });
+    } else if (!bubble.skip) {
+        buttons.push({ id: "keep", label: "Leave untranslated", title: "Type the translation yourself" });
+        buttons.push({ id: "translate", label: "Translate", primary: true, title: "One request for this bubble" });
+    } else {
+        buttons.push({ id: "keep", label: "OK", primary: true });
+    }
+    const { choice, remember } = await choose({
+        title: reread ? "The OCR read a different text" : "The original text changed",
+        html: `<div class="text-change">
+                <span>Before</span><div>${diff.before || '<i class="text-muted">(empty)</i>'}</div>
+                <span>Now</span><div>${diff.after}</div>
+                ${hasTranslation ? `<span>Translation</span><div>${escapeHtml(bubble.translation)}</div>` : ""}
+            </div>
+            <p class="text-muted">${bubble.skip ? "The bubble is skipped, so nothing is translated."
+                : hasTranslation ? "The translation was made for the text before. Keep it and fix it by hand, or translate again."
+                : "The bubble has no translation yet."}</p>`,
+        buttons,
+        remember: !reread && !bubble.skip ? "Do this every time I edit the original text (change it in Settings > Editor)" : "",
+    });
+    if (remember && (choice === "translate" || choice === "keep")) {
+        try { localStorage.setItem(SOURCE_CHANGE_KEY, choice); } catch { /* private mode: asks again next time */ }
+    }
+    return choice;
+}
+
+/** Act on the answer for the bubble that is open now (its id: `id`). */
+async function afterSourceChange(id, choice) {
+    const bubble = state.bubbles[state.selectedIndex];
+    if (!bubble || bubble.bubble_id !== id || bubble.skip) return;
+    if (choice === "translate") {
+        await retranslateCurrentBubble(true);
+    } else if ((bubble.translation || "").trim()) {          // kept (or closed): remind in the panel
+        sourceChanged.add(id);
+        renderBubbleDetail();
+    }
+}
+
 async function saveSourceText(newText) {
     const bubble = state.bubbles[state.selectedIndex];
     const text = (newText || "").trim();
-    if (!text) { alert("Source text can't be empty (use Skip or Delete instead)."); return; }
+    if (!text) { notify("Source text can't be empty (use Skip or Delete instead)."); return; }
     if (text === bubble.text) { renderBubbleDetail(); return; }
+    const before = bubble.text;
     try {
         const result = await api.pages.patchBubble(pageId, bubble.bubble_id, { text });
         replaceCurrentBubble(result.bubble);
         if (result.reinpainted) refreshPageImage();
         showToast("Source text saved");
-        if (!result.bubble.skip && confirm("Source text changed. Retranslate this bubble now?")) await retranslateCurrentBubble(true);
+        if (!result.bubble.skip) await afterSourceChange(result.bubble.bubble_id, await askAfterSourceChange(result.bubble, before));
     } catch (e) {
-        alert(`Couldn't save source text: ${e.message}`);
+        notify(`Couldn't save source text: ${e.message}`);
     }
+}
+
+/**
+ * After Re-OCR bubble / Set area & re-OCR: same text = a short message; a different text = the dialog with before /
+ * after, where "Put the old text back" undoes the re-read on the server (text, box and lines - restoring only the
+ * text would leave the lines of a wrongly drawn area, and the cleaning follows the lines).
+ */
+async function afterReread(result, id, what) {
+    if (!result.text_changed) {
+        showToast(`${what} read again - the OCR read the same text, nothing changed (translation kept)`, 5000);
+        return;
+    }
+    showToast(`${what} read again - the text changed`, 2500);   // replaces "Reading the selected area..."
+    const choice =await askAfterSourceChange(result.bubble, result.previous_text ?? "", { reread: true });
+    if (choice === "undo") {
+        try {
+            await api.pages.undoReocrBubble(pageId, id);
+            await reloadBubbles(id);
+            sourceChanged.delete(id);
+            showToast("The old text is back");
+        } catch (e) {
+            showToast(`Couldn't undo: ${e.message}`, 6000);
+        }
+        return;
+    }
+    await afterSourceChange(id, choice);
 }
 
 async function setSkip(skip) {
     const bubble = state.bubbles[state.selectedIndex];
-    if (skip && (bubble.translation || "").trim() && !confirm("Skip this bubble? Its translation stays in the file but it will not be translated, and the original pixels come back on the page.")) return;
+    if (skip && (bubble.translation || "").trim() && !(await askOk("Skip this bubble? Its translation stays in the file but it will not be translated, and the original pixels come back on the page.", { ok: "Skip" }))) return;
     try {
         const result = await api.pages.patchBubble(pageId, bubble.bubble_id, { skip });
         replaceCurrentBubble(result.bubble);
@@ -1097,8 +1486,48 @@ async function setSkip(skip) {
         if (!skip && !(result.bubble.translation || "").trim()) await retranslateCurrentBubble(true);
         else showToast(skip ? "Bubble skipped" : "Bubble will be translated");
     } catch (e) {
-        alert(`Couldn't change skip: ${e.message}`);
+        notify(`Couldn't change skip: ${e.message}`);
     }
+}
+
+/**
+ * "Erase: auto / off" of the selected bubble. Off = its original pixels come back while it stays translated and
+ * lettered (the automatic erase smeared the drawing; the user cleans the spot with the clean tools). A CHANGED
+ * translation is saved first (the panel is rebuilt from the saved bubble); an unchanged one is not - saving it would
+ * also stamp it as reviewed, which this click is not.
+ */
+async function setAutoErase(on) {
+    const bubble = state.bubbles[state.selectedIndex];
+    const typing = document.getElementById("translationInput");
+    const changed = typing && !typing.disabled && typing.value.trim() !== (bubble.translation || "");
+    if (changed && !(await saveCurrentBubble())) return;
+    try {
+        const result = await api.pages.patchBubble(pageId, bubble.bubble_id, { auto_erase: on });
+        replaceCurrentBubble(result.bubble);
+        if (result.reinpainted) {
+            refreshPageImage();
+            showToast(on ? "The letters of this bubble are erased automatically again"
+                         : "Original letters back - remove them with the clean tools (e.g. Erase text)", on ? 2500 : 5000);
+        } else if (result.needs_reocr) {
+            showToast("Saved, but this older page can't rebuild the image - run Re-OCR to update it.", 6000);
+        }
+    } catch (e) {
+        notify(`Couldn't change the erase setting: ${e.message}`);
+    }
+}
+
+/**
+ * Google Translate in the browser with the bubble's source text filled in - a second opinion the user asked for.
+ * Only a link: no key, nothing comes back into the app (embedding the site is blocked by Google, the free web
+ * endpoint is not an API). Languages = Settings source_lang / target_lang.
+ * Packaging note: in a browser this is a new tab. If the app ever gets its own window (pywebview / Electron), this
+ * link and every target="_blank" / window.open must be sent to the system browser instead.
+ */
+function openGoogleTranslate(text) {
+    const { source, target } = state.langs || { source: "en", target: "pl" };
+    const url = `https://translate.google.com/?sl=${encodeURIComponent(source)}&tl=${encodeURIComponent(target)}`
+        + `&text=${encodeURIComponent(text || "")}&op=translate`;
+    window.open(url, "_blank", "noopener");
 }
 
 /** After a server-side bubble edit: fetch the bubbles again (ids / order / flags changed) and select `selectId`. */
@@ -1125,11 +1554,9 @@ async function reocrCurrentBubble() {
     try {
         const result = await api.pages.reocrBubble(pageId, bubble.bubble_id);
         await reloadBubbles(bubble.bubble_id);
-        showToast(result.text_changed ? "Bubble re-read - text changed" : "Bubble re-read - same text");
-        if (result.text_changed && !result.bubble.skip && (result.bubble.translation || "").trim()
-            && confirm("The source text changed. Retranslate this bubble now?")) await retranslateCurrentBubble(true);
+        await afterReread(result, bubble.bubble_id, "Bubble");
     } catch (e) {
-        alert(`Re-OCR bubble failed: ${e.message}`);
+        notify(`Re-OCR bubble failed: ${e.message}`);
         renderBubbleDetail();
     }
 }
@@ -1150,7 +1577,7 @@ async function moveCurrentBubble(direction) {
         await api.pages.reorderBubbles(pageId, { order });
         await reloadBubbles(state.bubbles[index].bubble_id);
     } catch (e) {
-        alert(`Reorder failed: ${e.message}`);
+        notify(`Reorder failed: ${e.message}`);
     }
 }
 
@@ -1167,13 +1594,13 @@ async function applyAutoOrder() {
     if (choice === "chapter" || choice === "project") {
         select.value = state.bubbleOrder;
         const where = choice === "chapter" ? "every processed page of this chapter" : "every processed page of the WHOLE project";
-        if (!confirm(`Sort ${where} ${ORDER_NAMES[state.bubbleOrder]}?\n\nManual Move up / down changes on those pages are replaced. Translations are not changed.`)) return;
+        if (!(await askOk(`Sort ${where} ${ORDER_NAMES[state.bubbleOrder]}?\n\nManual Move up / down changes on those pages are replaced. Translations are not changed.`, { ok: "Sort" }))) return;
         try {
             const { pages } = await api.pages.reorderBubbles(pageId, { auto: state.bubbleOrder, scope: choice });
             await reloadBubbles(keep);
             showToast(`Sorted ${pages} page(s) ${ORDER_NAMES[state.bubbleOrder]}`, 3000);
         } catch (e) {
-            alert(`Sort failed: ${e.message}`);
+            notify(`Sort failed: ${e.message}`);
         }
         return;
     }
@@ -1193,7 +1620,7 @@ async function applyAutoOrder() {
             } } : null);
     } catch (e) {
         select.value = previousMode;
-        alert(`Sort failed: ${e.message}`);
+        notify(`Sort failed: ${e.message}`);
     }
 }
 
@@ -1211,9 +1638,106 @@ function setDrawMode(mode, targetId = null) {
     document.getElementById("cleanAreaBtn").classList.toggle("primary", mode === "clean");
     const hints = {
         reocr: "Drag a rectangle around ALL the text of this bubble (Esc cancels)",
-        clean: "Drag a rectangle over the leftover trace - keep it inside the bubble / plain area (Esc cancels)",
+        clean: currentCleanTool().hint,
     };
     if (mode) showToast(hints[mode] || "Drag a rectangle over the text (Esc cancels)", 3500);
+}
+
+/* ------------------------------ clean tools (one button + a list, like a GIMP tool group) ------------------------------ */
+
+/**
+ * The tools behind the "Clean area" button. The button runs the last chosen one (localStorage okt-clean-tool), the
+ * arrow next to it lists them. "redraw" and "text_ai" (ai: true) exist only once the optional AI model is installed (Settings > Add-ons) - it
+ * is never used automatically, only on the rectangle drawn with it. Backend: utils.inpainting._add_cleanups.
+ */
+const CLEAN_TOOLS = {
+    text: { label: "Erase text", short: "Erase text",
+            desc: "Finds the letters inside the area and erases only them - the drawing and screentone between them stay. Each hole is filled the best way found: plain colour, the screentone continued, a black area's edge carried on, a drawing redrawn by the AI model (when installed). The message says what was used.",
+            hint: "Drag over the text - only its letters are erased (Esc cancels)" },
+    text_ai: { label: "Erase text (AI)", short: "Erase text (AI)", ai: true,
+               desc: "The same letters, but the AI model redraws under all of them - when Erase text left a visible pattern (lines of a drawing broken, a gradient). A few seconds; a fine screentone becomes a smoother grey.",
+               hint: "Drag over the text - its letters are erased and the AI redraws under them (Esc cancels)" },
+    clean: { label: "Clean area", short: "Clean",
+             desc: "Removes the marks inside the area (letter remains, ghosts, specks). Lines and drawing that cross its edge stay.",
+             hint: "Drag over the leftover marks - box borders and drawing crossing its edge are kept (Esc cancels)" },
+    fill: { label: "Fill with background", short: "Fill",
+            desc: "Paints the whole area with the most common colour around it.",
+            hint: "Drag over what to paint over with the background colour (Esc cancels)" },
+    redraw: { label: "Redraw (AI)", short: "AI redraw", ai: true,
+              desc: "The AI model redraws everything under the area - for marks the OCR cannot read over artwork or gradients. A few seconds.",
+              hint: "Drag over the marks on the drawing - the AI redraws what is under the whole area (Esc cancels)" },
+};
+// how an "Erase text" area was filled (POST /pages/{id}/cleanups -> "filled"), for the message
+const FILLED_WITH = { colour: "background colour", tone: "screentone continued", ai: "AI model", telea: "filled from around" };
+const CLEAN_TOOL_KEY = "okt-clean-tool";
+const CLEAN_SHAPE_KEY = "okt-clean-shape";   // "rect" | "ellipse": the area of every clean tool (oval / spiky bubbles)
+let lamaInstalled = false;
+
+function cleanShape() {
+    try { return localStorage.getItem(CLEAN_SHAPE_KEY) === "ellipse" ? "ellipse" : "rect"; } catch { return "rect"; }
+}
+
+function currentCleanTool() {
+    let id = "clean";
+    try { id = localStorage.getItem(CLEAN_TOOL_KEY) || "clean"; } catch { /* private mode */ }
+    if (!CLEAN_TOOLS[id]) id = "clean";
+    if (CLEAN_TOOLS[id].ai && !lamaInstalled) id = id === "text_ai" ? "text" : "clean";   // the model was removed
+    return { id, ...CLEAN_TOOLS[id] };
+}
+
+function renderCleanTool() {
+    const tool = currentCleanTool();
+    const btn = document.getElementById("cleanAreaBtn");
+    const ellipse = cleanShape() === "ellipse";
+    btn.textContent = `${tool.label} ${ellipse ? "◯" : "▭"}`;      // the shape always shows (it used to only for the ellipse)
+    btn.title = `${tool.desc} Shape: ${ellipse ? "ellipse - only the oval inside the dragged box" : "rectangle"}. Kept by Rebuild image and Re-OCR. The arrow next to it: other clean tools and the shape. (Esc cancels)`;
+}
+
+async function loadLamaState() {
+    try {
+        lamaInstalled = !!(await api.system.lama()).installed;
+    } catch {
+        lamaInstalled = false;
+    }
+    renderCleanTool();
+}
+
+function openCleanToolMenu(anchor) {
+    document.getElementById("cleanToolMenu")?.remove();
+    const menu = document.createElement("div");
+    menu.id = "cleanToolMenu";
+    menu.className = "cleanup-menu clean-tool-menu";
+    menu.setAttribute("role", "menu");
+    const current = currentCleanTool().id;
+    const ids = Object.keys(CLEAN_TOOLS).filter((id) => !CLEAN_TOOLS[id].ai || lamaInstalled);
+    // the shape first: it applies to every tool below (it was at the bottom, easy to miss)
+    menu.innerHTML = `<div class="clean-shape-row"><span>Shape</span>
+            <div class="segmented" role="radiogroup" aria-label="Shape of the area">
+                <button type="button" data-shape="rect" class="${cleanShape() === "rect" ? "selected" : ""}" title="The whole dragged rectangle">▭ Rectangle</button>
+                <button type="button" data-shape="ellipse" class="${cleanShape() === "ellipse" ? "selected" : ""}" title="Only the oval inside the dragged rectangle - for oval or spiky bubbles, where the corners of a rectangle would paint over the outline">◯ Ellipse</button>
+            </div></div>`
+        + `<div class="cleanup-menu-head">Clean tools - the button keeps the one you pick</div>`
+        + ids.map((id) => `<button type="button" role="menuitem" data-tool="${id}"><span class="tool-check">${id === current ? "✓" : ""}</span>`
+            + `<span>${escapeHtml(CLEAN_TOOLS[id].label)}</span><span class="tool-desc">${escapeHtml(CLEAN_TOOLS[id].desc)}</span></button>`).join("")
+        + (lamaInstalled ? "" : '<div class="cleanup-menu-head" style="padding-top:6px;">Erase text (AI) and Redraw (AI) for text over drawings: install the optional model in <a href="settings.html#addons" target="_blank" rel="noopener">Settings &gt; Add-ons</a>.</div>');
+    document.body.appendChild(menu);
+    const r = anchor.getBoundingClientRect();
+    Object.assign(menu.style, { left: `${Math.max(4, r.right - menu.offsetWidth)}px`, top: `${r.bottom + 4}px` });
+    const close = () => { menu.remove(); document.removeEventListener("mousedown", outside, true); };
+    const outside = (e) => { if (!menu.contains(e.target) && e.target !== anchor) close(); };
+    menu.querySelectorAll("button[data-tool]").forEach((b) => b.addEventListener("click", () => {
+        try { localStorage.setItem(CLEAN_TOOL_KEY, b.dataset.tool); } catch { /* private mode */ }
+        close();
+        renderCleanTool();
+        setDrawMode("clean");                       // picking a tool = start drawing with it
+    }));
+    menu.querySelectorAll("button[data-shape]").forEach((b) => b.addEventListener("click", () => {
+        try { localStorage.setItem(CLEAN_SHAPE_KEY, b.dataset.shape); } catch { /* private mode */ }
+        close();
+        renderCleanTool();
+        setDrawMode("clean");
+    }));
+    document.addEventListener("mousedown", outside, true);
 }
 
 /* ------------------------------ manual cleanup of leftover traces ------------------------------ */
@@ -1222,36 +1746,85 @@ function renderCleanupButton() {
     const btn = document.getElementById("undoCleanBtn");
     const n = (state.cleanups || []).length;
     btn.classList.toggle("hidden", !n);
-    btn.textContent = n > 1 ? `Undo clean (${n})` : "Undo clean";
+    btn.textContent = n > 1 ? `Undo clean (${n}) ▾` : "Undo clean";
 }
 
 async function cleanArea(box) {
-    showToast("Cleaning the area...", 20000);
+    const tool = currentCleanTool();
+    showToast(tool.id === "redraw" ? "Redrawing the area (AI, a few seconds)..."
+        : tool.id === "text_ai" ? "Erasing the letters (AI, a few seconds)..."
+        : tool.id === "text" ? `Erasing the letters${lamaInstalled ? " (over a drawing the AI needs a few seconds)" : ""}...` : "Cleaning the area...", 60000);
     try {
-        const result = await api.pages.addCleanup(pageId, box);
+        const result = await api.pages.addCleanup(pageId, box, tool.id, cleanShape());
         state.cleanups = result.cleanups;
         renderCleanupButton();
         refreshPageImage();
-        showToast("Area cleaned - Undo clean takes it back");
+        // Erase text says what filled the holes ("I don't know what it erased with")
+        const used = (result.filled || []).map((m) => FILLED_WITH[m] || m);
+        showToast(`${tool.label}: done${used.length ? ` (${used.join(" + ")})` : ""} - Undo clean takes it back`, used.length ? 5000 : undefined);
     } catch (err) {
-        showToast(`Clean area failed: ${err.message}`, 6000);
+        showToast(`${tool.label} failed: ${err.message}`, 6000);
+        if (tool.ai) loadLamaState();                   // the model may have been removed meanwhile
     }
 }
 
-async function undoCleanup(all) {
-    if (all && !confirm(`Remove all ${state.cleanups.length} cleaned areas of this page?`)) return;
+/** index: that cleaned area (0 = oldest); null = the last one; all = every one. */
+async function undoCleanup(all, index = null) {
+    if (all && !(await askOk(`Remove all ${state.cleanups.length} cleaned areas of this page?`, { ok: "Remove all", danger: true }))) return;
     try {
-        const result = await api.pages.removeCleanups(pageId, all);
+        const result = await api.pages.removeCleanups(pageId, all, all ? null : index);
         state.cleanups = result.cleanups;
         renderCleanupButton();
         refreshPageImage();
-        showToast(all ? "Cleaned areas removed" : "Last cleaned area removed");
+        showToast(all ? "Cleaned areas removed" : index === null ? "Last cleaned area removed" : `Cleaned area ${index + 1} removed`);
     } catch (err) {
         showToast(`Undo clean failed: ${err.message}`, 6000);
     }
 }
 
+/**
+ * "Undo clean": one cleaned area = undo it at once; several = a list (newest first) - pointing at an entry outlines
+ * that area on the page, a click removes just that one; "All" removes every one. (Before: only the last one.)
+ */
+function openCleanupMenu(anchor) {
+    const n = (state.cleanups || []).length;
+    if (n <= 1) { undoCleanup(false); return; }
+    document.getElementById("cleanupMenu")?.remove();
+    const menu = document.createElement("div");
+    menu.id = "cleanupMenu";
+    menu.className = "cleanup-menu";
+    const size = (b) => `${Math.round(Math.abs(b[2] - b[0]))} x ${Math.round(Math.abs(b[3] - b[1]))} px`;
+    menu.innerHTML = `<div class="cleanup-menu-head">Cleaned areas - point at one to see it, click to undo it</div>`
+        + state.cleanups.map((c, i) => ({ c, i })).reverse().map(({ c, i }) =>
+            `<button type="button" data-i="${i}">#${i + 1}${i === n - 1 ? " (last)" : ""} <span class="text-muted">${CLEAN_TOOLS[c.mode]?.short || "Clean"}${c.shape === "ellipse" ? " ◯" : ""} · ${size(c.box)}</span></button>`).join("")
+        + `<button type="button" data-all="1" class="danger">Undo all ${n}</button>`;
+    document.body.appendChild(menu);
+    const r = anchor.getBoundingClientRect();
+    Object.assign(menu.style, { left: `${r.left}px`, top: `${r.bottom + 4}px` });
+    const mark = (box, shape) => {
+        el.imageCanvas.querySelectorAll(".cleanup-mark").forEach((m) => m.remove());
+        if (!box) return;
+        const s = state.baseScale * state.zoomFactor;
+        const m = document.createElement("div");
+        m.className = `cleanup-mark${shape === "ellipse" ? " ellipse" : ""}`;
+        Object.assign(m.style, { left: `${Math.min(box[0], box[2]) * s}px`, top: `${Math.min(box[1], box[3]) * s}px`,
+                                 width: `${Math.abs(box[2] - box[0]) * s}px`, height: `${Math.abs(box[3] - box[1]) * s}px` });
+        el.imageCanvas.appendChild(m);
+    };
+    const close = () => { menu.remove(); mark(null); document.removeEventListener("mousedown", outside, true); };
+    const outside = (e) => { if (!menu.contains(e.target)) close(); };
+    menu.querySelectorAll("button[data-i]").forEach((b) => {
+        const { box, shape } = state.cleanups[parseInt(b.dataset.i, 10)];
+        b.addEventListener("mouseenter", () => mark(box, shape));
+        b.addEventListener("mouseleave", () => mark(null));
+        b.addEventListener("click", () => { close(); undoCleanup(false, parseInt(b.dataset.i, 10)); });
+    });
+    menu.querySelector("button[data-all]").addEventListener("click", () => { close(); undoCleanup(true); });
+    document.addEventListener("mousedown", outside, true);
+}
+
 function onDrawStart(event) {
+    if (isSplitting() && !state.drawMode) { splitDragStart(event); return; }    // a box around several lines
     if (!state.drawMode || event.button !== 0) return;
     const mode = state.drawMode;
     const targetId = state.drawTarget;
@@ -1260,7 +1833,7 @@ function onDrawStart(event) {
     const startX = event.clientX - canvasRect.left;
     const startY = event.clientY - canvasRect.top;
     const rectEl = document.createElement("div");
-    rectEl.className = "draw-rect";
+    rectEl.className = `draw-rect${mode === "clean" && cleanShape() === "ellipse" ? " ellipse" : ""}`;
     el.imageCanvas.appendChild(rectEl);
 
     const geometry = (e) => {
@@ -1292,14 +1865,21 @@ function onDrawStart(event) {
             if (mode === "reocr") {
                 const result = await api.pages.reocrBubble(pageId, targetId, box);
                 await reloadBubbles(targetId);
-                showToast(result.text_changed ? "Area read - text changed" : "Area read - same text");
-                if (result.text_changed && !result.bubble.skip && (result.bubble.translation || "").trim()
-                    && confirm("The source text changed. Retranslate this bubble now?")) await retranslateCurrentBubble(true);
+                await afterReread(result, targetId, "Area");
                 return;
             }
-            const result = await api.pages.addBubble(pageId, box);
+            let result;
+            try {
+                result = await api.pages.addBubble(pageId, box);
+            } catch (err) {
+                // the OCR sees nothing here (drawn sound effect, hand lettering): the user can type the text instead
+                if (!/No text was found/i.test(err.message || "")) throw err;
+                const typed = await askManualBubbleText();
+                if (typed === null) { showToast("No bubble added", 1800); return; }
+                result = await api.pages.addBubble(pageId, box, typed);
+            }
             await reloadBubbles(result.bubble.bubble_id);
-            showToast("Bubble added");
+            showToast(result.bubble.manual_text ? "Bubble added - erase the original lettering with the clean tools" : "Bubble added", result.bubble.manual_text ? 5000 : 2200);
             if (!result.bubble.skip && !state.bubbles[state.selectedIndex]?.translation) await retranslateCurrentBubble(true);
         } catch (err) {
             showToast(`${mode === "reocr" ? "Re-OCR of the area" : "Add bubble"} failed: ${err.message}`, 6000);
@@ -1309,12 +1889,42 @@ function onDrawStart(event) {
     window.addEventListener("mouseup", onUp);
 }
 
+/**
+ * "Add bubble" found no text in the drawn area: ask for the text instead of failing. -> the typed English text, or
+ * null when the user gave up. The field lives in the dialog's own HTML, so its value is kept as it is typed.
+ */
+async function askManualBubbleText() {
+    const answer = choose({
+        title: "No text was found in that area",
+        html: `<p>The OCR could not read anything there (drawn sound effects and hand lettering often fail).
+               Type what it says and the bubble is added without OCR - translated like any other one.</p>
+               <input type="text" id="manualBubbleText" placeholder="English text, e.g. SCRUB" style="width:100%;" autocomplete="off">
+               <p class="text-muted" style="font-size:12px;">Nothing is erased for such a bubble: remove the original lettering with
+               Fill with background or Redraw (AI), then place the text in Lettering.</p>`,
+        buttons: [{ id: "cancel", label: "Cancel" }, { id: "add", label: "Add the bubble", primary: true }],
+    });
+    const input = document.getElementById("manualBubbleText");
+    let typed = "";
+    input.addEventListener("input", () => { typed = input.value; });
+    input.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") { e.preventDefault(); input.closest("dialog").querySelector('[data-choice="add"]').click(); }
+    });
+    input.focus();
+    const { choice } = await answer;
+    if (choice !== "add") return null;
+    if (!typed.trim()) { showToast("No text typed - no bubble added", 2500); return null; }
+    return typed.trim();
+}
+
 /** Translate the given bubbles again, one request each (the parts of a split bubble, when the user asks for it). */
 async function retranslateBubbleIds(ids) {
     let failed = 0;
+    ids.forEach((id) => state.translating.add(id));
+    renderBubbleList();
+    renderBubbleDetail();
     for (const id of ids) {
         const bubble = state.bubbles.find((b) => b.bubble_id === id);
-        if (!bubble) continue;
+        if (!bubble) { state.translating.delete(id); continue; }
         try {
             const result = await api.pages.retranslateBubble(pageId, id);
             bubble.translation = result.translation;
@@ -1324,6 +1934,9 @@ async function retranslateBubbleIds(ids) {
             failed += 1;
             console.error(`[EDITOR] retranslate ${id} failed:`, e);
         }
+        state.translating.delete(id);     // each part shows its text as soon as it is in
+        renderBubbleList();
+        if (state.bubbles[state.selectedIndex]?.bubble_id === id) renderBubbleDetail();
     }
     renderBubbleList();
     renderBubbleDetail();
@@ -1333,19 +1946,24 @@ async function retranslateBubbleIds(ids) {
 async function retranslateCurrentBubble(silent = false) {
     const bubble = state.bubbles[state.selectedIndex];
     const edited = (bubble.translation || "") !== (bubble.ai_translation || "");
-    if (!silent && edited && !confirm("You edited this translation. Retranslate and overwrite it?")) return;
-    const btn = document.getElementById("retranslateBubbleBtn");
-    if (btn) { btn.disabled = true; btn.textContent = "..."; }
+    if (!silent && edited && !(await askOk("You edited this translation. Retranslate and overwrite it?", { ok: "Retranslate" }))) return;
+    state.translating.add(bubble.bubble_id);
+    renderBubbleList();
+    renderBubbleDetail();
     try {
         const result = await api.pages.retranslateBubble(pageId, bubble.bubble_id);
         bubble.translation = result.translation;
         bubble.ai_translation = result.ai_translation;
+        state.translating.delete(bubble.bubble_id);
+        sourceChanged.delete(bubble.bubble_id);
         renderBubbleList();
         renderBubbleDetail();
         showToast("Bubble retranslated");
     } catch (e) {
-        alert(`Retranslate failed: ${e.message}`);
+        state.translating.delete(bubble.bubble_id);   // the old text comes back
+        renderBubbleList();
         renderBubbleDetail();
+        notify(`Retranslate failed: ${e.message}`);
     }
 }
  
@@ -1389,6 +2007,7 @@ async function saveCurrentBubble() {
         });
         bubble.translation = newValue;
         markConfirmed(bubble, newValue);
+        sourceChanged.delete(bubble.bubble_id);      // the user wrote it for the text as it is now
         state.unsavedId = null;
         renderBubbleList();
         recordLastEdit();
@@ -1468,6 +2087,7 @@ async function loadEditorSettings() {
     try {
         const settings = await api.settings.get();
         state.storeApproved = settings.memory_store_approved === true;
+        state.langs = { source: settings.source_lang || "en", target: settings.target_lang || "pl" };   // Google Translate link
         const typing = document.getElementById("translationInput");
         const untouched = !typing || state.selectedIndex === null
             || typing.value === (state.bubbles[state.selectedIndex]?.translation || "");
@@ -1545,7 +2165,7 @@ function offerGlossarySuggestions(suggestions) {
             try {
                 await api.glossary.add(state.projectId, {
                     source_term: s.source_term, target_term: s.new_translation,
-                    auto_detected: true, occurrences: s.occurrences,
+                    auto_detected: true, occurrences: s.occurrences, origin: "scan", proposed_term: s.new_translation,
                 });
                 showToast(`Glossary: ${s.source_term} → ${s.new_translation}`);
                 offerMemoryCleanup(state.projectId, s.old_translation, s.new_translation);
@@ -1577,7 +2197,7 @@ function flashInlineStatus(text, isError = false) {
 async function deleteBubble() {
     if (state.selectedIndex === null) return;
     const bubble = state.bubbles[state.selectedIndex];
-    if (!confirm(`Delete bubble ${state.selectedIndex + 1}? This removes it from the page entirely.`)) return;
+    if (!(await askOk(`Delete bubble ${state.selectedIndex + 1}? This removes it from the page entirely.`, { ok: "Delete", danger: true }))) return;
  
     try {
         await api.pages.deleteBubble(pageId, bubble.bubble_id);
@@ -1689,6 +2309,7 @@ function onGlobalKeydown(event) {
         nextPage: () => goToAdjacentPage(1),
         nextToReview: () => goToNextToReview(),
         toggleMode: () => toggleMode(),
+        toggleOriginal: () => toggleOriginal(),
         cleanArea: () => setDrawMode(state.drawMode === "clean" ? false : "clean"),
         exportPage: () => exportPage(),
         save: () => saveCurrentBubble(),
