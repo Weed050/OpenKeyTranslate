@@ -180,7 +180,9 @@ export function renderModeBar() {
 }
 
 /** "View export": the page's last export in a new tab - or a message when there is none yet (it opened an empty
- *  tab with a JSON error before). The check is quick, so the new tab still counts as opened by the click. */
+ *  tab with a JSON error before). The check is quick, so the new tab still counts as opened by the click. The tab
+ *  gets the file's own address, not a blob: copy of it - the app window (backend/app_window.py) opens the app's own
+ *  addresses in a second window, and the address can be reloaded after the next export. */
 async function viewExport() {
     const url = `${API_BASE}/pages/${pageId}/exported`;
     try {
@@ -191,8 +193,10 @@ async function viewExport() {
             return;
         }
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
-        const w = window.open(URL.createObjectURL(await r.blob()), "_blank");
-        if (!w) showToast("The browser blocked the new tab - allow pop-ups for this page", 5000);
+        const w = window.open(`${url}?t=${Date.now()}`, "_blank");
+        // in the app window (window.pywebview is there) the second window is opened by the program and window.open
+        // returns null although nothing was blocked
+        if (!w && !window.pywebview) showToast("The browser blocked the new tab - allow pop-ups for this page", 5000);
     } catch (e) {
         showToast(`View export: ${e.message}`, 5000);
     }

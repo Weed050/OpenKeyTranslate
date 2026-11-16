@@ -229,7 +229,8 @@ def _tk_dialog(kind: str, **options) -> str:
         root.destroy()
 
 
-# async on purpose (like /projects/select-folder): Tk wants the main thread, which is the event loop's thread.
+# async on purpose (like /projects/select-folder): Tk wants every call from one thread - the event loop's thread (the
+# main thread under `python main.py`, the backend thread under launcher.py, whose main thread runs the app window).
 @router.get("/pick-save-file")
 async def pick_save_file(default_name: str = "OpenKeyTranslate-backup.zip"):
     """Native 'Save as...' dialog for the export. Returns {"path": ""} when cancelled."""

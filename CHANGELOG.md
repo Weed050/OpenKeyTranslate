@@ -4,6 +4,25 @@ All notable changes to OpenKeyTranslate. Versions follow `APP_VERSION` in `backe
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-11-16
+
+### Added
+- **The app opens in its own window**, not in a browser tab. The window uses Microsoft Edge WebView2, which Windows
+  already has, so the download grows by a few MB rather than the ~150 MB of an Electron app. The window appears at
+  once with a "Starting..." page and switches to the app when it is ready. Closing it stops the app. When started
+  with a double-click, the black console is hidden; the log is in `logs` as always.
+  - Links to other sites (Google Translate, key pages, fonts, GitHub) open in your browser. The app's own pages that
+    used to open in a new tab (memory entry, Find & replace, View export) open in a second app window.
+  - File exports ask where to save. F5, Ctrl+F, Ctrl+wheel zoom and the right-click menu (copy / paste, spell check)
+    work as in a browser.
+  - A second start brings the open window to the front.
+  - Saved preferences (shortcuts, appearance, editor) belong to the window, separate from the browser's. Settings >
+    Backup carries them over. Their folder (`%LOCALAPPDATA%\OpenKeyTranslate\WebView2`) is listed in Settings >
+    Storage & uninstall.
+  - `--browser` opens the app in the browser as before. Without the WebView2 runtime, the browser is used
+    automatically and the reason is printed. `--console` keeps the log window visible.
+  - The build's smoke test also opens the window and checks that the projects page loads.
+
 ## [0.6.0] - 2026-11-13
 
 ### Added

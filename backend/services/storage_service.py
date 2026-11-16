@@ -85,6 +85,8 @@ def _items() -> list[dict]:
     program_dir = os.path.dirname(ROOT_DIR)
     from services.lama_service import model_dir
     lama_dir = model_dir()
+    from app_window import data_dir as window_data_dir
+    window_dir = window_data_dir()
 
     return [
         {"id": "projects", "group": "work", "title": "Projects",
@@ -137,6 +139,12 @@ def _items() -> list[dict]:
          "paths": sorted(glob.glob(os.path.join(APP_ROOT_DIR, "pre_import_backup_*"))
                          + glob.glob(os.path.join(APP_ROOT_DIR, "_import_staging_*"))),
          "folder": APP_ROOT_DIR, "deletable": True, "missing": "none"},
+        {"id": "app_window", "group": "cache", "title": "App window data (WebView2)",
+         "what": "The browser profile of the app's own window: its saved preferences (shortcuts, appearance, editor "
+                 "choices - what a browser keeps per site) and its cache.",
+         "paths": [window_dir], "folder": window_dir, "deletable": False, "missing": "not used yet (browser only)",
+         "keep": "In use while the window is open. Delete it by hand after closing the app: the window's preferences "
+                 "go back to the defaults (Settings > Backup keeps them)."},
         {"id": "program", "group": "program", "title": "The program",
          "what": "The app itself with its Python environment (backend\\.venv: Paddle, PyTorch...).",
          "paths": [program_dir], "folder": program_dir, "deletable": False,
@@ -158,6 +166,10 @@ def storage_report() -> dict:
     folders = [{"title": "App data (projects, database, logs, fonts)", "path": APP_ROOT_DIR}]
     if os.path.normcase(os.path.abspath(settings_dir)) != os.path.normcase(os.path.abspath(APP_ROOT_DIR)):
         folders.append({"title": "Settings folder", "path": settings_dir})
+    from app_window import data_dir as window_data_dir
+    window_root = os.path.dirname(window_data_dir())          # %LOCALAPPDATA%\OpenKeyTranslate
+    if os.path.isdir(window_root):
+        folders.append({"title": "App window data", "path": window_root})
     folders.append({"title": "Program folder", "path": os.path.dirname(ROOT_DIR)})
     return {"items": out, "uninstall_folders": folders}
 

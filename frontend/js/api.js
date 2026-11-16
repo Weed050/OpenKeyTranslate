@@ -13,13 +13,15 @@ export const API_BASE = SERVED_BY_APP ? location.origin : "http://127.0.0.1:8000
 
 /**
  * What to tell the user when the backend does not answer. Served from /app/ (the packaged exe, `python launcher.py` or
- * `python main.py`) the program itself is gone - its window was closed - and "python main.py" would be wrong advice for
- * the exe; from another local server (Live Server :5500) the backend is a separate thing to start.
+ * `python main.py`) the program itself is gone - closed, or crashed - and "python main.py" would be wrong advice for
+ * the exe; from another local server (Live Server :5500) the backend is a separate thing to start. (In the app's own
+ * window the page closes together with the program; this is seen in a browser tab or a window opened on a backend
+ * started separately.)
  */
 export function backendDownHint() {
     return SERVED_BY_APP
-        ? `OpenKeyTranslate is not running any more - was its window (the black console) closed? Start the app again `
-          + `(OpenKeyTranslate.exe, or <code>python launcher.py</code> from the source), then reload this page.`
+        ? `OpenKeyTranslate is not running any more - was it closed (its window, or the console in browser mode)? Start `
+          + `it again (OpenKeyTranslate.exe, or <code>python launcher.py</code> from the source), then reload this page (F5).`
         : `Is the backend running? Start it with <code>python main.py</code> in the backend folder, then reload this page.`;
 }
  

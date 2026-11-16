@@ -60,7 +60,8 @@ a live correction loop.
 ## Quick start
 
 **Windows app (CPU):** download the zip from [Releases](https://github.com/Weed050/OpenKeyTranslate/releases), unzip,
-run `OpenKeyTranslate.exe` - the browser opens the app. Every release is built by GitHub Actions from this source
+run `OpenKeyTranslate.exe` - the app opens in its own window (Microsoft Edge WebView2, part of Windows; without it the
+browser is used). Every release is built by GitHub Actions from this source
 ([`build-windows.yml`](./.github/workflows/build-windows.yml), [`packaging/okt.spec`](./packaging/okt.spec)) and carries
 a signed build provenance record; check a download with
 `gh attestation verify <zip> --repo Weed050/OpenKeyTranslate` or against `SHA256SUMS.txt`. The exe is not
@@ -75,7 +76,7 @@ cd OpenKeyTranslate/backend
 python -m venv .venv
 .venv\Scripts\activate
 pip install -r ../setup/requirements_cpu_only.txt     # or ../setup/req_gtx_1050ti_OKT.txt for an NVIDIA GPU
-python launcher.py                                     # opens http://127.0.0.1:8000/app/ in the browser
+python launcher.py                                     # the app in its own window (--browser: in the browser)
 ```
 
 `python main.py` starts only the server (pages at `http://127.0.0.1:8000/app/`); a separate web server such as VS
@@ -103,8 +104,7 @@ folder with its size and what to delete when removing the app.
   multilingual memory embeddings.
 - The speaker's gender (Polish verb endings) is not inferred from the image.
 - One series, one translator and one model so far: the evaluation sample is small.
-- The Windows app is a console window plus your browser, not a native desktop window; it is CPU-only (GPU: from the
-  source).
+- The Windows app is CPU-only (GPU: from the source).
 
 ---
 

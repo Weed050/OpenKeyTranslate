@@ -93,8 +93,8 @@ jobs:
       - name: Build
         run: pyinstaller packaging/okt.spec --noconfirm --clean
 
-      - name: Smoke test (starts the built app, checks the API and the pages, stops)
-        run: ./dist/OpenKeyTranslate/OpenKeyTranslate.exe --smoke-test --no-browser
+      - name: Smoke test (starts the built app, checks the API, the pages and the app window, stops)
+        run: ./dist/OpenKeyTranslate/OpenKeyTranslate.exe --smoke-test
 
       - name: OCR self-test, quick (versions, OpenCV, Paddle - inside the built app)
         run: ./dist/OpenKeyTranslate/OpenKeyTranslate.exe --ocr-selftest --quick
